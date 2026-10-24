@@ -53,6 +53,19 @@ def checks_pass(checks: list[Check]) -> bool:
     return all(c.status in ("pass", "not_applicable") for c in checks)
 
 
+def field_collision(check_id: str, first: str, second: str, meta: FieldMeta) -> Check:
+    """Two friendly names resolved to one Jira field; sending both would drop a value."""
+    return Check(
+        check_id,
+        "fail",
+        f"{first!r} and {second!r} both resolve to {meta.name!r} ({meta.id}); one value would "
+        "overwrite the other.",
+        f"Map {first!r} and {second!r} to different Jira fields in atl.yaml, or supply only one "
+        "of them.",
+        {"friendly": [first, second], "field_id": meta.id},
+    )
+
+
 @dataclass(frozen=True)
 class PlannedField:
     friendly: str
@@ -157,8 +170,28 @@ def configured_transitions(project: ProjectConfig, to: str) -> list[TransitionCo
     return matches
 
 
+def ensure_issue_matches(project: ProjectConfig, key: str, issue: IssueSnapshot) -> None:
+    """Refuse to apply ``project``'s policy to an issue Jira reports under another key/project."""
+    if issue.key == key and issue.project == project.key:
+        return
+    raise AtlError(
+        "issue_key_mismatch",
+        f"Jira returned {issue.key} in project {issue.project} for {key}; atl applies "
+        f"{project.key}'s rules only to {project.key} issues (the issue may have moved).",
+        f"Re-run with the issue's current key {issue.key}; its project must be configured in "
+        "atl.yaml. Nothing was written for this request.",
+        {
+            "requested_key": key,
+            "current_key": issue.key,
+            "current_project": issue.project,
+            "policy_project": project.key,
+        },
+    )
+
+
 def gather(client: ServiceClient, project: ProjectConfig, key: str, to: str) -> TransitionContext:
     issue = get_issue(client, key)
+    ensure_issue_matches(project, key, issue)
     candidates = configured_transitions(project, to)
     transitions = get_transitions(client, key)
     current = [
@@ -260,7 +293,7 @@ def evaluate(
 
     edit_fields: list[PlannedField] = []
     transition_fields: list[PlannedField] = []
-    covered: set[str] = set()
+    covered: dict[str, str] = {}
     screen = transition.fields if transition else {}
 
     for friendly, value in config.auto_set.items():
@@ -280,11 +313,16 @@ def evaluate(
         try:
             on_screen = resolve(ref, screen)
             if on_screen is not None:
+                if on_screen.id in covered:
+                    checks.append(
+                        field_collision(check_id, covered[on_screen.id], friendly, on_screen)
+                    )
+                    continue
                 payload = serialize(ref, on_screen, value, require_set=False)
                 transition_fields.append(
                     PlannedField(friendly, on_screen.id, on_screen.name, payload)
                 )
-                covered.add(on_screen.id)
+                covered[on_screen.id] = friendly
                 checks.append(
                     Check(
                         check_id,
@@ -322,9 +360,12 @@ def evaluate(
                     )
                 )
                 continue
+            if editable.id in covered:
+                checks.append(field_collision(check_id, covered[editable.id], friendly, editable))
+                continue
             payload = serialize(ref, editable, value, require_set=True)
             edit_fields.append(PlannedField(friendly, editable.id, editable.name, payload))
-            covered.add(editable.id)
+            covered[editable.id] = friendly
             checks.append(
                 Check(
                     check_id,
@@ -563,9 +604,11 @@ def _partial(
     return AtlError(
         "partial_transition",
         f"The edit of {key} was applied but the transition to {to!r} was not: {reason}.",
-        f"Do not roll back. Inspect {key} with {_retry_hint(key, to)}, resolve the failed "
-        f"checks or remote errors, then run `atl jira transition {key} --to '{to}'` again "
-        "(re-applying the same edit is harmless).",
+        f"Do not roll back. Inspect {key}'s current status and field values (the edit may "
+        "have overwritten a concurrent change), reconcile them with the issue owner, resolve "
+        f"the failed checks or remote errors, and confirm a fresh {_retry_hint(key, to)} is "
+        f"ready before running `atl jira transition {key} --to '{to}'` again. A retry repeats "
+        "the edit (PUT) unconditionally.",
         {
             "key": key,
             "atomic": False,

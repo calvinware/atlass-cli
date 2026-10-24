@@ -377,3 +377,220 @@ def test_hidden_validator_rejection(harness: Harness) -> None:
     assert error["details"]["fields"] == {"worklog": "required"}
     assert [o["status"] for o in error["details"]["operations"]] == ["rejected"]
     assert len(harness.server.writes()) == 1
+
+
+# --------------------------------------------------------------------------- policy project
+
+
+def _moved_issue() -> dict[str, Any]:
+    moved: dict[str, Any] = fixture("issue_todo.json")
+    moved["key"] = "OTHER-5"
+    moved["fields"]["project"] = {"key": "OTHER", "id": "10010"}
+    return moved
+
+
+@pytest.mark.parametrize("command", ["requirements", "transition"])
+def test_moved_issue_is_refused_before_any_write(harness: Harness, command: str) -> None:
+    setup(harness)
+    harness.server.routes[("GET", ISSUE)] = []
+    harness.server.add("GET", ISSUE, _moved_issue())
+    harness.server.add("POST", TRANSITIONS, status=204)
+    result = harness.run("jira", command, KEY, "--to", "In Progress")
+    assert result.code == 2
+    error = result.error
+    assert error["code"] == "issue_key_mismatch"
+    assert "OTHER-5" in error["fix"]
+    assert error["details"] == {
+        "requested_key": KEY,
+        "current_key": "OTHER-5",
+        "current_project": "OTHER",
+        "policy_project": "EXAMPLE",
+    }
+    assert harness.server.writes() == []
+    assert TRANSITIONS not in harness.server.paths()
+
+
+def test_same_key_in_other_project_is_refused(harness: Harness) -> None:
+    setup(harness)
+    issue = fixture("issue_todo.json")
+    issue["fields"]["project"] = {"key": "OTHER", "id": "10010"}
+    harness.server.routes[("GET", ISSUE)] = []
+    harness.server.add("GET", ISSUE, issue)
+    result = harness.run("jira", "transition", KEY, "--to", "In Progress")
+    assert result.error["code"] == "issue_key_mismatch"
+    assert harness.server.writes() == []
+
+
+def test_issue_moved_during_pre_edit_skips_transition(harness: Harness) -> None:
+    setup(harness, transitions="transitions_todo_no_screen.json", pre_edit="true")
+    harness.server.routes[("GET", ISSUE)] = []
+    harness.server.add("GET", ISSUE, fixture("issue_todo.json"))
+    harness.server.add("GET", ISSUE, _moved_issue())
+    harness.server.add("PUT", ISSUE, status=204)
+    harness.server.add("POST", TRANSITIONS, status=204)
+    result = harness.run("jira", "transition", KEY, "--to", "In Progress")
+    assert result.code == 7
+    error = result.error
+    assert error["code"] == "partial_transition"
+    assert error["details"]["refresh_error"]["code"] == "issue_key_mismatch"
+    assert [(o["op"], o["status"]) for o in error["details"]["operations"]] == [
+        ("edit", "succeeded"),
+        ("transition", "skipped"),
+    ]
+    assert [r.method for r in harness.server.writes()] == ["PUT"]
+
+
+# --------------------------------------------------------------------------- field collisions
+
+
+def _two_fields_one_id(pre_edit: str = "false") -> str:
+    return (
+        config_text(pre_edit=pre_edit)
+        .replace(
+            "work_started: {jira_name: Work Started, encoding: single_option}",
+            "work_started: {jira_name: Work Started, encoding: single_option}\n"
+            "        started_flag: {id: customfield_10300, encoding: single_option}",
+        )
+        .replace("auto_set: {work_started: Yes}", "auto_set: {work_started: Yes, started_flag: No}")
+    )
+
+
+@pytest.mark.parametrize(
+    ("transitions", "pre_edit"),
+    [("transitions_todo.json", "false"), ("transitions_todo_no_screen.json", "true")],
+)
+def test_auto_set_fields_resolving_to_one_id_are_refused(
+    harness: Harness, transitions: str, pre_edit: str
+) -> None:
+    setup(harness, transitions=transitions, pre_edit=pre_edit)
+    harness.write_config(_two_fields_one_id(pre_edit))
+    harness.server.add("PUT", ISSUE, status=204)
+    harness.server.add("POST", TRANSITIONS, status=204)
+    result = harness.run("jira", "transition", KEY, "--to", "In Progress")
+    assert result.code == 4
+    checklist = result.error["details"]["checklist"]
+    check = checks_by_id(checklist)["auto_set:started_flag"]
+    assert check["status"] == "fail"
+    assert check["details"] == {
+        "friendly": ["work_started", "started_flag"],
+        "field_id": "customfield_10300",
+    }
+    assert harness.server.writes() == []
+
+
+# --------------------------------------------------------------------------- live metadata
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing_fields",
+        "null_fields",
+        "list_fields",
+        "entry_not_object",
+        "no_required",
+        "string_required",
+        "null_default",
+    ],
+)
+def test_malformed_transition_fields_fail_closed(harness: Harness, damage: str) -> None:
+    body = fixture("transitions_todo.json")
+    start = body["transitions"][0]
+    field = start["fields"]["customfield_10300"]
+    if damage == "missing_fields":
+        del start["fields"]
+    elif damage == "null_fields":
+        start["fields"] = None
+    elif damage == "list_fields":
+        start["fields"] = []
+    elif damage == "entry_not_object":
+        start["fields"]["customfield_10300"] = None
+    elif damage == "no_required":
+        del field["required"]
+    elif damage == "string_required":
+        field["required"] = "true"
+    else:
+        field["hasDefaultValue"] = None
+    setup(harness, transitions=body)
+    harness.server.add("POST", TRANSITIONS, status=204)
+    for command in ("requirements", "transition"):
+        result = harness.run("jira", command, KEY, "--to", "In Progress")
+        assert result.code == 6
+        assert result.error["code"] == "metadata_incomplete"
+    assert harness.server.writes() == []
+
+
+def test_explicit_empty_transition_fields_is_a_screenless_transition(harness: Harness) -> None:
+    setup(harness, issue="issue_in_progress.json", transitions="transitions_in_progress.json")
+    assert harness.run("jira", "requirements", KEY, "--to", "Done").data["ready"] is True
+
+
+def test_malformed_editmeta_field_fails_closed(harness: Harness) -> None:
+    setup(harness, transitions="transitions_todo_no_screen.json", pre_edit="true")
+    meta = fixture("editmeta.json")
+    del meta["fields"]["customfield_10300"]["required"]
+    harness.server.routes[("GET", EDITMETA)] = []
+    harness.server.add("GET", EDITMETA, meta)
+    result = harness.run("jira", "requirements", KEY, "--to", "In Progress")
+    assert result.error["code"] == "metadata_incomplete"
+
+
+# --------------------------------------------------------------------------- refreshed checks
+
+
+def _refresh_changes(harness: Harness, *, transitions: Any, editmeta: Any) -> Any:
+    harness.write_config(config_text(pre_edit="true"))
+    harness.store()
+    harness.server.add("GET", ISSUE, fixture("issue_todo.json"))
+    harness.server.add("GET", TRANSITIONS, fixture("transitions_todo_no_screen.json"))
+    harness.server.add("GET", TRANSITIONS, transitions)
+    harness.server.add("GET", EDITMETA, fixture("editmeta.json"))
+    harness.server.add("GET", EDITMETA, editmeta)
+    harness.server.add("PUT", ISSUE, status=204)
+    harness.server.add("POST", TRANSITIONS, status=204)
+    return harness.run("jira", "transition", KEY, "--to", "In Progress")
+
+
+def test_partial_when_required_screen_field_appears_after_put(harness: Harness) -> None:
+    changed = fixture("transitions_todo_no_screen.json")
+    changed["transitions"][0]["fields"] = {
+        "customfield_10500": {
+            "required": True,
+            "hasDefaultValue": False,
+            "name": "Sprint Goal",
+            "schema": {"type": "string"},
+            "operations": ["set"],
+        }
+    }
+    result = _refresh_changes(harness, transitions=changed, editmeta=fixture("editmeta.json"))
+    assert result.code == 7
+    error = result.error
+    assert error["code"] == "partial_transition"
+    assert [(o["op"], o["status"]) for o in error["details"]["operations"]] == [
+        ("edit", "succeeded"),
+        ("transition", "skipped"),
+    ]
+    refreshed = checks_by_id(error["details"]["checklist"])
+    assert refreshed["screen_field:customfield_10500"]["status"] == "fail"
+    assert [r.method for r in harness.server.writes()] == ["PUT"]
+    assert "fresh" in error["fix"] and "harmless" not in error["fix"]
+
+
+def test_partial_when_allowed_value_changes_after_put(harness: Harness) -> None:
+    changed = fixture("editmeta.json")
+    changed["fields"]["customfield_10300"]["allowedValues"] = [
+        {"value": "No", "id": "2", "disabled": False}
+    ]
+    result = _refresh_changes(
+        harness, transitions=fixture("transitions_todo_no_screen.json"), editmeta=changed
+    )
+    assert result.code == 7
+    error = result.error
+    assert [(o["op"], o["status"]) for o in error["details"]["operations"]] == [
+        ("edit", "succeeded"),
+        ("transition", "skipped"),
+    ]
+    refreshed = checks_by_id(error["details"]["checklist"])
+    assert refreshed["auto_set:work_started"]["status"] == "fail"
+    assert [r.method for r in harness.server.writes()] == ["PUT"]
+    assert [p for p in harness.server.paths() if p == EDITMETA] == [EDITMETA, EDITMETA]

@@ -23,7 +23,14 @@ from atlass_cli.metadata import (
     get_transitions,
 )
 from atlass_cli.transport import ServiceClient, sanitize_text, seg
-from atlass_cli.workflow import Check, TransitionContext, checks_pass, evaluate, requires_editmeta
+from atlass_cli.workflow import (
+    Check,
+    TransitionContext,
+    checks_pass,
+    evaluate,
+    field_collision,
+    requires_editmeta,
+)
 
 ISSUE_KEY_RE = re.compile(ISSUE_KEY_PATTERN)
 SYSTEM_CREATE_FIELDS = frozenset({"project", "issuetype", "summary"})
@@ -59,8 +66,13 @@ def _create_preflight(
     values: dict[str, Any],
     description: str | None,
     checks: list[Check],
+    screen_required: tuple[str, ...] = (),
 ) -> tuple[str | None, dict[str, Any]]:
-    """Validate supplied values against live create metadata. Returns (issue type id, fields)."""
+    """Validate supplied values against live create metadata. Returns (issue type id, fields).
+
+    ``screen_required`` names friendly fields that must be supplied whenever they are on this
+    issue type's create screen.
+    """
     issue_type = find_issue_type(create_issue_types(client, project.key), issue_type_name)
     if issue_type is None:
         checks.append(
@@ -78,8 +90,21 @@ def _create_preflight(
     )
     live = create_fields(client, project.key, issue_type.id)
 
+    for friendly in screen_required:
+        if friendly in values:
+            continue
+        try:
+            on_screen = resolve(project.fields[friendly], live)
+        except FieldProblem as problem:
+            checks.append(
+                Check(f"required:{friendly}", "fail", problem.message, problem.fix, problem.details)
+            )
+            continue
+        if on_screen is not None:
+            checks.append(_required_missing(friendly, issue_type_name))
+
     payload: dict[str, Any] = {}
-    resolved_ids: set[str] = set()
+    owners: dict[str, str] = {}
     for friendly, value in values.items():
         ref = project.fields[friendly]
         check_id = f"field:{friendly}"
@@ -96,15 +121,23 @@ def _create_preflight(
                     )
                 )
                 continue
+            if meta.id in owners:
+                checks.append(field_collision(check_id, owners[meta.id], friendly, meta))
+                continue
             payload[meta.id] = serialize(ref, meta, value, require_set=False)
-            resolved_ids.add(meta.id)
+            owners[meta.id] = friendly
             checks.append(Check(check_id, "pass", f"{meta.name!r} ({meta.id}) is valid."))
         except FieldProblem as problem:
             checks.append(Check(check_id, "fail", problem.message, problem.fix, problem.details))
 
     if description is not None:
-        if "description" in live:
-            resolved_ids.add("description")
+        if "description" in owners:
+            collision = field_collision(
+                "field:description", owners["description"], "description", live["description"]
+            )
+            checks.append(collision)
+        elif "description" in live:
+            owners["description"] = "description"
         else:
             checks.append(
                 Check(
@@ -120,10 +153,23 @@ def _create_preflight(
             meta.required
             and not meta.has_default
             and field_id not in SYSTEM_CREATE_FIELDS
-            and field_id not in resolved_ids
+            and field_id not in owners
         ):
             checks.append(_missing_live_field(meta, issue_type_name))
     return issue_type.id, payload
+
+
+def _required_missing(friendly: str, issue_type_name: str) -> Check:
+    return Check(
+        f"required:{friendly}",
+        "fail",
+        f"atl.yaml requires {friendly!r} when creating a {issue_type_name}.",
+        f"Supply {friendly!r} in the input fields object.",
+    )
+
+
+def _blank(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip()) or value == []
 
 
 def _missing_live_field(meta: FieldMeta, issue_type_name: str) -> Check:
@@ -219,18 +265,8 @@ def story_create(
 
     values.update(extra)
     for friendly in project.create_required:
-        if friendly in RESERVED_FIELDS:
-            continue
-        value = values.get(friendly)
-        if value is None or (isinstance(value, str) and not value.strip()) or value == []:
-            checks.append(
-                Check(
-                    f"required:{friendly}",
-                    "fail",
-                    f"atl.yaml requires {friendly!r} on create.",
-                    f"Supply {friendly!r} in the input fields object.",
-                )
-            )
+        if friendly not in RESERVED_FIELDS and _blank(values.get(friendly)):
+            checks.append(_required_missing(friendly, project.story_type))
 
     description = doc.get("description")
     type_id, payload = _create_preflight(
@@ -286,8 +322,15 @@ def feature_create(
     checks: list[Check] = []
     values = _input_fields(project, doc.get("fields", {}), allow_reserved=True)
     description = doc.get("description")
+    # create.required applies to a feature for every listed field on the feature create screen.
     type_id, payload = _create_preflight(
-        client, project, project.feature_type, values, description, checks
+        client,
+        project,
+        project.feature_type,
+        values,
+        description,
+        checks,
+        screen_required=project.create_required,
     )
     if not checks_pass(checks) or type_id is None:
         raise _unmet("Feature create", checks)
@@ -507,12 +550,23 @@ def search(client: ServiceClient, jql: str, start: int, limit: int) -> dict[str,
 # --------------------------------------------------------------------------- config check
 
 
+def _in_source(project: ProjectConfig, status: str, issue_project: Any, issue_status: Any) -> bool:
+    return (
+        issue_project == project.key
+        and isinstance(issue_status, str)
+        and issue_status.casefold() == status.casefold()
+    )
+
+
 def _sample_issue(
     client: ServiceClient, project: ProjectConfig, status: str, explicit: str | None
 ) -> str | None:
+    """Return an issue that Jira reports in ``project`` and ``status``, or None."""
     if explicit is not None:
         snapshot = get_issue(client, explicit)
-        if snapshot.project == project.key and snapshot.status.casefold() == status.casefold():
+        if snapshot.key == explicit and _in_source(
+            project, status, snapshot.project, snapshot.status
+        ):
             return explicit
     raw = client.get(
         "/rest/api/2/search",
@@ -521,12 +575,19 @@ def _sample_issue(
             "ORDER BY updated DESC",
             "startAt": 0,
             "maxResults": 1,
-            "fields": "status",
+            "fields": "status,project",
         },
     )
     issues = raw.get("issues") if isinstance(raw, dict) else None
-    if isinstance(issues, list) and issues and isinstance(issues[0].get("key"), str):
-        return str(issues[0]["key"])
+    if not isinstance(issues, list) or not issues or not isinstance(issues[0], dict):
+        return None
+    hit = issues[0]
+    raw_fields = hit.get("fields")
+    fields: dict[str, Any] = raw_fields if isinstance(raw_fields, dict) else {}
+    if isinstance(hit.get("key"), str) and _in_source(
+        project, status, _name(fields.get("project"), "key"), _name(fields.get("status"))
+    ):
+        return str(hit["key"])
     return None
 
 
@@ -588,6 +649,19 @@ def _check_project_create(client: ServiceClient, project: ProjectConfig) -> list
     for type_name, friendly_names in targets:
         issue_type = find_issue_type(types, type_name)
         if issue_type is None:
+            ids = sorted(t.id for t in types if t.name == type_name)
+            if len(ids) > 1:
+                checks.append(
+                    Check(
+                        f"{prefix}:{type_name}:create_fields",
+                        "drift",
+                        f"{len(ids)} creatable issue types in {project.key} are named "
+                        f"{type_name!r}; atl cannot tell which create screen to check.",
+                        f"Ask a Jira admin to rename the duplicate {type_name!r} issue types in "
+                        f"{project.key}'s issue type scheme.",
+                        {"issue_type_ids": ids},
+                    )
+                )
             continue
         try:
             live = create_fields(client, project.key, issue_type.id)
@@ -688,17 +762,43 @@ def _check_project_transitions(
                 )
                 continue
             issue = get_issue(client, sample)
-            transitions = get_transitions(client, sample)
-            editmeta = (
-                get_editmeta(client, sample)
-                if requires_editmeta(project, config, transitions)
-                else None
-            )
+            if issue.key != sample or not _in_source(project, source, issue.project, issue.status):
+                checks.append(
+                    Check(
+                        prefix,
+                        "unverified",
+                        f"Sample issue {sample} is no longer a {project.key} issue in {source!r}, "
+                        f"so transition {config.name!r} could not be probed.",
+                        f"Re-run `atl config check`, or pass --issue KEY for a {project.key} "
+                        f"issue currently in {source!r}.",
+                        {"sample_issue": sample, "status": issue.status},
+                    )
+                )
+                continue
+            try:
+                transitions = get_transitions(client, sample)
+                editmeta = (
+                    get_editmeta(client, sample)
+                    if requires_editmeta(project, config, transitions)
+                    else None
+                )
+            except AtlError as exc:
+                if exc.code != "metadata_incomplete":
+                    raise
+                checks.append(
+                    Check(
+                        prefix,
+                        "unverified",
+                        exc.message,
+                        exc.fix,
+                        {**exc.details, "sample_issue": sample},
+                    )
+                )
+                continue
             result = evaluate(
                 project,
                 config.to,
                 TransitionContext(issue=issue, transitions=transitions, editmeta=editmeta),
-                check_source=False,
                 check_attachments=False,
             )
             for check in result.checks:

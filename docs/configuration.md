@@ -43,7 +43,7 @@ jira:                            # optional section; required for jira commands
         feature_link: {jira_name: Parent Link, encoding: issue_key_string}      # required
         work_started: {id: customfield_10300, encoding: single_option}
       create:
-        required: [acceptance_criteria, feature_link]   # friendly names checked on story create
+        required: [acceptance_criteria, feature_link]   # story create; feature create if on its screen
       transitions:               # name (snake_case) -> rule
         in_progress:
           from: [To Do]          # source statuses (non-empty)
@@ -80,6 +80,12 @@ Each friendly name maps to exactly one Jira field, chosen with one of:
 
 `acceptance_criteria` and `feature_link` must exist in every project. Story create fills them from
 the input's `acceptance_criteria` and `feature_key`.
+
+`create.required` lists friendly names that must be supplied on create. Story create always
+enforces them. Feature create enforces each one that resolves to a field on the feature create
+screen, whether or not Jira marks that field required. If two friendly names supplied in one create
+or transition resolve to the same Jira field ID, the preflight fails before any write and names both
+friendly names and the field ID.
 
 | Encoding | Live schema required | Payload sent |
 |----------|----------------------|--------------|
@@ -131,8 +137,14 @@ The PUT and POST are separate writes. They are **not atomic**:
 | PUT succeeded, POST outcome unknown | `outcome_unknown`, exit 6; edit `succeeded`, transition `unknown` |
 | both succeed | success with `atomic: false` and both operations `succeeded` |
 
-`atl` never rolls back the edit and never retries. Re-running the transition later re-applies the
-same edit value, which is harmless.
+`atl` never rolls back the edit and never retries. Re-running the transition sends the edit (PUT)
+again unconditionally, which can overwrite a change someone made after the first edit. Before any
+retry:
+
+1. Inspect the issue's current status and the values of every field in the plan's `edit` operation
+   (in the Jira issue view).
+2. Reconcile any value that differs from what `atl` wrote with the issue owner.
+3. Run `atl jira requirements KEY --to STATUS` again and retry only when it reports `ready: true`.
 
 ### `max_attachment_bytes`
 
@@ -150,10 +162,15 @@ limit. That shows up as `remote_limit_exceeded` (exit 5).
 - Story create fields (`acceptance_criteria`, `feature_link`, and everything in `create.required`)
   must resolve to exactly one field on the create screen, with a compatible schema.
 - Live required create fields that are not mapped are reported.
-- For each transition source status, `atl` finds a sample issue in that status, or uses `--issue
-  KEY` when it matches. It then checks the live transition, `auto_set` placement and values,
-  `pre_edit` edit eligibility, and required screen fields.
+- For each transition source status, `atl` needs a sample issue that Jira reports in that project
+  and status. It uses `--issue KEY` when that issue matches; otherwise it searches for one and
+  re-reads it to confirm the project and status. It then checks the live transition, `auto_set`
+  placement and values, `pre_edit` edit eligibility, and required screen fields. Each transition
+  check carries the `sample_issue` it used.
+- If two creatable issue types share the configured story or feature type name, that type's create
+  fields are reported as drift.
 
-Each check is `pass`, `drift`, or `unverified`. A context with no sample issue, or with truncated
-metadata, is `unverified`, never `pass`. Exit 0 means everything passed. Any drift is
+Each check is `pass`, `drift`, or `unverified`. A source status with no matching sample issue, or
+truncated or malformed metadata (including transition screens without a `fields` map, or fields
+without a boolean `required` flag), is `unverified`, never `pass`. Exit 0 means everything passed. Any drift is
 `config_drift` (exit 4). Otherwise, any unverified check is `config_unverified` (exit 4).

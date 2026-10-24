@@ -28,30 +28,48 @@ def seg(value: str) -> str:
     return quote(value, safe="")
 
 
-def sanitize_text(value: Any, limit: int = MAX_DETAIL_CHARS) -> str:
+REDACTED = "[REDACTED]"
+
+
+def sanitize_text(value: Any, limit: int = MAX_DETAIL_CHARS, redact: tuple[str, ...] = ()) -> str:
     text = value if isinstance(value, str) else json.dumps(value, default=str)
+    for secret in redact:
+        text = text.replace(secret, REDACTED)
     cleaned = "".join(ch if ch.isprintable() or ch in " " else " " for ch in text)
     if len(cleaned) > limit:
         return cleaned[: limit - 3] + "..."
     return cleaned
 
 
-def sanitize_remote_errors(body: Any) -> dict[str, Any]:
-    """Extract Jira/Confluence error messages into a bounded, printable structure."""
+def sanitize_remote_errors(body: Any, redact: tuple[str, ...] = ()) -> dict[str, Any]:
+    """Extract Jira/Confluence error messages into a bounded, printable, redacted structure."""
     fields: dict[str, str] = {}
     messages: list[str] = []
     if isinstance(body, dict):
         raw_fields = body.get("errors")
         if isinstance(raw_fields, dict):
             for key, value in list(raw_fields.items())[:MAX_DETAIL_ITEMS]:
-                fields[sanitize_text(key, 100)] = sanitize_text(value)
+                fields[sanitize_text(key, 100, redact)] = sanitize_text(value, redact=redact)
         raw_messages = body.get("errorMessages")
         if isinstance(raw_messages, list):
-            messages.extend(sanitize_text(m) for m in raw_messages[:MAX_DETAIL_ITEMS])
+            messages.extend(
+                sanitize_text(m, redact=redact) for m in raw_messages[:MAX_DETAIL_ITEMS]
+            )
         message = body.get("message")
         if isinstance(message, str) and message:
-            messages.append(sanitize_text(message))
+            messages.append(sanitize_text(message, redact=redact))
     return {"fields": fields, "messages": messages}
+
+
+def credential_redactions(credential: Credential | None) -> tuple[str, ...]:
+    """Every form of the active secret a server could echo back, longest first."""
+    if credential is None or not credential.secret:
+        return ()
+    header = credential.authorization_header()
+    forms = {credential.secret, header, header.partition(" ")[2]}
+    if credential.username is not None:
+        forms.add(f"{credential.username}:{credential.secret}")
+    return tuple(sorted((f for f in forms if f), key=len, reverse=True))
 
 
 def build_ssl_context(ca_bundle: Path | None) -> ssl.SSLContext:
@@ -105,6 +123,7 @@ class ServiceClient:
         }
         if credential is not None:
             headers["Authorization"] = credential.authorization_header()
+        self._redact = credential_redactions(credential)
         verify: ssl.SSLContext | bool = build_ssl_context(ca_bundle) if transport is None else True
         self._client = httpx.Client(
             headers=headers,
@@ -200,8 +219,9 @@ class ServiceClient:
         return AtlError(
             "outcome_unknown",
             f"The {self.service} write was dispatched but its outcome is unknown.",
-            "Inspect the remote item (e.g. `atl jira search` or `atl confluence page read`) to "
-            "see whether the change was applied before retrying. atl does not retry writes.",
+            "Inspect the remote item to see whether the change was applied before retrying; see "
+            "'Writes and retries' in docs/commands.md for how to inspect each write (comments "
+            "and attachments need the issue view). atl does not retry writes.",
             {"service": self.service, "reason": sanitize_text(reason, 200)},
             write_outcome="unknown",
         )
@@ -251,7 +271,7 @@ class ServiceClient:
             body = json.loads(raw) if raw.strip() else None
         except ValueError:
             body = None
-        remote = sanitize_remote_errors(body)
+        remote = sanitize_remote_errors(body, self._redact)
         details: dict[str, Any] = {"service": self.service, "status": status, **remote}
         rejected = "rejected" if is_write else None
 
@@ -279,7 +299,7 @@ class ServiceClient:
         if status == 403:
             reason = response.headers.get("x-seraph-loginreason")
             if reason:
-                details["login_reason"] = sanitize_text(reason, 100)
+                details["login_reason"] = sanitize_text(reason, 100, self._redact)
             raise AtlError(
                 "forbidden",
                 f"{self.service} denied the request.",
@@ -313,7 +333,9 @@ class ServiceClient:
                 write_outcome=rejected,
             )
         if status == 429:
-            details["retry_after"] = sanitize_text(response.headers.get("retry-after", ""), 20)
+            details["retry_after"] = sanitize_text(
+                response.headers.get("retry-after", ""), 20, self._redact
+            )
             raise AtlError(
                 "rate_limited",
                 f"{self.service} rate-limited the request.",

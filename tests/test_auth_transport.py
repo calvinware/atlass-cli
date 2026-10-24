@@ -446,3 +446,50 @@ def test_real_client_does_not_follow_redirects() -> None:
         assert client._client.follow_redirects is False
     finally:
         client.close()
+
+
+@pytest.mark.parametrize("auth", ["pat", "basic"])
+@pytest.mark.parametrize("status", [400, 401, 403, 500])
+def test_reflected_credentials_are_redacted(auth: str, status: int) -> None:
+    username = "svc-user" if auth == "basic" else None
+    credential = Credential(auth=auth, secret=JIRA_TOKEN, username=username)
+    header = credential.authorization_header()
+    encoded = header.partition(" ")[2]
+    body = {
+        "errorMessages": [f"Bad header: Authorization: {header}", f"token={JIRA_TOKEN}"],
+        "errors": {f"x-{encoded}": f"echo {encoded}", "summary": {"seen": JIRA_TOKEN}},
+        "message": f"credential {encoded}",
+    }
+    server = FakeServer().add(
+        "POST",
+        jira_path("/rest/api/2/issue"),
+        body,
+        status=status,
+        headers={"x-seraph-loginreason": f"AUTHENTICATED_FAILED {JIRA_TOKEN}"},
+    )
+    client = ServiceClient("jira", JIRA, credential, transport=server.transport())
+    with pytest.raises(AtlError) as info:
+        client.request("POST", "/rest/api/2/issue", json_body={})
+    rendered = json.dumps(info.value.envelope())
+    forms = [JIRA_TOKEN, encoded]
+    if auth == "basic":
+        forms.append(base64.b64decode(encoded).decode())
+    for secret in forms:
+        assert secret not in rendered
+    assert "[REDACTED]" in rendered
+    assert sorted(info.value.details["fields"]) == ["summary", "x-[REDACTED]"]
+
+
+def test_reflected_credential_is_redacted_through_cli(harness: Harness) -> None:
+    harness.write_config()
+    harness.store()
+    harness.server.add(
+        "GET",
+        jira_path("/rest/api/2/search"),
+        {"errorMessages": [f"Unexpected token Bearer {JIRA_TOKEN}"]},
+        status=400,
+    )
+    result = harness.run("jira", "search", "--jql", "project = EXAMPLE")
+    assert result.code == 5
+    assert JIRA_TOKEN not in result.stdout + result.stderr
+    assert result.error["details"]["messages"] == ["Unexpected token [REDACTED]"]

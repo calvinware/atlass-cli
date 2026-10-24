@@ -33,8 +33,13 @@ def _space_key(page: dict[str, Any]) -> str | None:
 
 
 def _storage(page: dict[str, Any]) -> str:
-    value = ((page.get("body") or {}).get("storage") or {}).get("value")
-    return value if isinstance(value, str) else ""
+    """Return the storage body; an empty body is accepted only when Confluence sends one."""
+    body = page.get("body")
+    storage = body.get("storage") if isinstance(body, dict) else None
+    value = storage.get("value") if isinstance(storage, dict) else None
+    if not isinstance(value, str):
+        raise _invalid("page body")
+    return value
 
 
 def _get_page(client: ServiceClient, page_id: str) -> dict[str, Any]:

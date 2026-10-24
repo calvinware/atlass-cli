@@ -26,7 +26,12 @@ team's field IDs, workflow rules, and required attachments from `atl.yaml`.
 | 7 | confirmed **partial** write (`partial_transition`) | do not roll back; follow `fix` |
 
 `atl` never retries a write. Do not loop on writes. After exit 6 `outcome_unknown` or exit 7,
-inspect the issue or page first.
+inspect the issue or page first. `atl jira search` shows status and summary only, not comments,
+attachments, or field values. Follow "Writes and retries" in `docs/commands.md` for how to check
+each write (for comments and attachments, a human checks the issue view). Retry only when the
+inspection shows the write was not applied. If you cannot tell, or you find duplicates, stop and
+ask a human. After a `pre_edit` edit, reconcile current field values and get a fresh
+`ready: true` from `atl jira requirements` before retrying.
 
 ## Judgment stays with you (or the human)
 

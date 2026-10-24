@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from tests.conftest import CONFLUENCE_TOKEN, Harness, confluence_path, fixture
 
 PAGE = confluence_path("/rest/api/content/123456")
@@ -188,3 +190,79 @@ def test_confluence_not_configured(harness: Harness) -> None:
     )
     result = harness.run("confluence", "page", "read", "1")
     assert result.error["code"] == "config_invalid"
+
+
+def _page_with(damage: str) -> dict[str, Any]:
+    page: dict[str, Any] = fixture("confluence_page.json")
+    if damage == "no_body":
+        del page["body"]
+    elif damage == "no_storage":
+        page["body"] = {}
+    elif damage == "null_storage":
+        page["body"] = {"storage": None}
+    elif damage == "no_value":
+        del page["body"]["storage"]["value"]
+    else:
+        page["body"]["storage"]["value"] = None
+    return page
+
+
+@pytest.mark.parametrize("damage", ["no_body", "no_storage", "null_storage", "no_value", "null"])
+def test_title_only_update_refuses_incomplete_body_read(harness: Harness, damage: str) -> None:
+    setup(harness)
+    harness.server.add("GET", PAGE, _page_with(damage))
+    harness.server.add("PUT", PAGE, {"id": "123456", "title": "New", "version": {"number": 8}})
+    result = run_input(
+        harness,
+        "confluence",
+        "page",
+        "update",
+        "123456",
+        doc={"expected_version": 7, "title": "New"},
+    )
+    assert result.code == 6
+    assert result.error["code"] == "response_invalid"
+    assert result.error["details"] == {"what": "page body"}
+    assert harness.server.writes() == []
+
+
+@pytest.mark.parametrize("damage", ["no_body", "null"])
+def test_read_refuses_incomplete_body(harness: Harness, damage: str) -> None:
+    setup(harness)
+    harness.server.add("GET", PAGE, _page_with(damage))
+    result = harness.run("confluence", "page", "read", "123456")
+    assert result.error["code"] == "response_invalid"
+
+
+def test_title_only_update_keeps_explicit_empty_body(harness: Harness) -> None:
+    setup(harness)
+    page = fixture("confluence_page.json")
+    page["body"]["storage"]["value"] = ""
+    harness.server.add("GET", PAGE, page)
+    harness.server.add("PUT", PAGE, {"id": "123456", "title": "New", "version": {"number": 8}})
+    result = run_input(
+        harness,
+        "confluence",
+        "page",
+        "update",
+        "123456",
+        doc={"expected_version": 7, "title": "New"},
+    )
+    assert result.code == 0
+    (put,) = harness.server.writes()
+    assert json.loads(put.content)["body"]["storage"]["value"] == ""
+
+
+def test_body_update_does_not_need_current_body(harness: Harness) -> None:
+    setup(harness)
+    harness.server.add("GET", PAGE, _page_with("no_body"))
+    harness.server.add("PUT", PAGE, {"id": "123456", "title": "T", "version": {"number": 8}})
+    result = run_input(
+        harness,
+        "confluence",
+        "page",
+        "update",
+        "123456",
+        doc={"expected_version": 7, "body_storage": "<p>new</p>"},
+    )
+    assert result.code == 0

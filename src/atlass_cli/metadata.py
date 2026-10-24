@@ -51,8 +51,8 @@ def incomplete(what: str, details: dict[str, Any] | None = None) -> AtlError:
     return AtlError(
         "metadata_incomplete",
         f"Jira {what} metadata was truncated or inconsistent; atl will not guess.",
-        "Retry; if it persists ask a Jira admin to check the createmeta endpoint and the "
-        "number of fields on the screen.",
+        "Retry; if it persists ask a Jira admin to check the Jira metadata endpoint (createmeta, "
+        "transitions, or editmeta) and the fields on that screen.",
         {"what": what, **(details or {})},
     )
 
@@ -114,13 +114,35 @@ def create_fields(client: ServiceClient, project: str, issue_type_id: str) -> di
         field_id = item.get("fieldId")
         if not isinstance(field_id, str) or not field_id or field_id in fields:
             raise incomplete("create field", {"reason": "missing or duplicate fieldId"})
-        fields[field_id] = FieldMeta.parse(field_id, item)
+        fields[field_id] = _parse_field("create field", field_id, item)
     return fields
 
 
 def find_issue_type(types: list[IssueType], name: str) -> IssueType | None:
     matches = [t for t in types if t.name == name]
     return matches[0] if len(matches) == 1 else None
+
+
+def _parse_field(what: str, field_id: Any, raw: Any) -> FieldMeta:
+    """Parse one field entry, refusing entries whose flags cannot be trusted."""
+    if (
+        not isinstance(field_id, str)
+        or not field_id
+        or not isinstance(raw, dict)
+        or not isinstance(raw.get("required"), bool)
+        or ("hasDefaultValue" in raw and not isinstance(raw["hasDefaultValue"], bool))
+    ):
+        raise incomplete(
+            what,
+            {"field_id": str(field_id)[:100], "reason": "malformed field entry or flags"},
+        )
+    return FieldMeta.parse(field_id, raw)
+
+
+def _parse_field_map(what: str, raw: Any) -> dict[str, FieldMeta]:
+    if not isinstance(raw, dict):
+        raise incomplete(what, {"reason": "fields missing or not an object"})
+    return {fid: _parse_field(what, fid, meta) for fid, meta in raw.items()}
 
 
 def _basename(filename: str) -> str:
@@ -158,17 +180,14 @@ def get_transitions(client: ServiceClient, key: str) -> list[LiveTransition]:
     transitions: list[LiveTransition] = []
     for item in raw["transitions"]:
         try:
-            fields_raw = item.get("fields") or {}
             transitions.append(
                 LiveTransition(
                     id=str(item["id"]),
                     name=str(item["name"]),
                     to=str(item["to"]["name"]),
-                    fields={
-                        fid: FieldMeta.parse(fid, meta)
-                        for fid, meta in fields_raw.items()
-                        if isinstance(meta, dict)
-                    },
+                    # expand=transitions.fields was requested, so an absent, null, or malformed
+                    # map means the screen is unknown; only an explicit {} means "no fields".
+                    fields=_parse_field_map("transition field", item.get("fields")),
                 )
             )
         except (KeyError, TypeError, AttributeError):
@@ -180,8 +199,4 @@ def get_editmeta(client: ServiceClient, key: str) -> dict[str, FieldMeta]:
     raw = client.get(f"/rest/api/2/issue/{seg(key)}/editmeta")
     if not isinstance(raw, dict) or not isinstance(raw.get("fields"), dict):
         raise _invalid("editmeta")
-    return {
-        fid: FieldMeta.parse(fid, meta)
-        for fid, meta in raw["fields"].items()
-        if isinstance(meta, dict)
-    }
+    return _parse_field_map("edit field", raw["fields"])

@@ -64,11 +64,26 @@ Before the `POST /rest/api/2/issue`, `atl` checks all of the following. Any fail
 - Every supplied field resolves to exactly one field on the live create screen (targeted,
   fully paginated `createmeta`) and serializes under its encoding.
 - Every `create.required` field has a value.
+- No two supplied friendly names resolve to the same Jira field ID.
 - Every live required field without a default is supplied.
 
-Truncated create metadata fails closed with `metadata_incomplete` (exit 6). `create.required`
-applies to story create. Feature create checks the live create screen and the project's
-`feature_create_policy`.
+Truncated or malformed create metadata fails closed with `metadata_incomplete` (exit 6).
+`create.required` applies fully to story create. Feature create enforces each `create.required`
+field that is on the feature create screen, and also checks the live create screen and the
+project's `feature_create_policy`.
+
+### Requirements and transitions
+
+`requirements` and `transition` choose the `atl.yaml` project from the key you pass. If Jira
+returns the issue under a different key or project (for example, it was moved), the command fails
+with `issue_key_mismatch` (exit 2) and writes nothing. Re-run with the current key; its project
+must be configured. After a `pre_edit` edit, the same check runs on the refreshed issue, and a
+mismatch there is reported as `partial_transition` (exit 7).
+
+Transition metadata must include each transition's `fields` map (requested with
+`expand=transitions.fields`). A missing, null, or malformed map, or a field without a boolean
+`required` flag, fails with `metadata_incomplete` (exit 6) instead of being treated as an empty
+screen.
 
 ### Feature ranking
 
@@ -104,11 +119,34 @@ All requests use Data Center `/rest/api/content` under the configured context pa
 
 `update` reads the page first. If the current version differs from `expected_version`, it fails
 with `version_conflict` (exit 5) and nothing is written. Otherwise it sends version
-`expected_version + 1`, keeping the current title or body for whichever field was not supplied. A
+`expected_version + 1`, keeping the current title or body for whichever field was not supplied. If
+the read does not include `body.storage.value` as a string, `read` and `update` fail with
+`response_invalid` (exit 6) and nothing is written. An empty body is kept only when Confluence
+returns one explicitly. A
 409 from a concurrent edit is also reported as `version_conflict`, with a re-read-and-merge fix.
 
 ## Writes and retries
 
 No write is ever retried. A write that was dispatched but whose result is unknown (timeout,
 disconnect, 5xx, redirect, or unparseable success) returns `outcome_unknown` (exit 6). Inspect
-remote state before running it again.
+remote state before running it again. `atl jira search` returns status and summary only. It
+cannot show comments, attachments, or custom field values, so use the method for each write:
+
+| Uncertain write | How to inspect |
+|-----------------|----------------|
+| `jira story create`, `jira feature create` | `atl jira search --jql 'project = KEY AND summary ~ "<words>" AND created >= -1h ORDER BY created DESC'` (narrow the window to when you ran the command). Open each candidate in the Jira issue view to confirm it is yours. |
+| `jira comment add` | Open the issue in the Jira issue view and look for a comment whose body exactly matches what you sent. |
+| `jira attachment add` | Open the issue in the Jira issue view and look for the exact filename. `atl jira requirements KEY --to STATUS` lists attachment names when an attachment rule fails. |
+| `jira transition` | `atl jira requirements KEY --to STATUS` (`from_status`) or `atl jira search --jql 'key = KEY'` (`status`). For a `pre_edit` edit, check the edited field values in the issue view. |
+| `confluence page create` | `atl confluence page search --cql 'space = "KEY" AND title = "<title>"'`. |
+| `confluence page update` | `atl confluence page read ID` and compare `version`, `title`, and `body_storage` with what you sent. |
+
+A human may also inspect with an approved read-only REST call (for example
+`GET /rest/api/2/issue/KEY/comment`) in place of the issue view.
+
+Retry only when inspection shows the write was **not** applied. If it was applied, do not retry:
+continue from the existing item. If you cannot tell, or more than one candidate matches (for
+example two issues with the same summary), stop and ask a human to resolve it, including deleting
+any duplicate by hand. For `partial_transition` (exit 7) and `pre_edit` retries, also follow
+[`pre_edit` (non-atomic)](configuration.md#pre_edit-non-atomic): reconcile current field values
+and get a fresh `ready: true` from `atl jira requirements` first.

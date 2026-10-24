@@ -180,6 +180,44 @@ def test_story_create_encoding_mismatch(harness: Harness) -> None:
     assert "encoding" in checks(result.error)["field:acceptance_criteria"]["message"]
 
 
+def test_story_create_rejects_two_fields_resolving_to_one_id(harness: Harness) -> None:
+    setup_create(harness)
+    harness.write_config(
+        config_text().replace(
+            "{jira_name: Parent Link, encoding: issue_key_string}",
+            "{id: customfield_10100, encoding: issue_key_string}",
+        )
+    )
+    result = create_story(harness, STORY)
+    assert result.code == 4
+    assert result.error["code"] == "requirements_unmet"
+    check = checks(result.error)["field:feature_link"]
+    assert check["status"] == "fail"
+    assert check["details"] == {
+        "friendly": ["acceptance_criteria", "feature_link"],
+        "field_id": "customfield_10100",
+    }
+    assert "'acceptance_criteria' and 'feature_link'" in check["message"]
+    assert "customfield_10100" in check["message"]
+    assert harness.server.writes() == []
+
+
+def test_story_create_rejects_field_colliding_with_description(harness: Harness) -> None:
+    setup_create(harness)
+    harness.write_config(
+        config_text().replace(
+            "work_started: {jira_name: Work Started, encoding: single_option}",
+            "work_started: {jira_name: Work Started, encoding: single_option}\n"
+            "        notes: {id: description, encoding: text}",
+        )
+    )
+    result = create_story(harness, {**STORY, "description": "d", "fields": {"notes": "n"}})
+    assert result.code == 4
+    check = checks(result.error)["field:description"]
+    assert check["details"]["friendly"] == ["notes", "description"]
+    assert harness.server.writes() == []
+
+
 def test_story_create_unknown_input_field(harness: Harness) -> None:
     setup_create(harness)
     result = create_story(harness, {**STORY, "fields": {"nope": "x"}})
@@ -284,6 +322,59 @@ def test_feature_create_automatic_policy(harness: Harness) -> None:
     result = create_feature(harness, {"project": "EXAMPLE", "summary": "SSO"})
     assert result.code == 0
     assert result.data["attestation"] is None
+
+
+TEAM_FIELD = {
+    "fieldId": "customfield_10900",
+    "name": "Team",
+    "required": False,
+    "hasDefaultValue": False,
+    "schema": {"type": "string"},
+    "operations": ["set"],
+}
+
+
+def setup_feature_required(harness: Harness, *, on_screen: bool) -> None:
+    setup_create(harness, policy="automatic")
+    harness.write_config(
+        config_text(policy="automatic")
+        .replace(
+            "work_started: {jira_name: Work Started, encoding: single_option}",
+            "work_started: {jira_name: Work Started, encoding: single_option}\n"
+            "        team: {jira_name: Team, encoding: text}",
+        )
+        .replace("required: [acceptance_criteria, feature_link]", "required: [team]")
+    )
+    meta = fixture("createmeta_feature_fields.json")
+    if on_screen:
+        meta["values"].append(TEAM_FIELD)
+        meta["total"] = len(meta["values"])
+    harness.server.routes[("GET", FEATURE_FIELDS)] = []
+    harness.server.add("GET", FEATURE_FIELDS, meta)
+
+
+def test_feature_create_enforces_create_required_on_screen(harness: Harness) -> None:
+    setup_feature_required(harness, on_screen=True)
+    result = create_feature(harness, {"project": "EXAMPLE", "summary": "SSO"})
+    assert result.code == 4
+    assert result.error["code"] == "requirements_unmet"
+    check = checks(result.error)["required:team"]
+    assert check["status"] == "fail"
+    assert "'team'" in check["fix"]
+    assert harness.server.writes() == []
+
+
+def test_feature_create_with_create_required_supplied(harness: Harness) -> None:
+    setup_feature_required(harness, on_screen=True)
+    doc = {"project": "EXAMPLE", "summary": "SSO", "fields": {"team": "Identity"}}
+    assert create_feature(harness, doc).code == 0
+    (post,) = harness.server.writes()
+    assert json.loads(post.content)["fields"]["customfield_10900"] == "Identity"
+
+
+def test_feature_create_required_field_off_screen_is_not_applicable(harness: Harness) -> None:
+    setup_feature_required(harness, on_screen=False)
+    assert create_feature(harness, {"project": "EXAMPLE", "summary": "SSO"}).code == 0
 
 
 # --------------------------------------------------------------------------- feature find
@@ -533,16 +624,49 @@ def test_search_invalid_jql_is_remote_validation(harness: Harness) -> None:
 # --------------------------------------------------------------------------- config check
 
 
+ISSUE_1 = jira_path("/rest/api/2/issue/EXAMPLE-1")
+ISSUE_2 = jira_path("/rest/api/2/issue/EXAMPLE-2")
+SAMPLES = {"To Do": "EXAMPLE-1", "In Progress": "EXAMPLE-2"}
+
+
+def _search_hit(key: str, status: str) -> dict[str, Any]:
+    return {
+        "key": key,
+        "fields": {"status": {"name": status}, "project": {"key": "EXAMPLE"}},
+    }
+
+
+def _search_by_status(samples: dict[str, str]) -> Any:
+    """Answer the sample search with the configured issue for the JQL's status, if any."""
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        jql = request.url.params["jql"]
+        hits = [_search_hit(key, s) for s, key in samples.items() if f'status = "{s}"' in jql]
+        return httpx.Response(200, json={"issues": hits})
+
+    return respond
+
+
+def add_samples(harness: Harness, *, samples: dict[str, str] | None = None) -> None:
+    harness.server.add(
+        "GET", SEARCH, handler=_search_by_status(SAMPLES if samples is None else samples)
+    )
+    harness.server.add("GET", ISSUE_1, fixture("issue_todo.json"))
+    harness.server.add("GET", f"{ISSUE_1}/transitions", fixture("transitions_todo.json"))
+    in_progress = fixture("issue_in_progress.json")
+    in_progress["key"] = "EXAMPLE-2"
+    harness.server.add("GET", ISSUE_2, in_progress)
+    harness.server.add("GET", f"{ISSUE_2}/transitions", fixture("transitions_in_progress.json"))
+
+
 def setup_config_check(harness: Harness, *, sample_found: bool = True) -> None:
     setup_create(harness)
-    issue_search = {"issues": [{"key": "EXAMPLE-1"}]} if sample_found else {"issues": []}
-    harness.server.add("GET", SEARCH, issue_search)
-    harness.server.add("GET", jira_path("/rest/api/2/issue/EXAMPLE-1"), fixture("issue_todo.json"))
-    harness.server.add(
-        "GET",
-        jira_path("/rest/api/2/issue/EXAMPLE-1/transitions"),
-        fixture("transitions_todo.json"),
-    )
+    add_samples(harness, samples=SAMPLES if sample_found else {})
+
+
+def statuses_of(result: Any) -> dict[str, str]:
+    checks = result.data["checks"] if result.code == 0 else result.error["details"]["checks"]
+    return {c["id"]: c["status"] for c in checks}
 
 
 def test_config_check_unverified_without_samples(harness: Harness) -> None:
@@ -576,11 +700,138 @@ def test_config_check_drift_on_missing_issue_type(harness: Harness) -> None:
 def test_config_check_probes_transitions_with_sample(harness: Harness) -> None:
     setup_config_check(harness)
     result = harness.run("config", "check", "--issue", "EXAMPLE-1")
-    statuses = {c["id"]: c["status"] for c in result.error["details"]["checks"]}
+    assert result.code == 0, result.out
+    checks = {c["id"]: c for c in result.data["checks"]}
+    todo = "EXAMPLE:transition:in_progress:To Do"
+    in_progress = "EXAMPLE:transition:done:In Progress"
+    assert checks[f"{todo}:source_status"]["status"] == "pass"
+    assert checks[f"{todo}:transition_available"]["status"] == "pass"
+    assert checks[f"{todo}:auto_set:work_started"]["status"] == "pass"
+    assert checks[f"{todo}:transition_available"]["details"]["sample_issue"] == "EXAMPLE-1"
+    # --issue is To Do, so the In Progress source is probed with a searched, re-read sample.
+    assert checks[f"{in_progress}:source_status"]["status"] == "pass"
+    assert checks[f"{in_progress}:transition_available"]["status"] == "pass"
+    assert checks[f"{in_progress}:transition_available"]["details"]["sample_issue"] == "EXAMPLE-2"
+
+
+@pytest.mark.parametrize("lie", ["search_status", "issue_status"])
+def test_config_check_wrong_status_sample_is_unverified(harness: Harness, lie: str) -> None:
+    setup_create(harness)
+    if lie == "search_status":
+        # The search returns a To Do issue for every status query.
+        add_samples(harness, samples={})
+        harness.server.routes[("GET", SEARCH)] = []
+        harness.server.add("GET", SEARCH, {"issues": [_search_hit("EXAMPLE-1", "To Do")]})
+    else:
+        # The search claims In Progress, but the issue itself is still To Do.
+        add_samples(harness, samples={"To Do": "EXAMPLE-1", "In Progress": "EXAMPLE-1"})
+    result = harness.run("config", "check")
+    assert result.code == 4
+    assert result.error["code"] == "config_unverified"
+    statuses = statuses_of(result)
+    assert statuses["EXAMPLE:transition:done:In Progress"] == "unverified"
+    assert not any(k.startswith("EXAMPLE:transition:done:In Progress:") for k in statuses)
     assert statuses["EXAMPLE:transition:in_progress:To Do:transition_available"] == "pass"
-    assert statuses["EXAMPLE:transition:in_progress:To Do:auto_set:work_started"] == "pass"
-    # The sample search returns EXAMPLE-1 (To Do) for every status, so `done` cannot be offered.
-    assert statuses["EXAMPLE:transition:done:In Progress:transition_available"] == "drift"
+    assert f"{ISSUE_1}/transitions" in harness.server.paths()
+    assert f"{ISSUE_2}/transitions" not in harness.server.paths()
+
+
+def test_config_check_explicit_issue_in_other_status_falls_back_to_search(
+    harness: Harness,
+) -> None:
+    setup_config_check(harness)
+    result = harness.run("config", "check", "--issue", "EXAMPLE-2")
+    assert result.code == 0, result.out
+    checks = {c["id"]: c for c in result.data["checks"]}
+    sample = checks["EXAMPLE:transition:in_progress:To Do:transition_available"]["details"]
+    assert sample["sample_issue"] == "EXAMPLE-1"
+
+
+@pytest.mark.parametrize(
+    "damage", ["missing_fields", "null_fields", "list_fields", "entry_not_object", "no_required"]
+)
+def test_config_check_malformed_transition_metadata_is_unverified(
+    harness: Harness, damage: str
+) -> None:
+    setup_config_check(harness)
+    body = fixture("transitions_todo.json")
+    start = body["transitions"][0]
+    if damage == "missing_fields":
+        del start["fields"]
+    elif damage == "null_fields":
+        start["fields"] = None
+    elif damage == "list_fields":
+        start["fields"] = []
+    elif damage == "entry_not_object":
+        start["fields"]["customfield_10300"] = "Work Started"
+    else:
+        del start["fields"]["customfield_10300"]["required"]
+    harness.server.routes[("GET", f"{ISSUE_1}/transitions")] = []
+    harness.server.add("GET", f"{ISSUE_1}/transitions", body)
+    result = harness.run("config", "check")
+    assert result.code == 4
+    statuses = statuses_of(result)
+    assert statuses["EXAMPLE:transition:in_progress:To Do"] == "unverified"
+    assert "pass" not in {
+        v for k, v in statuses.items() if k.startswith("EXAMPLE:transition:in_progress:")
+    }
+
+
+def test_config_check_duplicate_issue_type_names_are_drift(harness: Harness) -> None:
+    setup_config_check(harness)
+    types = fixture("createmeta_issuetypes.json")
+    types["values"].append({"id": "10009", "name": "Story", "subtask": False})
+    types["total"] = len(types["values"])
+    harness.server.routes[("GET", ISSUETYPES)] = []
+    harness.server.add("GET", ISSUETYPES, types)
+    result = harness.run("config", "check")
+    assert result.error["code"] == "config_drift"
+    check = {c["id"]: c for c in result.error["details"]["checks"]}["EXAMPLE:Story:create_fields"]
+    assert check["status"] == "drift"
+    assert check["details"]["issue_type_ids"] == ["10001", "10009"]
+    assert STORY_FIELDS not in harness.server.paths()
+
+
+def _pre_edit_config(work_started: str = "Yes") -> str:
+    return config_text(pre_edit="true", work_started=work_started)
+
+
+def setup_pre_edit_check(harness: Harness, editmeta: Any, work_started: str = "Yes") -> None:
+    setup_config_check(harness)
+    harness.write_config(_pre_edit_config(work_started))
+    harness.server.routes[("GET", f"{ISSUE_1}/transitions")] = []
+    harness.server.add("GET", f"{ISSUE_1}/transitions", fixture("transitions_todo_no_screen.json"))
+    harness.server.add("GET", f"{ISSUE_1}/editmeta", editmeta)
+
+
+def test_config_check_pre_edit_off_screen_field_passes(harness: Harness) -> None:
+    setup_pre_edit_check(harness, fixture("editmeta.json"))
+    result = harness.run("config", "check")
+    assert result.code == 0, result.out
+    checks = {c["id"]: c for c in result.data["checks"]}
+    check = checks["EXAMPLE:transition:in_progress:To Do:auto_set:work_started"]
+    assert check["status"] == "pass"
+    assert check["details"]["placement"] == "edit"
+    assert harness.server.writes() == []
+
+
+@pytest.mark.parametrize("damage", ["not_in_editmeta", "no_set_operation", "disallowed_value"])
+def test_config_check_pre_edit_off_screen_field_drift(harness: Harness, damage: str) -> None:
+    meta = fixture("editmeta.json")
+    work_started = "Yes"
+    if damage == "not_in_editmeta":
+        del meta["fields"]["customfield_10300"]
+    elif damage == "no_set_operation":
+        meta["fields"]["customfield_10300"]["operations"] = ["add"]
+    else:
+        work_started = "Maybe"
+    setup_pre_edit_check(harness, meta, work_started)
+    result = harness.run("config", "check")
+    assert result.code == 4
+    assert result.error["code"] == "config_drift"
+    check_id = "EXAMPLE:transition:in_progress:To Do:auto_set:work_started"
+    assert statuses_of(result)[check_id] == "drift"
+    assert harness.server.writes() == []
 
 
 def test_config_check_truncated_metadata_is_unverified(harness: Harness) -> None:
@@ -595,29 +846,19 @@ def test_config_check_truncated_metadata_is_unverified(harness: Harness) -> None
 
 
 def test_config_check_pass(harness: Harness) -> None:
-    harness.write_config(
-        config_text()
-        .replace(
-            "          require:\n            - kind: attachment_filename\n"
-            '              pattern: "{key}_TestResults_*"\n',
-            "",
-        )
-        .replace("        done:\n          from: [In Progress]\n          to: Done\n", "")
-    )
+    harness.write_config()
     harness.store()
     harness.server.add("GET", ISSUETYPES, fixture("createmeta_issuetypes.json"))
     harness.server.add("GET", STORY_FIELDS, fixture("createmeta_story_fields.json"))
     harness.server.add("GET", FEATURE_FIELDS, fixture("createmeta_feature_fields.json"))
-    harness.server.add("GET", SEARCH, {"issues": [{"key": "EXAMPLE-1"}]})
-    harness.server.add("GET", jira_path("/rest/api/2/issue/EXAMPLE-1"), fixture("issue_todo.json"))
-    harness.server.add(
-        "GET",
-        jira_path("/rest/api/2/issue/EXAMPLE-1/transitions"),
-        fixture("transitions_todo.json"),
-    )
+    add_samples(harness)
     result = harness.run("config", "check")
     assert result.code == 0, result.out
     assert result.data["status"] == "pass"
+    statuses = statuses_of(result)
+    assert statuses["EXAMPLE:transition:in_progress:To Do:transition_available"] == "pass"
+    assert statuses["EXAMPLE:transition:done:In Progress:transition_available"] == "pass"
+    assert statuses["EXAMPLE:transition:done:In Progress:source_status"] == "pass"
 
 
 @pytest.mark.parametrize("encoding_schema", [{"type": "number"}])
