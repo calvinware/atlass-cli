@@ -396,7 +396,9 @@ def _validate_project(v: _Validator, value: Any, where: str) -> ProjectConfig:
             raise v.fail(f"{where}.{name}", f"{value_!r} is not in allowed_issue_types")
     if story_type == feature_type:
         raise v.fail(f"{where}.feature_type", "must differ from story_type")
-    policy = section.get("feature_create_policy", "human_confirmed")
+    policy = v.string(
+        section.get("feature_create_policy", "human_confirmed"), f"{where}.feature_create_policy"
+    )
     if policy not in FEATURE_POLICIES:
         raise v.fail(f"{where}.feature_create_policy", "must be 'automatic' or 'human_confirmed'")
 
@@ -461,7 +463,7 @@ def _validate_fields(v: _Validator, value: Any, where: str) -> dict[str, FieldRe
         has_name, has_id = "jira_name" in entry, "id" in entry
         if has_name == has_id:
             raise v.fail(f_where, "must set exactly one of jira_name or id")
-        encoding = entry["encoding"]
+        encoding = v.string(entry["encoding"], f"{f_where}.encoding")
         if encoding not in ENCODINGS:
             raise v.fail(
                 f"{f_where}.encoding",
@@ -515,11 +517,12 @@ def _validate_transition(
     for index, raw in enumerate(raw_require):
         r_where = f"{where}.require[{index}]"
         entry = v.mapping(raw, r_where, {"kind", "pattern"}, {"kind", "pattern"})
-        if entry["kind"] not in REQUIREMENT_KINDS:
-            raise v.fail(f"{r_where}.kind", f"unsupported kind {entry['kind']!r}")
+        kind = v.string(entry["kind"], f"{r_where}.kind")
+        if kind not in REQUIREMENT_KINDS:
+            raise v.fail(f"{r_where}.kind", f"unsupported kind {kind!r}")
         pattern = v.string(entry["pattern"], f"{r_where}.pattern", max_len=200)
         _validate_glob(v, pattern, f"{r_where}.pattern")
-        require.append(Requirement(kind=entry["kind"], pattern=pattern))
+        require.append(Requirement(kind=kind, pattern=pattern))
 
     return TransitionConfig(
         name=name,

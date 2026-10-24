@@ -86,9 +86,9 @@ can only happen after a request is dispatched:
 | When | Checks | Failure |
 |------|--------|---------|
 | Before the first write | Arguments and input JSON Schema; `atl.yaml`; credentials; create preflight (above); the transition checklist (`atl jira requirements`); attachment existence, regular-file type, and size limit; Confluence `expected_version` against a fresh read | Input/config errors (exit 2), `requirements_unmet` or `approval_required` (exit 4), `version_conflict` (exit 5), `metadata_incomplete` (exit 6). Nothing is sent. |
-| While an attachment streams | The file still has the size checked before upload | `file_invalid` with `details.dispatched: "aborted"`. The body is never completed. |
+| While an attachment streams | The file still has the size checked before upload | `outcome_unknown` (exit 6) with `details.dispatched: "aborted"`. The body is never completed, but the request may already have reached Jira, so inspect the issue view for a partial attachment before any retry. |
 | After a `pre_edit` PUT | The issue and its transitions are re-read, and the full checklist runs again before the transition POST | `partial_transition` (exit 7). The edit has already been applied. |
-| When the server handles a write | Server-side workflow validators, permissions, field validation, and server limits that REST metadata does not expose | `remote_validation`, `remote_limit_exceeded`, or `conflict` (exit 5); `partial_transition` (exit 7) if a `pre_edit` edit already succeeded |
+| When the server handles a write | Server-side workflow validators, field validation, and server limits that REST metadata does not expose | `remote_validation`, `remote_limit_exceeded`, `not_found`, or `conflict` (exit 5). 401 is `auth_failed` and 403 is `forbidden` (exit 3): run `atl login` again, or ask an administrator for access to the project or space. 429 is `rate_limited` (exit 6). A 408, 499, or 5xx answer does not prove the write was refused, so it is `outcome_unknown` (exit 6). `partial_transition` (exit 7) if a `pre_edit` edit already succeeded. |
 | After a 2xx write response | The response confirms the write: a non-empty issue id and a valid issue key in the target project for create; a non-empty comment id; the uploaded attachment name and size; for page create a valid page id, type `page`, the submitted title and space, and version 1; for page update the page id, title, and next version. A write response over the 32 MiB cap is never parsed. | `outcome_unknown` (exit 6) with a command-specific inspection fix. Inspect before any retry. |
 
 ### Requirements and transitions
@@ -123,7 +123,9 @@ options are mutually exclusive.
 Before upload, `atl` checks that the file exists, is a regular file, and is no larger than
 `jira.max_attachment_bytes`. The upload is a streamed `multipart/form-data` with an exact
 `Content-Length` and `X-Atlassian-Token: no-check`. If the file shrinks or grows during upload,
-the upload is aborted before the body completes (`file_invalid`, `details.dispatched: "aborted"`).
+the upload is aborted before the body completes. Because the request may already have reached
+Jira, this is `outcome_unknown` (exit 6) with `details.dispatched: "aborted"`; inspect the issue
+view for a partial attachment before any retry.
 
 The command succeeds only when Jira's 2xx response is a non-empty JSON list in which every item has
 a non-empty string `id` and `filename` and a non-negative integer `size`, and at least one item has
@@ -144,8 +146,10 @@ All requests use Data Center `/rest/api/content` under the configured context pa
 `update` reads the page first. If the current version differs from `expected_version`, it fails
 with `version_conflict` (exit 5) and nothing is written. Otherwise it sends version
 `expected_version + 1`, keeping the current title or body for whichever field was not supplied. If
-the read does not include `body.storage.value` as a string, or returns a different content ID,
-`read` and `update` fail with `response_invalid` (exit 6) and nothing is written. `update` also
+the read does not include `body.storage.value` as a string, a non-empty string `title`, or an
+object `version` with a positive integer `number`, or returns a different content ID, `read` and
+`update` fail with `response_invalid` (exit 6) and nothing is written. (`update` with a new
+`title` does not need the current title.) `update` also
 refuses content whose type is not `page` (for example a blog post) with `input_invalid` (exit 2)
 before writing. An empty body is kept only when Confluence
 returns one explicitly. A
@@ -160,7 +164,7 @@ version.
 ## Writes and retries
 
 No write is ever retried. A write that was dispatched but whose result is unknown (timeout,
-disconnect, 5xx, redirect, unparseable or oversized success, or a success response that does not
+disconnect, HTTP 408 or 499, 5xx, redirect, an attachment file that changed during upload, unparseable or oversized success, or a success response that does not
 confirm the write) returns `outcome_unknown` (exit 6). Inspect
 remote state before running it again. `atl jira search` returns status and summary only. It
 cannot show comments, attachments, or custom field values, so use the method for each write:

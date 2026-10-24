@@ -233,6 +233,39 @@ def test_story_create_rejects_field_colliding_with_description(harness: Harness)
     assert harness.server.writes() == []
 
 
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        "{id: summary, encoding: text}",
+        "{jira_name: Summary, encoding: text}",
+        "{id: project, encoding: text}",
+        "{id: issuetype, encoding: text}",
+    ],
+)
+@pytest.mark.parametrize("command", ["story", "feature"])
+def test_create_rejects_friendly_field_mapped_to_fixed_field(
+    harness: Harness, mapping: str, command: str
+) -> None:
+    setup_create(harness, policy="automatic")
+    harness.write_config(
+        config_text(policy="automatic").replace(
+            "work_started: {jira_name: Work Started, encoding: single_option}",
+            "work_started: {jira_name: Work Started, encoding: single_option}\n"
+            f"        title: {mapping}",
+        )
+    )
+    doc = {**STORY, "fields": {"title": "Overridden"}}
+    if command == "feature":
+        doc = {"project": "EXAMPLE", "summary": "Add SSO button", "fields": {"title": "Overridden"}}
+    result = harness.run("jira", command, "create", "--input", "-", stdin=json.dumps(doc).encode())
+    assert result.code == 4
+    assert result.error["code"] == "requirements_unmet"
+    check = checks(result.error)["field:title"]
+    assert check["status"] == "fail"
+    assert check["details"]["field_id"] in {"summary", "project", "issuetype"}
+    assert harness.server.writes() == []
+
+
 def test_story_create_unknown_input_field(harness: Harness) -> None:
     setup_create(harness)
     result = create_story(harness, {**STORY, "fields": {"nope": "x"}})
@@ -723,10 +756,12 @@ def test_attachment_growing_file_never_exceeds_declared_size(
     monkeypatch.setattr(Path, "stat", stat_then_grow)
     harness.server.add("POST", ATTACH, handler=_attachment_ok)
     result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
-    assert result.code == 2
-    assert result.error["code"] == "file_invalid"
+    assert result.code == 6
+    assert result.error["code"] == "outcome_unknown"
     assert result.error["details"]["dispatched"] == "aborted"
     assert result.error["details"]["declared_size"] == 5
+    assert result.error["details"]["reason"] == "file grew while uploading"
+    assert "issue view" in result.error["fix"]
     # The mock transport buffers the body before routing; the abort happens while buffering.
     assert harness.server.requests == []
 
@@ -1271,3 +1306,117 @@ def test_config_check_required_fields_sharing_an_id_is_drift(harness: Harness) -
         "friendly": ["acceptance_criteria", "feature_link"],
         "field_id": "customfield_10100",
     }
+
+
+def _require_description(name: str) -> Any:
+    meta = fixture(name)
+    for value in meta["values"]:
+        if value["fieldId"] == "description":
+            value["required"] = True
+    return meta
+
+
+@pytest.mark.parametrize(
+    ("type_name", "route", "meta_file"),
+    [
+        ("Story", STORY_FIELDS, "createmeta_story_fields.json"),
+        ("Feature", FEATURE_FIELDS, "createmeta_feature_fields.json"),
+    ],
+)
+def test_config_check_reports_required_description(
+    harness: Harness, type_name: str, route: str, meta_file: str
+) -> None:
+    setup_config_check(harness)
+    harness.server.routes[("GET", route)] = []
+    harness.server.add("GET", route, _require_description(meta_file))
+    result = harness.run("config", "check")
+    assert result.code == 4
+    assert result.error["code"] == "config_drift"
+    ids = _config_check_ids(result)
+    check = ids[f"EXAMPLE:{type_name}:create_field:description"]
+    assert check["status"] == "drift"
+    assert check["details"] == {"field_id": "description"}
+    assert "top-level `description`" in check["fix"]
+    assert "Jira admin" in check["fix"]
+    other = "Feature" if type_name == "Story" else "Story"
+    assert f"EXAMPLE:{other}:create_field:description" not in ids
+
+
+def test_story_create_requires_description_when_jira_does(harness: Harness) -> None:
+    setup_create(harness, story_fields=_require_description("createmeta_story_fields.json"))
+    result = create_story(harness, STORY)
+    assert result.code == 4
+    check = checks(result.error)["create_field:description"]
+    assert check["status"] == "fail"
+    assert "top-level `description`" in check["fix"]
+    assert harness.server.writes() == []
+
+    assert create_story(harness, {**STORY, "description": "d"}).code == 0
+
+
+ISSUE_3 = jira_path("/rest/api/2/issue/EXAMPLE-3")
+
+
+def _issue_reply(*, key: str = "EXAMPLE-3", project: str = "EXAMPLE") -> dict[str, Any]:
+    issue: dict[str, Any] = fixture("issue_todo.json")
+    issue["key"] = key
+    issue["fields"]["project"] = {"key": project, "id": "1"}
+    return issue
+
+
+@pytest.mark.parametrize(
+    "reply", [{"key": "EXAMPLE-9"}, {"project": "OTHER"}, {"key": "OTHER-3", "project": "OTHER"}]
+)
+def test_config_check_explicit_issue_mismatch_uses_searched_sample(
+    harness: Harness, reply: dict[str, str]
+) -> None:
+    setup_config_check(harness)
+    harness.server.add("GET", ISSUE_3, _issue_reply(**reply))
+    result = harness.run("config", "check", "--issue", "EXAMPLE-3")
+    assert result.code == 0, result.out
+    ids = _config_check_ids(result)
+    for check_id, sample in (
+        ("EXAMPLE:transition:in_progress:To Do:transition_available", "EXAMPLE-1"),
+        ("EXAMPLE:transition:done:In Progress:transition_available", "EXAMPLE-2"),
+    ):
+        assert ids[check_id]["status"] == "pass"
+        assert ids[check_id]["details"]["sample_issue"] == sample
+    assert f"{ISSUE_3}/transitions" not in harness.server.paths()
+    # Each searched sample is re-read before it is probed.
+    assert harness.server.paths("GET").count(ISSUE_1) == 1
+    assert harness.server.paths("GET").count(ISSUE_2) == 1
+
+
+@pytest.mark.parametrize("reply", [{"key": "EXAMPLE-9"}, {"project": "OTHER"}])
+def test_config_check_explicit_issue_mismatch_without_search_sample_is_unverified(
+    harness: Harness, reply: dict[str, str]
+) -> None:
+    setup_config_check(harness, sample_found=False)
+    harness.server.add("GET", ISSUE_3, _issue_reply(**reply))
+    result = harness.run("config", "check", "--issue", "EXAMPLE-3")
+    assert result.code == 4
+    assert result.error["code"] == "config_unverified"
+    statuses = statuses_of(result)
+    assert statuses["EXAMPLE:transition:in_progress:To Do"] == "unverified"
+    assert statuses["EXAMPLE:transition:done:In Progress"] == "unverified"
+    assert not any(":transition_available" in k for k in statuses)
+    assert not any(p.endswith("/transitions") for p in harness.server.paths())
+
+
+@pytest.mark.parametrize("reread", [{"key": "EXAMPLE-9"}, {"project": "OTHER"}])
+def test_config_check_searched_sample_failing_reread_is_unverified(
+    harness: Harness, reread: dict[str, str]
+) -> None:
+    setup_config_check(harness)
+    harness.server.add("GET", ISSUE_3, _issue_reply(project="OTHER"))
+    harness.server.routes[("GET", ISSUE_1)] = []
+    harness.server.add("GET", ISSUE_1, _issue_reply(**{"key": "EXAMPLE-1", **reread}))
+    result = harness.run("config", "check", "--issue", "EXAMPLE-3")
+    assert result.code == 4
+    assert result.error["code"] == "config_unverified"
+    ids = _config_check_ids(result)
+    todo = ids["EXAMPLE:transition:in_progress:To Do"]
+    assert todo["status"] == "unverified"
+    assert todo["details"]["sample_issue"] == "EXAMPLE-1"
+    assert f"{ISSUE_1}/transitions" not in harness.server.paths()
+    assert ids["EXAMPLE:transition:done:In Progress:transition_available"]["status"] == "pass"

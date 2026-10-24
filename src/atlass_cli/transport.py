@@ -21,6 +21,9 @@ MAX_DETAIL_CHARS = 500
 MAX_DETAIL_ITEMS = 50
 DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=120.0, pool=10.0)
 READ_METHODS = frozenset({"GET", "HEAD"})
+# A timeout (408) or a proxy's "client closed request" (499) does not show that the origin
+# refused the request; a write may still have been applied.
+UNCERTAIN_STATUSES = frozenset({408, 499})
 
 
 def seg(value: str) -> str:
@@ -350,14 +353,16 @@ class ServiceClient:
                 details,
                 write_outcome=rejected,
             )
-        if status >= 500:
+        if status >= 500 or status in UNCERTAIN_STATUSES:
             if is_write:
-                error = self.unknown_outcome(f"server error {status}")
+                error = self.unknown_outcome(
+                    f"server error {status}" if status >= 500 else f"HTTP {status}"
+                )
                 error.details.update(remote)
                 raise error
             raise AtlError(
                 "service_error",
-                f"{self.service} returned server error {status}.",
+                f"{self.service} returned error {status}.",
                 "Retry later; contact the Atlassian administrators if it persists.",
                 details,
             )

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, NoReturn, TextIO
 
 import httpx
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 
 from atlass_cli import __version__, confluence, features, jira, workflow
 from atlass_cli.auth import (
@@ -86,13 +86,34 @@ def default_runtime() -> Runtime:
 # --------------------------------------------------------------------------- parser
 
 
+_ARGUMENT_ERROR_RE = re.compile(r"argument ([^:]+): (.*)", re.S)
+_VALUE_FREE_PREFIXES = ("the following arguments are required:", "one of the arguments ")
+
+
+def _value_free_usage_message(message: str) -> str:
+    """Rebuild argparse's message without any caller-supplied value (it may be a secret)."""
+    if message.startswith(_VALUE_FREE_PREFIXES):
+        return message
+    if message.startswith("unrecognized arguments"):
+        return "unrecognized arguments"
+    match = _ARGUMENT_ERROR_RE.fullmatch(message)
+    if not match:
+        return "invalid arguments"
+    detail = match.group(2)
+    if detail.startswith("invalid choice"):
+        detail = "invalid choice"
+    elif "'" in detail or '"' in detail:
+        detail = "invalid value"
+    return f"argument {match.group(1)}: {detail}"
+
+
 class _Parser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         path = self.prog.removeprefix("atl").strip()
         hint = f"atl schema '{path}'" if path in COMMANDS_BY_PATH else "atl commands"
         raise AtlError(
             "usage_error",
-            f"{self.prog}: {sanitize_text(message, 300)}",
+            f"{self.prog}: {sanitize_text(_value_free_usage_message(message), 300)}",
             f"Run `{hint}` to see valid arguments.",
             {"usage": " ".join(self.format_usage().split())},
         )
@@ -307,6 +328,30 @@ def _reject_constant(name: str) -> Any:
     raise ValueError(f"{name} is not valid JSON")
 
 
+def _schema_problem(error: ValidationError) -> dict[str, Any]:
+    """Describe a schema violation by location and rule, never by the rejected value."""
+    problem: dict[str, Any] = {
+        "path": sanitize_text("/" + "/".join(str(p) for p in error.absolute_path), 300),
+        "validator": str(error.validator),
+    }
+    expected = error.validator_value
+    if (
+        error.validator == "required"
+        and isinstance(expected, list)
+        and isinstance(error.instance, dict)
+    ):
+        problem["missing"] = [name for name in expected if name not in error.instance]
+    elif error.validator == "additionalProperties" and isinstance(error.schema, dict):
+        problem["allowed"] = sorted(error.schema.get("properties", {}))
+    elif error.validator in ("oneOf", "anyOf"):
+        problem["expected"] = "one of the alternatives in the input schema"
+    elif isinstance(expected, str | int | float | bool) or (
+        isinstance(expected, list) and all(isinstance(v, str | int | float) for v in expected)
+    ):
+        problem["expected"] = expected
+    return problem
+
+
 def read_json_input(rt: Runtime, source: str, spec: CommandSpec) -> dict[str, Any]:
     assert spec.input is not None
     text = _read_source(rt, source, "input", MAX_INPUT_BYTES)
@@ -326,15 +371,7 @@ def read_json_input(rt: Runtime, source: str, spec: CommandSpec) -> dict[str, An
             "input_invalid",
             f"The input does not match the {spec.path} input schema.",
             f"Correct the listed problems; see `atl schema '{spec.path}'` (input).",
-            {
-                "errors": [
-                    {
-                        "path": "/" + "/".join(str(p) for p in e.absolute_path),
-                        "message": sanitize_text(e.message, 300),
-                    }
-                    for e in errors[:20]
-                ]
-            },
+            {"errors": [_schema_problem(e) for e in errors[:20]]},
         )
     assert isinstance(doc, dict)
     return doc

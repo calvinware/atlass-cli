@@ -128,9 +128,48 @@ def test_parser_errors_are_json_exit_2(harness: Harness, argv: list[str]) -> Non
     assert result.stderr == ""
 
 
-def test_secret_argument_is_not_echoed(harness: Harness) -> None:
-    result = harness.run("login", "--service", "jira", "--token", "secret-in-argv")
+SECRET_SENTINEL = "s3cr3t-SENTINEL-value"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["login", "--service", "jira", "--token", SECRET_SENTINEL],
+        ["login", "--service", "jira", f"--token={SECRET_SENTINEL}"],
+        ["login", "--service", SECRET_SENTINEL],
+        ["jira", "search", "--jql", "x", "--limit", SECRET_SENTINEL],
+        ["jira", "requirements", SECRET_SENTINEL, "--to", "Done"],
+        [SECRET_SENTINEL],
+    ],
+)
+def test_rejected_argument_values_are_not_echoed(harness: Harness, argv: list[str]) -> None:
+    result = harness.run(*argv)
     assert result.code == 2
+    assert result.error["code"] == "usage_error"
+    assert SECRET_SENTINEL not in result.stdout
+    assert result.stderr == ""
+
+
+def test_schema_errors_omit_rejected_values(harness: Harness) -> None:
+    harness.write_config()
+    doc = {
+        "project": SECRET_SENTINEL,
+        "summary": ["x"],
+        "fields": {"team": {"v": SECRET_SENTINEL}},
+        "unexpected": SECRET_SENTINEL,
+    }
+    result = harness.run("jira", "story", "create", "--input", "-", stdin=json.dumps(doc).encode())
+    assert result.error["code"] == "input_invalid"
+    assert SECRET_SENTINEL not in result.stdout
+    assert result.stderr == ""
+    problems = {p["path"]: p for p in result.error["details"]["errors"]}
+    assert problems["/summary"] == {"path": "/summary", "validator": "type", "expected": "string"}
+    assert problems["/project"]["validator"] == "pattern"
+    assert problems["/fields/team"]["validator"] == "oneOf"
+    assert "summary" in problems["/"]["allowed"]
+
+    result = harness.run("jira", "story", "create", "--input", "-", stdin=b"{}")
+    assert result.error["details"]["errors"][0]["missing"] == ["project", "summary"]
 
 
 def test_internal_error_is_sanitized(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:

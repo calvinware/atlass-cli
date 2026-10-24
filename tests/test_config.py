@@ -11,7 +11,7 @@ from atlass_cli.config import (
     parse_config_file,
 )
 from atlass_cli.contracts import AtlError
-from tests.conftest import config_text
+from tests.conftest import Harness, config_text
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -175,6 +175,40 @@ def test_rejects_invalid_config(tmp_path: Path, old: str, new: str, where: str) 
     error = _error(tmp_path, text.replace(old, new, 1))
     assert where in (error.details["where"] or "") + error.details["problem"]
     assert error.fix
+
+
+@pytest.mark.parametrize("value", ["[human_confirmed]", "{a: b}", "1", "null"])
+def test_rejects_non_string_feature_policy(tmp_path: Path, value: str) -> None:
+    text = config_text().replace(
+        "feature_create_policy: human_confirmed", f"feature_create_policy: {value}"
+    )
+    error = _error(tmp_path, text)
+    assert error.details["where"] == "jira.projects[0].feature_create_policy"
+
+
+@pytest.mark.parametrize("value", ["[text]", "{a: b}", "1", "null"])
+def test_rejects_non_string_field_encoding(tmp_path: Path, value: str) -> None:
+    text = config_text().replace(
+        "{jira_name: Acceptance Criteria, encoding: text}",
+        f"{{jira_name: Acceptance Criteria, encoding: {value}}}",
+    )
+    error = _error(tmp_path, text)
+    assert error.details["where"] == "jira.projects[0].fields.acceptance_criteria.encoding"
+
+
+@pytest.mark.parametrize("value", ["[attachment_filename]", "{a: b}", "1", "null"])
+def test_rejects_non_string_requirement_kind(tmp_path: Path, value: str) -> None:
+    text = config_text().replace("kind: attachment_filename", f"kind: {value}")
+    error = _error(tmp_path, text)
+    assert error.details["where"] == "jira.projects[0].transitions.done.require[0].kind"
+
+
+def test_non_string_enum_is_config_invalid_through_cli(harness: Harness) -> None:
+    harness.write_config(config_text().replace("kind: attachment_filename", "kind: [x]"))
+    result = harness.run("jira", "search", "--jql", "project = EXAMPLE")
+    assert result.code == 2
+    assert result.error["code"] == "config_invalid"
+    assert result.error["details"]["where"].endswith("require[0].kind")
 
 
 CREATE_BLOCK = (

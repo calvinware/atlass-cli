@@ -370,6 +370,48 @@ def test_server_errors() -> None:
     assert info.value.code == "outcome_unknown"
 
 
+@pytest.mark.parametrize("status", [408, 499])
+@pytest.mark.parametrize("method", ["POST", "PUT"])
+def test_uncertain_write_status_is_outcome_unknown(status: int, method: str) -> None:
+    server = FakeServer().add(
+        method, jira_path("/rest/api/2/issue"), {"message": "x"}, status=status
+    )
+    with pytest.raises(AtlError) as info:
+        _client(server).request(method, "/rest/api/2/issue", json_body={})
+    assert info.value.code == "outcome_unknown"
+    assert info.value.exit_code == 6
+    assert info.value.write_outcome == "unknown"
+    assert info.value.details["reason"] == f"HTTP {status}"
+    assert "before retrying" in info.value.fix
+    assert len(server.requests) == 1
+
+
+@pytest.mark.parametrize("status", [408, 499])
+def test_uncertain_read_status_is_service_error(status: int) -> None:
+    server = FakeServer().add("GET", jira_path("/rest/api/2/myself"), {"m": "x"}, status=status)
+    with pytest.raises(AtlError) as info:
+        _client(server).get("/rest/api/2/myself")
+    assert info.value.code == "service_error"
+    assert info.value.exit_code == 6
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        (400, "remote_validation"),
+        (409, "conflict"),
+        (413, "remote_limit_exceeded"),
+        (429, "rate_limited"),
+    ],
+)
+def test_definite_rejections_stay_rejected(status: int, code: str) -> None:
+    server = FakeServer().add("POST", jira_path("/rest/api/2/issue"), {"m": "x"}, status=status)
+    with pytest.raises(AtlError) as info:
+        _client(server).request("POST", "/rest/api/2/issue", json_body={})
+    assert info.value.code == code
+    assert info.value.write_outcome == "rejected"
+
+
 def test_field_errors_are_sanitized() -> None:
     body = {
         "errorMessages": ["bad\x1b[31m value"],

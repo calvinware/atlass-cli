@@ -24,11 +24,24 @@ def _invalid(what: str) -> AtlError:
     )
 
 
+def _version_number(page: dict[str, Any]) -> int | None:
+    version = page.get("version")
+    number = version.get("number") if isinstance(version, dict) else None
+    return number if type(number) is int and number >= 1 else None
+
+
 def _version(page: dict[str, Any]) -> int:
-    number = (page.get("version") or {}).get("number")
-    if type(number) is not int:
+    number = _version_number(page)
+    if number is None:
         raise _invalid("page version")
     return number
+
+
+def _title(page: dict[str, Any]) -> str:
+    title = page.get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise _invalid("page title")
+    return title
 
 
 def _space_key(page: dict[str, Any]) -> str | None:
@@ -70,7 +83,7 @@ def read(client: ServiceClient, page_id: str) -> dict[str, Any]:
     ]
     return {
         "id": page["id"],
-        "title": str(page.get("title", "")),
+        "title": _title(page),
         "type": str(page.get("type", "")),
         "space_key": _space_key(page),
         "version": _version(page),
@@ -91,14 +104,13 @@ def search(client: ServiceClient, cql: str, start: int, limit: int) -> dict[str,
     for item in raw["results"][:limit]:
         if not isinstance(item, dict) or "id" not in item:
             continue
-        number = (item.get("version") or {}).get("number")
         results.append(
             {
                 "id": str(item["id"]),
                 "title": str(item.get("title", "")),
                 "type": str(item.get("type", "")),
                 "space_key": _space_key(item),
-                "version": number if type(number) is int else None,
+                "version": _version_number(item),
             }
         )
     has_next = isinstance(raw.get("_links"), dict) and "next" in raw["_links"]
@@ -186,7 +198,7 @@ def update(client: ServiceClient, page_id: str, doc: dict[str, Any]) -> dict[str
     current_version = _version(current)
     if current_version != expected:
         raise _stale(page_id, expected, current_version)
-    title = doc.get("title", str(current.get("title", "")))
+    title = doc["title"] if "title" in doc else _title(current)
     storage = doc["body_storage"] if "body_storage" in doc else _storage(current)
     body = {
         "id": page_id,

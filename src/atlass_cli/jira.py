@@ -114,6 +114,20 @@ def _create_preflight(
                     )
                 )
                 continue
+            if meta.id in SYSTEM_CREATE_FIELDS:
+                checks.append(
+                    Check(
+                        check_id,
+                        "fail",
+                        f"{friendly!r} resolves to Jira's {meta.name!r} ({meta.id}), which atl "
+                        "sets from the command itself.",
+                        f"Remove {friendly!r} from the input fields, and map fields.{friendly} in "
+                        "atl.yaml to a different Jira field; project, issue type, and summary "
+                        "come from the top-level input and atl.yaml.",
+                        {"friendly": friendly, "field_id": meta.id},
+                    )
+                )
+                continue
             if meta.id in owners:
                 checks.append(field_collision(check_id, owners[meta.id], friendly, meta))
                 continue
@@ -193,6 +207,15 @@ def _blank(value: Any) -> bool:
 
 
 def _missing_live_field(meta: FieldMeta, issue_type_name: str) -> Check:
+    if meta.id == "description":
+        return Check(
+            "create_field:description",
+            "fail",
+            f"Jira requires Description when creating a {issue_type_name}.",
+            f"Supply the top-level `description` in every {issue_type_name} create input, or ask "
+            f"a Jira admin to make Description optional on the {issue_type_name} create screen.",
+            {"field_id": meta.id},
+        )
     return Check(
         f"create_field:{meta.id}",
         "fail",
@@ -233,10 +256,10 @@ def _create(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     fields: dict[str, Any] = {
+        **payload,
         "project": {"key": project.key},
         "issuetype": {"id": type_id},
         "summary": summary,
-        **payload,
     }
     if description is not None:
         fields["description"] = description
@@ -516,14 +539,19 @@ def attachment_add(client: ServiceClient, jira: JiraConfig, key: str, path: Path
                 },
             )
         except _FileChanged as change:
-            raise AtlError(
-                "file_invalid",
-                f"{path.name} {change} while uploading; the upload was aborted before completion "
-                f"and never exceeded {info.st_size} bytes.",
-                f"Wait until the file is fully written, confirm no partial attachment exists on "
-                f"{key}, then retry.",
-                {"path": str(path), "declared_size": info.st_size, "dispatched": "aborted"},
-            ) from None
+            # The request may already be on the wire, so the server's handling is unknown.
+            error = client.unknown_outcome(
+                f"file {change} while uploading",
+                f"{path.name} {change} while uploading; atl aborted the body before completion "
+                f"and never sent more than {info.st_size} bytes of it. Open {key} in the Jira "
+                f"issue view and look for an attachment named {sanitize_text(name, 120)!r} "
+                "(complete or partial) before retrying; remove a partial one. Wait until the file "
+                "is fully written before any retry. atl does not retry writes.",
+            )
+            error.details.update(
+                {"path": str(path), "declared_size": info.st_size, "dispatched": "aborted"}
+            )
+            raise error from None
     attachments = _confirmed_attachments(client, key, result, name, info.st_size)
     return {"key": key, "attachments": attachments}
 
@@ -805,7 +833,6 @@ def _check_project_create(client: ServiceClient, project: ProjectConfig) -> list
                 and not meta.has_default
                 and field_id not in SYSTEM_CREATE_FIELDS
                 and field_id not in owners
-                and field_id != "description"
             ):
                 check = _missing_live_field(meta, type_name)
                 check.id = f"{prefix}:{type_name}:{check.id}"

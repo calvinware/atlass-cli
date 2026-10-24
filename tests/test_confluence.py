@@ -382,6 +382,113 @@ def test_body_update_does_not_need_current_body(harness: Harness) -> None:
     assert result.code == 0
 
 
+def test_body_only_update_sends_exact_fetched_title(harness: Harness) -> None:
+    setup(harness)
+    page = fixture("confluence_page.json")
+    page["title"] = " Runbook: on-call "
+    harness.server.add("GET", PAGE, page)
+    harness.server.add(
+        "PUT", PAGE, {"id": "123456", "title": " Runbook: on-call ", "version": {"number": 8}}
+    )
+    result = run_input(
+        harness,
+        "confluence",
+        "page",
+        "update",
+        "123456",
+        doc={"expected_version": 7, "body_storage": "<p>new</p>"},
+    )
+    assert result.code == 0
+    (put,) = harness.server.writes()
+    assert json.loads(put.content)["title"] == " Runbook: on-call "
+
+
+BAD_TITLES = [None, "", "   ", 42, ["Runbook"], {"value": "Runbook"}, "missing"]
+
+
+def _page_with_title(title: Any) -> dict[str, Any]:
+    page: dict[str, Any] = fixture("confluence_page.json")
+    if title == "missing":
+        del page["title"]
+    else:
+        page["title"] = title
+    return page
+
+
+@pytest.mark.parametrize("title", BAD_TITLES)
+def test_body_only_update_refuses_invalid_fetched_title(harness: Harness, title: Any) -> None:
+    setup(harness)
+    harness.server.add("GET", PAGE, _page_with_title(title))
+    harness.server.add("PUT", PAGE, UPDATED)
+    result = run_input(
+        harness,
+        "confluence",
+        "page",
+        "update",
+        "123456",
+        doc={"expected_version": 7, "body_storage": "<p>new</p>"},
+    )
+    assert result.code == 6
+    assert result.error["code"] == "response_invalid"
+    assert result.error["details"] == {"what": "page title"}
+    assert harness.server.writes() == []
+
+
+@pytest.mark.parametrize("title", BAD_TITLES)
+def test_read_refuses_invalid_title(harness: Harness, title: Any) -> None:
+    setup(harness)
+    harness.server.add("GET", PAGE, _page_with_title(title))
+    result = harness.run("confluence", "page", "read", "123456")
+    assert result.code == 6
+    assert result.error["code"] == "response_invalid"
+    assert result.error["details"] == {"what": "page title"}
+
+
+BAD_VERSIONS = ["7", None, [7], {"number": "7"}, {"number": 7.0}, {"number": True}, {"number": 0}]
+
+
+@pytest.mark.parametrize("version", BAD_VERSIONS)
+def test_read_refuses_malformed_version(harness: Harness, version: Any) -> None:
+    setup(harness)
+    page = fixture("confluence_page.json")
+    page["version"] = version
+    harness.server.add("GET", PAGE, page)
+    result = harness.run("confluence", "page", "read", "123456")
+    assert result.code == 6
+    assert result.error["code"] == "response_invalid"
+    assert result.error["details"] == {"what": "page version"}
+
+
+@pytest.mark.parametrize("version", BAD_VERSIONS)
+def test_update_refuses_malformed_version_before_write(harness: Harness, version: Any) -> None:
+    setup(harness)
+    page = fixture("confluence_page.json")
+    page["version"] = version
+    harness.server.add("GET", PAGE, page)
+    harness.server.add("PUT", PAGE, UPDATED)
+    result = run_input(
+        harness,
+        "confluence",
+        "page",
+        "update",
+        "123456",
+        doc={"expected_version": 7, "title": "New"},
+    )
+    assert result.code == 6
+    assert result.error["code"] == "response_invalid"
+    assert result.error["details"] == {"what": "page version"}
+    assert harness.server.writes() == []
+
+
+def test_search_tolerates_malformed_version(harness: Harness) -> None:
+    setup(harness)
+    body = {"results": [{"id": "1", "type": "page", "title": "A", "version": "2"}]}
+    harness.server.add("GET", SEARCH, body)
+    result = harness.run("confluence", "page", "search", "--cql", "type = page")
+    assert result.code == 0
+    assert result.data["results"][0]["version"] is None
+
+
 UPDATED = {"id": "123456", "title": "New", "version": {"number": 8}}
 
 

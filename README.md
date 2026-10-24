@@ -103,6 +103,7 @@ instance, never a production project.
 | Redirect refusal (SSO-fronted instance) | — | — | unverified |
 | Story create with targeted createmeta and custom fields (text, Parent Link) | — | n/a | unverified |
 | `config check` pass/drift/unverified on real metadata | — | n/a | unverified |
+| Description required on the story and feature create screens: `config check` drift, create refused without top-level `description` | — | n/a | unverified |
 | Transition with on-screen `auto_set` (single option) | — | n/a | unverified |
 | Transition with `pre_edit: true` (PUT then POST) and a forced partial failure | — | n/a | unverified |
 | Attachment at the size limit and over a lower server limit; filename pattern on Done | — | n/a | unverified |

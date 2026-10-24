@@ -147,7 +147,7 @@ The PUT and POST are separate writes. They are **not atomic**:
 | Situation | Result |
 |-----------|--------|
 | PUT rejected (4xx) | original error code (usually `remote_validation`, exit 5); edit `rejected`, transition `not_attempted` |
-| PUT outcome unknown (timeout/disconnect/5xx) | `outcome_unknown`, exit 6; edit `unknown`, transition `not_attempted` |
+| PUT outcome unknown (timeout/disconnect/408/499/5xx) | `outcome_unknown`, exit 6; edit `unknown`, transition `not_attempted` |
 | PUT succeeded, refresh fails or checklist no longer passes | `partial_transition`, exit 7; edit `succeeded`, transition `skipped` |
 | PUT succeeded, POST rejected | `partial_transition`, exit 7; edit `succeeded`, transition `rejected` |
 | PUT succeeded, POST outcome unknown | `outcome_unknown`, exit 6; edit `succeeded`, transition `unknown` |
@@ -167,7 +167,8 @@ retry:
 This must be a positive integer number of bytes. Booleans, floats, strings, zero, and negative
 values are rejected. A file at exactly the limit is allowed; one byte more is refused before
 anything is sent. If the file grows after its size was checked, the upload is aborted before the
-body completes, so no more than the declared size is ever sent. Jira or a proxy may enforce a lower
+body completes, so no more than the declared size is ever sent. The request may already have
+reached Jira, so this is `outcome_unknown` (exit 6); check the issue view before retrying. Jira or a proxy may enforce a lower
 limit. That shows up as `remote_limit_exceeded` (exit 5).
 
 ## Drift checks
@@ -181,7 +182,12 @@ limit. That shows up as `remote_limit_exceeded` (exit 5).
   lists operations), not share a Jira field ID with another listed name, and have a compatible
   schema. Check IDs name
   the type, for example `EXAMPLE:Story:field:feature_link` or `EXAMPLE:Feature:field:team`.
-- Live required create fields that are not mapped are reported.
+- Live required create fields that are not mapped are reported as drift for each issue type.
+  This includes Description: when Jira requires it on a create screen, the drift check
+  `EXAMPLE:Story:create_field:description` (or `EXAMPLE:Feature:...`) tells you that every create
+  of that type must supply the top-level `description`, or that a Jira admin must make Description
+  optional. Story and feature create still refuse, before any write, an input without
+  `description` when Jira requires it.
 - For each transition source status, `atl` needs a sample issue that Jira reports in that project
   and status. With `--issue KEY`, `atl` looks up that issue for every source status:
   - If the issue has that key, project, and source status, it is the sample for that source.
