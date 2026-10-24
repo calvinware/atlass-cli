@@ -14,6 +14,9 @@ team's field IDs, workflow rules, and required attachments from `atl.yaml`.
 - Discover commands with `atl commands`. Get the exact argument, input, success, and error JSON
   Schemas with `atl schema '<command path>'`, for example `atl schema 'jira story create'`.
   Both work offline, with no config or credentials.
+- The rendered [command reference](docs/reference/commands.md) and
+  [error catalog](docs/reference/errors.md) are generated from those schemas. The
+  [agent guide](docs/agents.md) expands on this file; this file stays authoritative.
 
 | Exit | Meaning | What to do |
 |------|---------|------------|

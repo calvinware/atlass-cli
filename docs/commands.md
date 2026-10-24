@@ -1,8 +1,13 @@
-# Command reference
+# Command behavior
 
-The JSON Schemas from `atl schema '<command>'` are the source of truth. This page summarizes them.
-All commands accept `--config PATH`. Every command writes one JSON object to stdout and exits with
-one of the codes in the [agent guide](../AGENTS.md#contract).
+This page explains how commands behave: preflight, when checks run, transitions, attachments,
+Confluence updates, and how to inspect writes before a retry. For every command's arguments,
+input and output schemas, examples, and error codes, see the generated
+[command reference](reference/commands.md) and [error catalog](reference/errors.md).
+
+The JSON Schemas from `atl schema '<command>'` are the source of truth. All commands accept
+`--config PATH`. Every command writes one JSON object to stdout and exits with one of the codes in
+the [agent contract](../AGENTS.md#contract).
 
 ## Discovery
 
@@ -175,7 +180,7 @@ cannot show comments, attachments, or custom field values, so use the method for
 | `jira comment add` | Open the issue in the Jira issue view and look for a comment whose body exactly matches what you sent. |
 | `jira attachment add` | Open the issue in the Jira issue view and look for the exact filename and size. `atl jira requirements KEY --to STATUS` lists attachment names when an attachment rule fails. |
 | `jira transition` | `atl jira requirements KEY --to STATUS` (`from_status`) or `atl jira search --jql 'key = KEY'` (`status`). For a `pre_edit` edit, check the edited field values in the issue view. |
-| `confluence page create` | `atl confluence page search --cql 'space = "KEY" AND title = "<title>"'`. |
+| `confluence page create` | `atl confluence page search --cql 'space = "KEY" AND title = "<title>"'`, following `next_start` through every result page. Read each candidate with `atl confluence page read ID` and compare `title`, `space_key`, `ancestors`, and `body_storage` with what you sent. |
 | `confluence page update` | `atl confluence page read ID` and compare `version`, `title`, and `body_storage` with what you sent. |
 
 Agents inspect only through `atl` and, where the table says issue view, by asking a human to

@@ -76,8 +76,50 @@ jobs:
           "$BIN/python" -m pip install dist/*.whl
           "$BIN/atl" commands > commands.json
           "$BIN/atl" schema 'jira story create' > schema.json
-          python -c "import json; d=json.load(open('commands.json')); assert d['ok'] and len(d['data']['commands']) == 16"
+          "$BIN/python" -c "import json; from atlass_cli.contracts import COMMANDS; d=json.load(open('commands.json')); assert d['ok'] and [c['path'] for c in d['data']['commands']] == [c.path for c in COMMANDS]"
           python -c "import json; d=json.load(open('schema.json')); assert d['ok'] and d['data']['command'] == 'jira story create'"
+
+  docs:
+    name: docs (reference, site, links)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip setuptools
+          python -m pip install -e ".[dev,docs]"
+      - name: Command reference is up to date
+        run: python scripts/generate_command_reference.py --check
+      - name: Docs tests, including the built-site checks
+        env:
+          ATL_REQUIRE_SITE_BUILD: "1"
+        run: python -m pytest -q tests/test_docs.py
+      - name: Build site (strict)
+        env:
+          NO_MKDOCS_2_WARNING: "1"
+        run: python -m mkdocs build --strict
+      - name: Working tree is clean
+        shell: bash
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --porcelain
+            echo "::error::Docs generation or the site build changed or created tracked files"
+            exit 1
+          fi
+      - name: Link check
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          lycheeVersion: v0.24.2
+          args: --config lychee.toml README.md AGENTS.md 'docs/**/*.md'
+          fail: true
+          failIfEmpty: true
+          output: ${{ runner.temp }}/lychee/out.md
 
   audit:
     name: dependency audit

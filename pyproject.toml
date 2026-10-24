@@ -39,6 +39,12 @@ dev = [
     "types-jsonschema",
     "types-PyYAML",
 ]
+# Documentation site tooling, pinned to the versions the docs CI job is tested with.
+docs = [
+    "mkdocs==1.6.1",
+    "mkdocs-github-admonitions-plugin==0.1.1",
+    "mkdocs-material==9.8.0",
+]
 
 [project.scripts]
 atl = "atlass_cli.cli:main"
@@ -57,7 +63,7 @@ addopts = "-ra"
 python_version = "3.11"
 strict = true
 warn_unreachable = true
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
 
 [[tool.mypy.overrides]]
 module = ["keyring.*"]
