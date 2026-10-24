@@ -1,0 +1,15 @@
+{
+  "expand": "transitions",
+  "transitions": [
+    {
+      "id": "31",
+      "name": "Done",
+      "to": {
+        "name": "Done",
+        "id": "10001"
+      },
+      "hasScreen": false,
+      "fields": {}
+    }
+  ]
+}

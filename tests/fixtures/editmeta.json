@@ -1,0 +1,42 @@
+{
+  "fields": {
+    "summary": {
+      "required": true,
+      "schema": {
+        "type": "string",
+        "system": "summary"
+      },
+      "name": "Summary",
+      "operations": [
+        "set"
+      ]
+    },
+    "customfield_10300": {
+      "required": false,
+      "schema": {
+        "type": "option",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:select",
+        "customId": 10300
+      },
+      "name": "Work Started",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ],
+      "allowedValues": [
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/customFieldOption/1",
+          "value": "Yes",
+          "id": "1",
+          "disabled": false
+        },
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/customFieldOption/2",
+          "value": "No",
+          "id": "2",
+          "disabled": false
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "expand": "transitions",
+  "transitions": [
+    {
+      "id": "11",
+      "name": "Start Progress",
+      "to": {
+        "name": "In Progress",
+        "id": "3"
+      },
+      "hasScreen": false,
+      "fields": {}
+    }
+  ]
+}

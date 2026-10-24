@@ -1,0 +1,21 @@
+{
+  "id": "20001",
+  "key": "EXAMPLE-1",
+  "self": "https://jira.example.test/jira/rest/api/2/issue/EXAMPLE-1",
+  "fields": {
+    "summary": "Login page supports SSO",
+    "status": {
+      "name": "To Do",
+      "id": "1"
+    },
+    "project": {
+      "key": "EXAMPLE",
+      "id": "10000"
+    },
+    "issuetype": {
+      "name": "Story",
+      "id": "10001"
+    },
+    "attachment": []
+  }
+}
