@@ -17,7 +17,10 @@ jira:
         feature_link: {jira_name: Parent Link, encoding: issue_key_string}
         work_started: {jira_name: Work Started, encoding: single_option}
       create:
-        required: [acceptance_criteria, feature_link]
+        story:
+          required: [acceptance_criteria, feature_link]
+        feature:
+          required: []
       transitions:
         in_progress:
           from: [To Do]

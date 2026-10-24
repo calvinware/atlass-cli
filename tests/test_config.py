@@ -41,6 +41,8 @@ def test_example_config_is_valid() -> None:
     # YAML 1.1 would turn `Yes` into True; the strict loader keeps option values as strings.
     assert project.transitions["in_progress"].auto_set == {"work_started": "Yes"}
     assert project.transitions["done"].require[0].expand("EXAMPLE-1") == "EXAMPLE-1_TestResults_*"
+    assert project.story_required == ("acceptance_criteria", "feature_link")
+    assert project.feature_required == ()
 
 
 def test_url_normalization_preserves_context_path(tmp_path: Path) -> None:
@@ -149,11 +151,6 @@ def test_pre_edit_true(tmp_path: Path) -> None:
             "{id: 'bad id', encoding: text}",
             ".id",
         ),
-        (
-            "required: [acceptance_criteria, feature_link]",
-            "required: [acceptance_criteria, nope]",
-            "create.required",
-        ),
         ("auto_set: {work_started: Yes}", "auto_set: {missing: Yes}", "auto_set.missing"),
         ("story_type: Story", "story_type: Epic", "story_type"),
         (
@@ -178,6 +175,110 @@ def test_rejects_invalid_config(tmp_path: Path, old: str, new: str, where: str) 
     error = _error(tmp_path, text.replace(old, new, 1))
     assert where in (error.details["where"] or "") + error.details["problem"]
     assert error.fix
+
+
+CREATE_BLOCK = (
+    "      create:\n"
+    "        story:\n"
+    "          required: [acceptance_criteria, feature_link]\n"
+    "        feature:\n"
+    "          required: []\n"
+)
+
+
+def _with_create(block: str) -> str:
+    text = config_text()
+    assert CREATE_BLOCK in text
+    return text.replace(CREATE_BLOCK, block)
+
+
+@pytest.mark.parametrize(
+    ("block", "story", "feature"),
+    [
+        (CREATE_BLOCK, ("acceptance_criteria", "feature_link"), ()),
+        (
+            "      create:\n        story:\n          required: [work_started]\n",
+            ("work_started",),
+            (),
+        ),
+        (
+            "      create:\n        feature:\n          required: [work_started]\n",
+            (),
+            ("work_started",),
+        ),
+        ("      create:\n        story: {}\n        feature: {}\n", (), ()),
+        ("      create: {}\n", (), ()),
+        ("", (), ()),
+    ],
+)
+def test_create_requirements_per_type(
+    tmp_path: Path, block: str, story: tuple[str, ...], feature: tuple[str, ...]
+) -> None:
+    config = parse_config_file(_write(tmp_path, _with_create(block)))
+    assert config.jira is not None
+    project = config.jira.projects["EXAMPLE"]
+    assert project.story_required == story
+    assert project.feature_required == feature
+
+
+@pytest.mark.parametrize(
+    ("block", "where", "problem"),
+    [
+        (
+            "      create:\n        required: [acceptance_criteria]\n",
+            "jira.projects[0].create",
+            "unknown key(s): required",
+        ),
+        (
+            "      create:\n        epic:\n          required: []\n",
+            "jira.projects[0].create",
+            "unknown key(s): epic",
+        ),
+        (
+            "      create:\n        story:\n          required: []\n          optional: []\n",
+            "jira.projects[0].create.story",
+            "unknown key(s): optional",
+        ),
+        ("      create: [story]\n", "jira.projects[0].create", "must be a mapping"),
+        (
+            "      create:\n        feature: [work_started]\n",
+            "jira.projects[0].create.feature",
+            "must be a mapping",
+        ),
+        (
+            "      create:\n        story:\n          required: work_started\n",
+            "jira.projects[0].create.story.required",
+            "must be a list",
+        ),
+        (
+            "      create:\n        feature:\n          required: [work_started, work_started]\n",
+            "jira.projects[0].create.feature.required",
+            "must not contain duplicates",
+        ),
+        (
+            "      create:\n        story:\n          required: [acceptance_criteria, nope]\n",
+            "jira.projects[0].create.story.required[1]",
+            "unknown field 'nope'",
+        ),
+        (
+            "      create:\n        feature:\n          required: [nope]\n",
+            "jira.projects[0].create.feature.required[0]",
+            "unknown field 'nope'",
+        ),
+        (
+            "      create:\n        feature:\n          required: [7]\n",
+            "jira.projects[0].create.feature.required[0]",
+            "must be a non-empty string",
+        ),
+    ],
+)
+def test_rejects_invalid_create_requirements(
+    tmp_path: Path, block: str, where: str, problem: str
+) -> None:
+    error = _error(tmp_path, _with_create(block))
+    assert error.details["where"] == where
+    assert error.details["problem"] == problem
+    assert where in error.fix
 
 
 def test_rejects_duplicate_project_keys(tmp_path: Path) -> None:

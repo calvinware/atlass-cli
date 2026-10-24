@@ -432,7 +432,8 @@ COMMANDS: list[CommandSpec] = [
         path="config check",
         summary=(
             "Compare atl.yaml with live Jira create, field, and transition metadata. Reports "
-            "pass, drift, and unverified checks; read-only."
+            "pass, drift, and unverified checks; read-only. --issue is used only for transition "
+            "sources it matches; other sources fall back to search."
         ),
         arguments=_obj({"issue": ISSUE_KEY}),
         success=_obj(
@@ -448,8 +449,8 @@ COMMANDS: list[CommandSpec] = [
     CommandSpec(
         path="jira story create",
         summary=(
-            "Create a story after full preflight. Caller supplies acceptance criteria and the "
-            "chosen feature key."
+            "Create a story after preflight against create.story.required and live create "
+            "metadata. Caller supplies acceptance criteria and the chosen feature key."
         ),
         arguments=_obj({"input": INPUT_PATH}, ["input"]),
         input=STORY_CREATE_INPUT,
@@ -559,8 +560,9 @@ COMMANDS: list[CommandSpec] = [
     CommandSpec(
         path="jira feature create",
         summary=(
-            "Create a feature under the project's feature_create_policy. human_confirmed "
-            "requires a caller-supplied attestation, which is not identity proof."
+            "Create a feature under the project's feature_create_policy after preflight against "
+            "create.feature.required and live create metadata. human_confirmed requires a "
+            "caller-supplied attestation, which is not identity proof."
         ),
         arguments=_obj({"input": INPUT_PATH}, ["input"]),
         input=FEATURE_CREATE_INPUT,
@@ -591,7 +593,8 @@ COMMANDS: list[CommandSpec] = [
         path="jira attachment add",
         summary=(
             "Upload a file to an issue, enforcing jira.max_attachment_bytes before and during "
-            "upload."
+            "upload. Succeeds only when Jira confirms the uploaded name and size; otherwise "
+            "outcome_unknown."
         ),
         arguments=_obj({"key": ISSUE_KEY, "file": STR}, ["key", "file"]),
         success=_obj(
@@ -715,7 +718,8 @@ COMMANDS: list[CommandSpec] = [
         path="confluence page update",
         summary=(
             "Update a page's title and/or storage body. Requires expected_version and rejects "
-            "stale versions."
+            "stale versions. Succeeds only when Confluence confirms the page id, title, and next "
+            "version; otherwise outcome_unknown."
         ),
         arguments=_obj({"id": PAGE_ID, "input": INPUT_PATH}, ["id", "input"]),
         input=PAGE_UPDATE_INPUT,

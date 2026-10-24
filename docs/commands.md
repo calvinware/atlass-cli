@@ -58,19 +58,37 @@ atl login --service jira|confluence|all [--auth pat|basic] [--username NAME]
 Before the `POST /rest/api/2/issue`, `atl` checks all of the following. Any failure is
 `requirements_unmet` (exit 4) with every check listed, and nothing is sent.
 
-- `acceptance_criteria` is present and not blank. The fix says to write it; atl never does.
-- `feature_key` is present, exists, and is the project's `feature_type`. The fix points to
-  `feature find`; atl never chooses.
+- Story create only: `acceptance_criteria` is present and not blank. The fix says to write it;
+  atl never does.
+- Story create only: `feature_key` is present, exists, and is the project's `feature_type`. The
+  fix points to `feature find`; atl never chooses.
+- Feature create only: the project's `feature_create_policy` is satisfied. Under
+  `human_confirmed`, a missing `human_confirmation` is `approval_required` (exit 4) before any
+  request is made.
+- Every field in the issue type's own configured list (`create.story.required` for story create,
+  `create.feature.required` for feature create) has a non-blank value and is on that issue type's
+  create screen. A listed field that is missing from the screen fails with a fix to add it to the
+  screen or correct `atl.yaml`; it is never skipped. Story create does not read
+  `create.feature.required`, and feature create does not read `create.story.required`.
 - Every supplied field resolves to exactly one field on the live create screen (targeted,
   fully paginated `createmeta`) and serializes under its encoding.
-- Every `create.required` field has a value.
 - No two supplied friendly names resolve to the same Jira field ID.
 - Every live required field without a default is supplied.
 
 Truncated or malformed create metadata fails closed with `metadata_incomplete` (exit 6).
-`create.required` applies fully to story create. Feature create enforces each `create.required`
-field that is on the feature create screen, and also checks the live create screen and the
-project's `feature_create_policy`.
+
+### When checks run
+
+Passing preflight does not guarantee that Jira or Confluence will accept the write. Some checks
+can only happen after a request is dispatched:
+
+| When | Checks | Failure |
+|------|--------|---------|
+| Before the first write | Arguments and input JSON Schema; `atl.yaml`; credentials; create preflight (above); the transition checklist (`atl jira requirements`); attachment existence, regular-file type, and size limit; Confluence `expected_version` against a fresh read | Input/config errors (exit 2), `requirements_unmet` or `approval_required` (exit 4), `version_conflict` (exit 5), `metadata_incomplete` (exit 6). Nothing is sent. |
+| While an attachment streams | The file still has the size checked before upload | `file_invalid` with `details.dispatched: "aborted"`. The body is never completed. |
+| After a `pre_edit` PUT | The issue and its transitions are re-read, and the full checklist runs again before the transition POST | `partial_transition` (exit 7). The edit has already been applied. |
+| When the server handles a write | Server-side workflow validators, permissions, field validation, and server limits that REST metadata does not expose | `remote_validation`, `remote_limit_exceeded`, or `conflict` (exit 5); `partial_transition` (exit 7) if a `pre_edit` edit already succeeded |
+| After a 2xx write response | The response confirms the write: an issue key for create, an id for comment, the uploaded attachment, or the updated page id, title, and version | `outcome_unknown` (exit 6). Inspect before any retry. |
 
 ### Requirements and transitions
 
@@ -106,6 +124,11 @@ Before upload, `atl` checks that the file exists, is a regular file, and is no l
 `Content-Length` and `X-Atlassian-Token: no-check`. If the file shrinks or grows during upload,
 the upload is aborted before the body completes (`file_invalid`, `details.dispatched: "aborted"`).
 
+The command succeeds only when Jira's 2xx response is a non-empty JSON list in which every item has
+a non-empty string `id` and `filename` and a non-negative integer `size`, and at least one item has
+the uploaded file's name and byte size. Any other 2xx response, including an empty or non-JSON
+body, is `outcome_unknown` (exit 6). The fix names the file and size to look for in the issue view.
+
 ## Confluence
 
 All requests use Data Center `/rest/api/content` under the configured context path.
@@ -125,10 +148,17 @@ the read does not include `body.storage.value` as a string, `read` and `update` 
 returns one explicitly. A
 409 from a concurrent edit is also reported as `version_conflict`, with a re-read-and-merge fix.
 
+The update succeeds only when Confluence's 2xx response contains the requested page `id`, the
+submitted `title`, and an integer `version.number` equal to `expected_version + 1`. Any other 2xx
+response, including an empty or non-JSON body, is `outcome_unknown` (exit 6) with a fix to run
+`atl confluence page read ID` and compare before retrying. `atl` never fills in a missing title or
+version.
+
 ## Writes and retries
 
 No write is ever retried. A write that was dispatched but whose result is unknown (timeout,
-disconnect, 5xx, redirect, or unparseable success) returns `outcome_unknown` (exit 6). Inspect
+disconnect, 5xx, redirect, unparseable success, or a success response that does not confirm the
+write) returns `outcome_unknown` (exit 6). Inspect
 remote state before running it again. `atl jira search` returns status and summary only. It
 cannot show comments, attachments, or custom field values, so use the method for each write:
 
@@ -136,7 +166,7 @@ cannot show comments, attachments, or custom field values, so use the method for
 |-----------------|----------------|
 | `jira story create`, `jira feature create` | `atl jira search --jql 'project = KEY AND summary ~ "<words>" AND created >= -1h ORDER BY created DESC'` (narrow the window to when you ran the command). Open each candidate in the Jira issue view to confirm it is yours. |
 | `jira comment add` | Open the issue in the Jira issue view and look for a comment whose body exactly matches what you sent. |
-| `jira attachment add` | Open the issue in the Jira issue view and look for the exact filename. `atl jira requirements KEY --to STATUS` lists attachment names when an attachment rule fails. |
+| `jira attachment add` | Open the issue in the Jira issue view and look for the exact filename and size. `atl jira requirements KEY --to STATUS` lists attachment names when an attachment rule fails. |
 | `jira transition` | `atl jira requirements KEY --to STATUS` (`from_status`) or `atl jira search --jql 'key = KEY'` (`status`). For a `pre_edit` edit, check the edited field values in the issue view. |
 | `confluence page create` | `atl confluence page search --cql 'space = "KEY" AND title = "<title>"'`. |
 | `confluence page update` | `atl confluence page read ID` and compare `version`, `title`, and `body_storage` with what you sent. |

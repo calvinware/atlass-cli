@@ -8,7 +8,8 @@ version = "1.0.0"
 description = "Agent-first JSON CLI for Atlassian Jira and Confluence Data Center with team-defined workflow rules."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Proprietary" }
+license = "LicenseRef-Proprietary"
+license-files = []
 authors = [{ name = "Calvinware" }]
 classifiers = [
     "Environment :: Console",

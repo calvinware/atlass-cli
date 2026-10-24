@@ -3,9 +3,21 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import httpx
 import pytest
 
-from tests.conftest import CONFLUENCE_TOKEN, Harness, confluence_path, fixture
+from atlass_cli.auth import Credential
+from atlass_cli.confluence import update
+from atlass_cli.contracts import AtlError
+from atlass_cli.transport import ServiceClient
+from tests.conftest import (
+    CONFLUENCE,
+    CONFLUENCE_TOKEN,
+    FakeServer,
+    Harness,
+    confluence_path,
+    fixture,
+)
 
 PAGE = confluence_path("/rest/api/content/123456")
 CONTENT = confluence_path("/rest/api/content")
@@ -256,7 +268,7 @@ def test_title_only_update_keeps_explicit_empty_body(harness: Harness) -> None:
 def test_body_update_does_not_need_current_body(harness: Harness) -> None:
     setup(harness)
     harness.server.add("GET", PAGE, _page_with("no_body"))
-    harness.server.add("PUT", PAGE, {"id": "123456", "title": "T", "version": {"number": 8}})
+    harness.server.add("PUT", PAGE, {"id": "123456", "title": "Runbook", "version": {"number": 8}})
     result = run_input(
         harness,
         "confluence",
@@ -266,3 +278,70 @@ def test_body_update_does_not_need_current_body(harness: Harness) -> None:
         doc={"expected_version": 7, "body_storage": "<p>new</p>"},
     )
     assert result.code == 0
+
+
+UPDATED = {"id": "123456", "title": "New", "version": {"number": 8}}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        b"not json",
+        [],
+        "ok",
+        {},
+        {k: v for k, v in UPDATED.items() if k != "id"},
+        {**UPDATED, "id": "999"},
+        {**UPDATED, "id": 123456},
+        {k: v for k, v in UPDATED.items() if k != "title"},
+        {**UPDATED, "title": "Old"},
+        {k: v for k, v in UPDATED.items() if k != "version"},
+        {**UPDATED, "version": None},
+        {**UPDATED, "version": 8},
+        {**UPDATED, "version": {}},
+        {**UPDATED, "version": {"number": 7}},
+        {**UPDATED, "version": {"number": 9}},
+        {**UPDATED, "version": {"number": "8"}},
+        {**UPDATED, "version": {"number": 8.0}},
+        {**UPDATED, "version": {"number": True}},
+    ],
+)
+def test_update_incomplete_success_is_outcome_unknown(harness: Harness, body: Any) -> None:
+    setup(harness)
+    harness.server.add("GET", PAGE, fixture("confluence_page.json"))
+    if isinstance(body, bytes):
+        harness.server.add("PUT", PAGE, handler=lambda _: httpx.Response(200, content=body))
+    else:
+        harness.server.add("PUT", PAGE, body)
+    result = run_input(
+        harness,
+        "confluence",
+        "page",
+        "update",
+        "123456",
+        doc={"expected_version": 7, "title": "New"},
+    )
+    assert result.code == 6, result.out
+    assert result.error["code"] == "outcome_unknown"
+    assert "data" not in result.out
+    if body != b"not json":
+        assert "atl confluence page read 123456" in result.error["fix"]
+        assert "version 8" in result.error["fix"]
+    assert len(harness.server.writes()) == 1
+
+
+def test_update_incomplete_success_marks_write_outcome_unknown() -> None:
+    server = FakeServer()
+    server.add("GET", PAGE, fixture("confluence_page.json"))
+    server.add("PUT", PAGE, {**UPDATED, "version": {"number": 9}})
+    client = ServiceClient(
+        "confluence",
+        CONFLUENCE,
+        Credential(auth="pat", secret=CONFLUENCE_TOKEN),
+        transport=server.transport(),
+    )
+    with pytest.raises(AtlError) as info:
+        update(client, "123456", {"expected_version": 7, "title": "New"})
+    assert info.value.code == "outcome_unknown"
+    assert info.value.write_outcome == "unknown"

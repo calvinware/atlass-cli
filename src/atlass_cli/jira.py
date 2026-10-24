@@ -66,13 +66,15 @@ def _create_preflight(
     values: dict[str, Any],
     description: str | None,
     checks: list[Check],
-    screen_required: tuple[str, ...] = (),
+    required: tuple[str, ...],
+    type_key: str,
 ) -> tuple[str | None, dict[str, Any]]:
     """Validate supplied values against live create metadata. Returns (issue type id, fields).
 
-    ``screen_required`` names friendly fields that must be supplied whenever they are on this
-    issue type's create screen.
+    ``required`` names the friendly fields that ``create.<type_key>.required`` demands; each
+    must have a non-blank value and be on this issue type's create screen.
     """
+    missing = [friendly for friendly in required if _blank(values.get(friendly))]
     issue_type = find_issue_type(create_issue_types(client, project.key), issue_type_name)
     if issue_type is None:
         checks.append(
@@ -84,24 +86,15 @@ def _create_preflight(
                 "it; run `atl config check` to see drift.",
             )
         )
+        checks.extend(_required_missing(f, issue_type_name, type_key) for f in missing)
         return None, {}
     checks.append(
         Check("issue_type", "pass", f"{issue_type_name!r} is creatable in {project.key}.")
     )
     live = create_fields(client, project.key, issue_type.id)
 
-    for friendly in screen_required:
-        if friendly in values:
-            continue
-        try:
-            on_screen = resolve(project.fields[friendly], live)
-        except FieldProblem as problem:
-            checks.append(
-                Check(f"required:{friendly}", "fail", problem.message, problem.fix, problem.details)
-            )
-            continue
-        if on_screen is not None:
-            checks.append(_required_missing(friendly, issue_type_name))
+    for friendly in missing:
+        checks.append(_required_check(project, friendly, issue_type_name, type_key, live))
 
     payload: dict[str, Any] = {}
     owners: dict[str, str] = {}
@@ -159,13 +152,40 @@ def _create_preflight(
     return issue_type.id, payload
 
 
-def _required_missing(friendly: str, issue_type_name: str) -> Check:
+def _required_missing(friendly: str, issue_type_name: str, type_key: str) -> Check:
     return Check(
         f"required:{friendly}",
         "fail",
-        f"atl.yaml requires {friendly!r} when creating a {issue_type_name}.",
+        f"atl.yaml create.{type_key}.required requires {friendly!r} when creating a "
+        f"{issue_type_name}.",
         f"Supply {friendly!r} in the input fields object.",
     )
+
+
+def _required_check(
+    project: ProjectConfig,
+    friendly: str,
+    issue_type_name: str,
+    type_key: str,
+    live: dict[str, FieldMeta],
+) -> Check:
+    """Explain a missing required value, including when it cannot be supplied on this screen."""
+    ref = project.fields[friendly]
+    check_id = f"required:{friendly}"
+    try:
+        meta = resolve(ref, live)
+    except FieldProblem as problem:
+        return Check(check_id, "fail", problem.message, problem.fix, problem.details)
+    if meta is None:
+        return Check(
+            check_id,
+            "fail",
+            f"atl.yaml create.{type_key}.required requires {friendly!r}, but {ref.label!r} is "
+            f"not on the {issue_type_name} create screen.",
+            f"Ask a Jira admin to add {ref.label!r} to the {issue_type_name} create screen, or fix "
+            f"fields.{friendly} or create.{type_key}.required in atl.yaml.",
+        )
+    return _required_missing(friendly, issue_type_name, type_key)
 
 
 def _blank(value: Any) -> bool:
@@ -264,13 +284,12 @@ def story_create(
         )
 
     values.update(extra)
-    for friendly in project.create_required:
-        if friendly not in RESERVED_FIELDS and _blank(values.get(friendly)):
-            checks.append(_required_missing(friendly, project.story_type))
+    # acceptance_criteria and feature_link are always required and checked above.
+    required = tuple(f for f in project.story_required if f not in RESERVED_FIELDS)
 
     description = doc.get("description")
     type_id, payload = _create_preflight(
-        client, project, project.story_type, values, description, checks
+        client, project, project.story_type, values, description, checks, required, "story"
     )
     if not checks_pass(checks) or type_id is None:
         raise _unmet("Story create", checks)
@@ -322,7 +341,6 @@ def feature_create(
     checks: list[Check] = []
     values = _input_fields(project, doc.get("fields", {}), allow_reserved=True)
     description = doc.get("description")
-    # create.required applies to a feature for every listed field on the feature create screen.
     type_id, payload = _create_preflight(
         client,
         project,
@@ -330,7 +348,8 @@ def feature_create(
         values,
         description,
         checks,
-        screen_required=project.create_required,
+        project.feature_required,
+        "feature",
     )
     if not checks_pass(checks) or type_id is None:
         raise _unmet("Feature create", checks)
@@ -442,8 +461,9 @@ def attachment_add(client: ServiceClient, jira: JiraConfig, key: str, path: Path
             "Check file permissions.",
             {"path": str(path)},
         ) from None
+    name = os.path.basename(path)
     with handle:
-        body, length = _multipart(handle, info.st_size, os.path.basename(path), boundary)
+        body, length = _multipart(handle, info.st_size, name, boundary)
         try:
             result = client.request(
                 "POST",
@@ -464,18 +484,41 @@ def attachment_add(client: ServiceClient, jira: JiraConfig, key: str, path: Path
                 f"{key}, then retry.",
                 {"path": str(path), "declared_size": info.st_size, "dispatched": "aborted"},
             ) from None
-    if not isinstance(result, list):
-        raise client.unknown_outcome("attachment response was not a list")
-    attachments = [
-        {
-            "id": str(a.get("id", "")),
-            "filename": str(a.get("filename", "")),
-            "size": int(a.get("size", 0)),
-        }
-        for a in result
-        if isinstance(a, dict)
-    ]
+    attachments = _confirmed_attachments(client, key, result, name, info.st_size)
     return {"key": key, "attachments": attachments}
+
+
+def _confirmed_attachments(
+    client: ServiceClient, key: str, result: Any, name: str, size: int
+) -> list[dict[str, Any]]:
+    """Return the attachments Jira confirmed; anything incomplete means the outcome is unknown."""
+
+    def unknown(reason: str) -> AtlError:
+        return client.unknown_outcome(
+            reason,
+            f"Open {key} in the Jira issue view and check whether an attachment named {name!r} "
+            f"of {size} bytes was added before retrying `atl jira attachment add`. atl does not "
+            "retry writes.",
+        )
+
+    if not isinstance(result, list) or not result:
+        raise unknown("attachment response was not a non-empty list")
+    attachments: list[dict[str, Any]] = []
+    for index, item in enumerate(result):
+        if not isinstance(item, dict):
+            raise unknown(f"attachment response item {index} was not an object")
+        item_id, filename, item_size = item.get("id"), item.get("filename"), item.get("size")
+        if not isinstance(item_id, str) or not item_id.strip():
+            raise unknown(f"attachment response item {index} has no id")
+        if not isinstance(filename, str) or not filename.strip():
+            raise unknown(f"attachment response item {index} has no filename")
+        if type(item_size) is not int or item_size < 0:
+            raise unknown(f"attachment response item {index} has no valid size")
+        attachments.append({"id": item_id, "filename": filename, "size": item_size})
+    sent = {name, _header_filename(name)}
+    if not any(a["filename"] in sent and a["size"] == size for a in attachments):
+        raise unknown("attachment response did not confirm the uploaded file name and size")
+    return attachments
 
 
 # --------------------------------------------------------------------------- comment / search
@@ -641,12 +684,12 @@ def _check_project_create(client: ServiceClient, project: ProjectConfig) -> list
     targets = [
         (
             project.story_type,
-            list(RESERVED_FIELDS)
-            + [f for f in project.create_required if f not in RESERVED_FIELDS],
+            "story",
+            list(RESERVED_FIELDS) + [f for f in project.story_required if f not in RESERVED_FIELDS],
         ),
-        (project.feature_type, []),
+        (project.feature_type, "feature", list(project.feature_required)),
     ]
-    for type_name, friendly_names in targets:
+    for type_name, type_key, friendly_names in targets:
         issue_type = find_issue_type(types, type_name)
         if issue_type is None:
             ids = sorted(t.id for t in types if t.name == type_name)
@@ -689,7 +732,7 @@ def _check_project_create(client: ServiceClient, project: ProjectConfig) -> list
                         check_id,
                         "drift",
                         f"{ref.label!r} is not on the {type_name} create screen.",
-                        f"Fix fields.{friendly} in atl.yaml or add the field to the create screen.",
+                        _off_screen_fix(friendly, type_key),
                     )
                 )
                 continue
@@ -708,6 +751,15 @@ def _check_project_create(client: ServiceClient, project: ProjectConfig) -> list
                 check.id = f"{prefix}:{type_name}:{check.id}"
                 checks.append(_drift(check))
     return checks
+
+
+def _off_screen_fix(friendly: str, type_key: str) -> str:
+    if type_key == "story" and friendly in RESERVED_FIELDS:
+        return f"Fix fields.{friendly} in atl.yaml or add the field to the create screen."
+    return (
+        f"Fix fields.{friendly} or create.{type_key}.required in atl.yaml, or add the field to "
+        "the create screen."
+    )
 
 
 _ENCODING_SCHEMAS: dict[str, tuple[set[str], str | None]] = {

@@ -9,8 +9,21 @@ from typing import Any
 import httpx
 import pytest
 
+from atlass_cli.auth import Credential
+from atlass_cli.config import parse_config_file
+from atlass_cli.contracts import AtlError
 from atlass_cli.features import jql_quote, rank, tokenize
-from tests.conftest import JIRA, Harness, config_text, fixture, jira_path
+from atlass_cli.jira import attachment_add
+from atlass_cli.transport import ServiceClient
+from tests.conftest import (
+    JIRA,
+    JIRA_TOKEN,
+    FakeServer,
+    Harness,
+    config_text,
+    fixture,
+    jira_path,
+)
 
 ISSUETYPES = jira_path("/rest/api/2/issue/createmeta/EXAMPLE/issuetypes")
 STORY_FIELDS = jira_path("/rest/api/2/issue/createmeta/EXAMPLE/issuetypes/10001")
@@ -334,37 +347,70 @@ TEAM_FIELD = {
 }
 
 
+def team_config(*, story: str = "[]", feature: str = "[]", policy: str = "automatic") -> str:
+    """Return the base config with a ``team`` field and the given per-type create lists."""
+    text = config_text(policy=policy)
+    block = (
+        "      create:\n"
+        "        story:\n"
+        "          required: [acceptance_criteria, feature_link]\n"
+        "        feature:\n"
+        "          required: []\n"
+    )
+    assert block in text
+    return text.replace(
+        "work_started: {jira_name: Work Started, encoding: single_option}",
+        "work_started: {jira_name: Work Started, encoding: single_option}\n"
+        "        team: {jira_name: Team, encoding: text}",
+    ).replace(
+        block,
+        f"      create:\n        story:\n          required: {story}\n"
+        f"        feature:\n          required: {feature}\n",
+    )
+
+
+def with_team(name: str) -> dict[str, Any]:
+    meta: dict[str, Any] = fixture(name)
+    meta["values"].append(TEAM_FIELD)
+    meta["total"] = len(meta["values"])
+    return meta
+
+
 def setup_feature_required(harness: Harness, *, on_screen: bool) -> None:
     setup_create(harness, policy="automatic")
-    harness.write_config(
-        config_text(policy="automatic")
-        .replace(
-            "work_started: {jira_name: Work Started, encoding: single_option}",
-            "work_started: {jira_name: Work Started, encoding: single_option}\n"
-            "        team: {jira_name: Team, encoding: text}",
-        )
-        .replace("required: [acceptance_criteria, feature_link]", "required: [team]")
+    harness.write_config(team_config(feature="[team]"))
+    meta = (
+        with_team("createmeta_feature_fields.json")
+        if on_screen
+        else fixture("createmeta_feature_fields.json")
     )
-    meta = fixture("createmeta_feature_fields.json")
-    if on_screen:
-        meta["values"].append(TEAM_FIELD)
-        meta["total"] = len(meta["values"])
     harness.server.routes[("GET", FEATURE_FIELDS)] = []
     harness.server.add("GET", FEATURE_FIELDS, meta)
 
 
-def test_feature_create_enforces_create_required_on_screen(harness: Harness) -> None:
+def test_feature_create_enforces_feature_required_on_screen(harness: Harness) -> None:
     setup_feature_required(harness, on_screen=True)
     result = create_feature(harness, {"project": "EXAMPLE", "summary": "SSO"})
     assert result.code == 4
     assert result.error["code"] == "requirements_unmet"
     check = checks(result.error)["required:team"]
     assert check["status"] == "fail"
+    assert "create.feature.required" in check["message"]
     assert "'team'" in check["fix"]
     assert harness.server.writes() == []
 
 
-def test_feature_create_with_create_required_supplied(harness: Harness) -> None:
+@pytest.mark.parametrize("value", ["", "   "])
+def test_feature_create_rejects_blank_feature_required(harness: Harness, value: str) -> None:
+    setup_feature_required(harness, on_screen=True)
+    doc = {"project": "EXAMPLE", "summary": "SSO", "fields": {"team": value}}
+    result = create_feature(harness, doc)
+    assert result.code == 4
+    assert checks(result.error)["required:team"]["status"] == "fail"
+    assert harness.server.writes() == []
+
+
+def test_feature_create_with_feature_required_supplied(harness: Harness) -> None:
     setup_feature_required(harness, on_screen=True)
     doc = {"project": "EXAMPLE", "summary": "SSO", "fields": {"team": "Identity"}}
     assert create_feature(harness, doc).code == 0
@@ -372,9 +418,87 @@ def test_feature_create_with_create_required_supplied(harness: Harness) -> None:
     assert json.loads(post.content)["fields"]["customfield_10900"] == "Identity"
 
 
-def test_feature_create_required_field_off_screen_is_not_applicable(harness: Harness) -> None:
+def test_feature_create_required_field_off_screen_fails(harness: Harness) -> None:
     setup_feature_required(harness, on_screen=False)
-    assert create_feature(harness, {"project": "EXAMPLE", "summary": "SSO"}).code == 0
+    result = create_feature(harness, {"project": "EXAMPLE", "summary": "SSO"})
+    assert result.code == 4
+    check = checks(result.error)["required:team"]
+    assert check["status"] == "fail"
+    assert "not on the Feature create screen" in check["message"]
+    assert "create.feature.required" in check["fix"]
+    assert harness.server.writes() == []
+
+
+def test_feature_create_supplied_off_screen_field_fails(harness: Harness) -> None:
+    setup_feature_required(harness, on_screen=False)
+    doc = {"project": "EXAMPLE", "summary": "SSO", "fields": {"team": "Identity"}}
+    result = create_feature(harness, doc)
+    assert result.code == 4
+    assert checks(result.error)["field:team"]["status"] == "fail"
+    assert harness.server.writes() == []
+
+
+def test_feature_create_ignores_story_required(harness: Harness) -> None:
+    setup_create(harness, policy="automatic")
+    harness.write_config(team_config(story="[acceptance_criteria, feature_link, team]"))
+    result = create_feature(harness, {"project": "EXAMPLE", "summary": "SSO"})
+    assert result.code == 0, result.out
+    assert not any(c["id"].startswith("required:") for c in result.data["checks"])
+
+
+def test_feature_create_still_requires_approval_with_empty_feature_required(
+    harness: Harness,
+) -> None:
+    setup_create(harness)
+    harness.write_config(team_config(policy="human_confirmed"))
+    result = create_feature(harness, {"project": "EXAMPLE", "summary": "SSO"})
+    assert result.code == 4
+    assert result.error["code"] == "approval_required"
+    assert harness.server.requests == []
+
+
+def test_story_create_ignores_feature_required(harness: Harness) -> None:
+    setup_create(harness)
+    harness.write_config(team_config(feature="[team]"))
+    result = create_story(harness, STORY)
+    assert result.code == 0, result.out
+    assert not any(c["id"].startswith("required:") for c in result.data["checks"])
+
+
+def test_story_create_enforces_story_required(harness: Harness) -> None:
+    setup_create(harness, story_fields=with_team("createmeta_story_fields.json"))
+    harness.write_config(team_config(story="[team]"))
+    result = create_story(harness, STORY)
+    assert result.code == 4
+    check = checks(result.error)["required:team"]
+    assert check["status"] == "fail"
+    assert "create.story.required" in check["message"]
+    assert harness.server.writes() == []
+    harness.server.requests.clear()
+    assert create_story(harness, {**STORY, "fields": {"team": "Identity"}}).code == 0
+    (post,) = harness.server.writes()
+    assert json.loads(post.content)["fields"]["customfield_10900"] == "Identity"
+
+
+def test_story_create_story_required_off_screen_fails(harness: Harness) -> None:
+    setup_create(harness)
+    harness.write_config(team_config(story="[team]"))
+    result = create_story(harness, STORY)
+    assert result.code == 4
+    check = checks(result.error)["required:team"]
+    assert "not on the Story create screen" in check["message"]
+    assert "create.story.required" in check["fix"]
+    assert harness.server.writes() == []
+
+
+@pytest.mark.parametrize("missing", ["acceptance_criteria", "feature_key"])
+def test_story_builtins_apply_with_empty_story_required(harness: Harness, missing: str) -> None:
+    setup_create(harness)
+    harness.write_config(team_config())
+    result = create_story(harness, {k: v for k, v in STORY.items() if k != missing})
+    assert result.code == 4
+    assert checks(result.error)[missing]["status"] == "fail"
+    assert harness.server.writes() == []
 
 
 # --------------------------------------------------------------------------- feature find
@@ -456,9 +580,17 @@ def setup_attach(harness: Harness, limit: int = 10) -> None:
     harness.store()
 
 
-def _attachment_ok(request: httpx.Request) -> httpx.Response:
-    request.read()
-    return httpx.Response(200, json=[{"id": "500", "filename": "f.txt", "size": 10}])
+def _attachment_reply(body: Any, *, status: int = 200) -> Any:
+    def respond(request: httpx.Request) -> httpx.Response:
+        request.read()
+        if isinstance(body, bytes):
+            return httpx.Response(status, content=body)
+        return httpx.Response(status, json=body)
+
+    return respond
+
+
+_attachment_ok = _attachment_reply([{"id": "500", "filename": "f.txt", "size": 10}])
 
 
 def test_attachment_absent_file(harness: Harness) -> None:
@@ -541,9 +673,85 @@ def test_attachment_server_limit(harness: Harness) -> None:
 def test_attachment_filename_header_is_escaped(harness: Harness) -> None:
     setup_attach(harness)
     (harness.tmp_path / 'we"ird.txt').write_bytes(b"x")
-    harness.server.add("POST", ATTACH, handler=_attachment_ok)
+    reply = _attachment_reply([{"id": "501", "filename": "we_ird.txt", "size": 1}])
+    harness.server.add("POST", ATTACH, handler=reply)
     assert harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", 'we"ird.txt').code == 0
     assert b'filename="we_ird.txt"' in harness.server.requests[0].content
+
+
+def test_attachment_success_returns_every_confirmed_item(harness: Harness) -> None:
+    setup_attach(harness)
+    (harness.tmp_path / "f.txt").write_bytes(b"x" * 10)
+    items = [
+        {"id": "499", "filename": "older.txt", "size": 3},
+        {"id": "500", "filename": "f.txt", "size": 10},
+    ]
+    harness.server.add("POST", ATTACH, handler=_attachment_reply(items))
+    result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
+    assert result.code == 0, result.out
+    assert result.data == {"key": "EXAMPLE-1", "attachments": items}
+
+
+GOOD_ITEM = {"id": "500", "filename": "f.txt", "size": 10}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"",
+        b"not json",
+        b"[{",
+        [],
+        {},
+        GOOD_ITEM,
+        ["f.txt"],
+        [{**GOOD_ITEM, "id": None}],
+        [{**GOOD_ITEM, "id": 500}],
+        [{**GOOD_ITEM, "id": " "}],
+        [{k: v for k, v in GOOD_ITEM.items() if k != "id"}],
+        [{k: v for k, v in GOOD_ITEM.items() if k != "filename"}],
+        [{**GOOD_ITEM, "filename": ""}],
+        [{k: v for k, v in GOOD_ITEM.items() if k != "size"}],
+        [{**GOOD_ITEM, "size": True}],
+        [{**GOOD_ITEM, "size": -1}],
+        [{**GOOD_ITEM, "size": "10"}],
+        [{**GOOD_ITEM, "size": 10.0}],
+        [{**GOOD_ITEM, "filename": "other.txt"}],
+        [{**GOOD_ITEM, "size": 9}],
+        [GOOD_ITEM, {"id": "501", "filename": "g.txt"}],
+        [GOOD_ITEM, None],
+    ],
+)
+def test_attachment_incomplete_success_is_outcome_unknown(harness: Harness, body: Any) -> None:
+    setup_attach(harness)
+    (harness.tmp_path / "f.txt").write_bytes(b"x" * 10)
+    harness.server.add("POST", ATTACH, handler=_attachment_reply(body))
+    result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
+    assert result.code == 6, result.out
+    assert result.error["code"] == "outcome_unknown"
+    assert "data" not in result.out
+    assert "issue view" in result.error["fix"]
+    if body not in (b"not json", b"[{"):
+        assert "'f.txt'" in result.error["fix"]
+        assert "10 bytes" in result.error["fix"]
+    assert len(harness.server.writes()) == 1
+
+
+def test_attachment_incomplete_success_marks_write_outcome_unknown(tmp_path: Path) -> None:
+    config_path = tmp_path / "atl.yaml"
+    config_path.write_text(config_text())
+    jira_config = parse_config_file(config_path).jira
+    assert jira_config is not None
+    upload = tmp_path / "f.txt"
+    upload.write_bytes(b"x" * 10)
+    server = FakeServer().add("POST", ATTACH, handler=_attachment_reply([]))
+    client = ServiceClient(
+        "jira", JIRA, Credential(auth="pat", secret=JIRA_TOKEN), transport=server.transport()
+    )
+    with pytest.raises(AtlError) as info:
+        attachment_add(client, jira_config, "EXAMPLE-1", upload)
+    assert info.value.code == "outcome_unknown"
+    assert info.value.write_outcome == "unknown"
 
 
 # --------------------------------------------------------------------------- comments / search
@@ -873,3 +1081,62 @@ def test_config_check_encoding_drift(harness: Harness, encoding_schema: dict[str
     result = harness.run("config", "check", "--issue", "EXAMPLE-1")
     statuses = {c["id"]: c["status"] for c in result.error["details"]["checks"]}
     assert statuses["EXAMPLE:Story:field:feature_link"] == "drift"
+
+
+def _config_check_ids(result: Any) -> dict[str, dict[str, Any]]:
+    checks = result.data["checks"] if result.code == 0 else result.error["details"]["checks"]
+    return {c["id"]: c for c in checks}
+
+
+def test_config_check_story_required_is_not_a_feature_requirement(harness: Harness) -> None:
+    setup_config_check(harness)
+    harness.write_config(team_config(story="[team]"))
+    harness.server.routes[("GET", STORY_FIELDS)] = []
+    harness.server.add("GET", STORY_FIELDS, with_team("createmeta_story_fields.json"))
+    result = harness.run("config", "check")
+    assert result.code == 0, result.out
+    ids = _config_check_ids(result)
+    assert ids["EXAMPLE:Story:field:team"]["status"] == "pass"
+    assert ids["EXAMPLE:Story:field:acceptance_criteria"]["status"] == "pass"
+    assert not any(k.startswith("EXAMPLE:Feature:field:") for k in ids)
+
+
+def test_config_check_feature_required_off_screen_is_drift(harness: Harness) -> None:
+    setup_config_check(harness)
+    harness.write_config(team_config(feature="[team]"))
+    result = harness.run("config", "check")
+    assert result.code == 4
+    assert result.error["code"] == "config_drift"
+    ids = _config_check_ids(result)
+    check = ids["EXAMPLE:Feature:field:team"]
+    assert check["status"] == "drift"
+    assert "not on the Feature create screen" in check["message"]
+    assert "create.feature.required" in check["fix"]
+    assert "EXAMPLE:Story:field:team" not in ids
+
+
+@pytest.mark.parametrize(
+    ("schema", "status"), [({"type": "string"}, "pass"), ({"type": "number"}, "drift")]
+)
+def test_config_check_feature_required_encoding(
+    harness: Harness, schema: dict[str, Any], status: str
+) -> None:
+    setup_config_check(harness)
+    harness.write_config(team_config(feature="[team]"))
+    meta = with_team("createmeta_feature_fields.json")
+    meta["values"][-1] = {**TEAM_FIELD, "schema": schema}
+    harness.server.routes[("GET", FEATURE_FIELDS)] = []
+    harness.server.add("GET", FEATURE_FIELDS, meta)
+    result = harness.run("config", "check")
+    assert _config_check_ids(result)["EXAMPLE:Feature:field:team"]["status"] == status
+
+
+def test_config_check_explicit_issue_lookup_error_propagates(harness: Harness) -> None:
+    setup_config_check(harness)
+    harness.server.add(
+        "GET", jira_path("/rest/api/2/issue/EXAMPLE-9"), {"errorMessages": ["nope"]}, status=404
+    )
+    result = harness.run("config", "check", "--issue", "EXAMPLE-9")
+    assert result.code == 5
+    assert result.error["code"] == "not_found"
+    assert harness.server.writes() == []

@@ -215,13 +215,14 @@ class ServiceClient:
             {"service": self.service, "host": self._host(), "error_type": type(exc).__name__},
         )
 
-    def unknown_outcome(self, reason: str) -> AtlError:
+    def unknown_outcome(self, reason: str, fix: str | None = None) -> AtlError:
         return AtlError(
             "outcome_unknown",
             f"The {self.service} write was dispatched but its outcome is unknown.",
-            "Inspect the remote item to see whether the change was applied before retrying; see "
-            "'Writes and retries' in docs/commands.md for how to inspect each write (comments "
-            "and attachments need the issue view). atl does not retry writes.",
+            fix
+            or "Inspect the remote item to see whether the change was applied before retrying; "
+            "see 'Writes and retries' in docs/commands.md for how to inspect each write "
+            "(comments and attachments need the issue view). atl does not retry writes.",
             {"service": self.service, "reason": sanitize_text(reason, 200)},
             write_outcome="unknown",
         )

@@ -25,7 +25,9 @@ team's field IDs, workflow rules, and required attachments from `atl.yaml`.
 | 6 | network/TLS/service failure, or a write whose **outcome is unknown** | if `outcome_unknown`, inspect remote state before any retry |
 | 7 | confirmed **partial** write (`partial_transition`) | do not roll back; follow `fix` |
 
-`atl` never retries a write. Do not loop on writes. After exit 6 `outcome_unknown` or exit 7,
+`atl` never retries a write. Do not loop on writes. Preflight runs before the first write, but the
+server can still reject a write after it is sent, and a write succeeds only when the response
+confirms it (see "When checks run" in `docs/commands.md`). After exit 6 `outcome_unknown` or exit 7,
 inspect the issue or page first. `atl jira search` shows status and summary only, not comments,
 attachments, or field values. Follow "Writes and retries" in `docs/commands.md` for how to check
 each write (for comments and attachments, a human checks the issue view). Retry only when the

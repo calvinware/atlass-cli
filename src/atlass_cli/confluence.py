@@ -158,12 +158,32 @@ def update(client: ServiceClient, page_id: str, doc: dict[str, Any]) -> dict[str
                 write_outcome="rejected",
             ) from None
         raise
-    if not isinstance(updated, dict):
-        raise client.unknown_outcome("update response was not a JSON object")
-    number = (updated.get("version") or {}).get("number")
+    reason = _update_mismatch(updated, page_id, title, expected + 1)
+    if reason is not None:
+        raise client.unknown_outcome(
+            reason,
+            f"Run `atl confluence page read {page_id}` and compare its title, version, and body "
+            f"with what you submitted (version {expected + 1} expected) before retrying. atl "
+            "does not retry writes.",
+        )
     return {
         "id": page_id,
-        "title": str(updated.get("title", title)),
-        "version": number if type(number) is int else expected + 1,
+        "title": title,
+        "version": expected + 1,
         "previous_version": expected,
     }
+
+
+def _update_mismatch(updated: Any, page_id: str, title: str, version: int) -> str | None:
+    """Return why an update response does not confirm the submitted page, or None if it does."""
+    if not isinstance(updated, dict):
+        return "update response was not a JSON object"
+    if updated.get("id") != page_id:
+        return "update response did not confirm the page id"
+    if updated.get("title") != title:
+        return "update response did not confirm the submitted title"
+    raw_version = updated.get("version")
+    number = raw_version.get("number") if isinstance(raw_version, dict) else None
+    if type(number) is not int or number != version:
+        return "update response did not confirm the next page version"
+    return None

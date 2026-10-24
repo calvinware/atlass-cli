@@ -29,6 +29,7 @@ ENCODINGS = {
 FEATURE_POLICIES = {"automatic", "human_confirmed"}
 REQUIREMENT_KINDS = {"attachment_filename"}
 RESERVED_FIELDS = ("acceptance_criteria", "feature_link")
+CREATE_TYPES = ("story", "feature")
 
 FRIENDLY_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 FIELD_ID_RE = re.compile(r"^(customfield_[0-9]{1,10}|[a-z][A-Za-z]{0,63})$")
@@ -75,7 +76,8 @@ class ProjectConfig:
     feature_type: str
     feature_create_policy: str
     fields: dict[str, FieldRef]
-    create_required: tuple[str, ...]
+    story_required: tuple[str, ...]
+    feature_required: tuple[str, ...]
     transitions: dict[str, TransitionConfig]
 
 
@@ -400,16 +402,12 @@ def _validate_project(v: _Validator, value: Any, where: str) -> ProjectConfig:
 
     fields = _validate_fields(v, section["fields"], f"{where}.fields")
 
-    create_required: tuple[str, ...] = ()
+    story_required: tuple[str, ...] = ()
+    feature_required: tuple[str, ...] = ()
     if "create" in section:
-        create = v.mapping(section["create"], f"{where}.create", {"required"}, set())
-        if "required" in create:
-            create_required = v.string_list(
-                create["required"], f"{where}.create.required", allow_empty=True
-            )
-            for name in create_required:
-                if name not in fields:
-                    raise v.fail(f"{where}.create.required", f"unknown field {name!r}")
+        create = v.mapping(section["create"], f"{where}.create", set(CREATE_TYPES), set())
+        story_required = _validate_create_type(v, create, "story", f"{where}.create", fields)
+        feature_required = _validate_create_type(v, create, "feature", f"{where}.create", fields)
 
     transitions: dict[str, TransitionConfig] = {}
     raw_transitions = section.get("transitions", {})
@@ -429,9 +427,26 @@ def _validate_project(v: _Validator, value: Any, where: str) -> ProjectConfig:
         feature_type=feature_type,
         feature_create_policy=policy,
         fields=fields,
-        create_required=create_required,
+        story_required=story_required,
+        feature_required=feature_required,
         transitions=transitions,
     )
+
+
+def _validate_create_type(
+    v: _Validator, create: dict[str, Any], type_key: str, where: str, fields: dict[str, FieldRef]
+) -> tuple[str, ...]:
+    if type_key not in create:
+        return ()
+    t_where = f"{where}.{type_key}"
+    entry = v.mapping(create[type_key], t_where, {"required"}, set())
+    if "required" not in entry:
+        return ()
+    required = v.string_list(entry["required"], f"{t_where}.required", allow_empty=True)
+    for index, name in enumerate(required):
+        if name not in fields:
+            raise v.fail(f"{t_where}.required[{index}]", f"unknown field {name!r}")
+    return required
 
 
 def _validate_fields(v: _Validator, value: Any, where: str) -> dict[str, FieldRef]:

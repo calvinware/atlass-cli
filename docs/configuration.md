@@ -42,8 +42,11 @@ jira:                            # optional section; required for jira commands
         acceptance_criteria: {jira_name: Acceptance Criteria, encoding: text}   # required
         feature_link: {jira_name: Parent Link, encoding: issue_key_string}      # required
         work_started: {id: customfield_10300, encoding: single_option}
-      create:
-        required: [acceptance_criteria, feature_link]   # story create; feature create if on its screen
+      create:                    # optional; omitted blocks and lists mean no extra requirements
+        story:
+          required: [acceptance_criteria, feature_link]   # checked only by story create
+        feature:
+          required: []           # checked only by feature create; default empty
       transitions:               # name (snake_case) -> rule
         in_progress:
           from: [To Do]          # source statuses (non-empty)
@@ -81,11 +84,24 @@ Each friendly name maps to exactly one Jira field, chosen with one of:
 `acceptance_criteria` and `feature_link` must exist in every project. Story create fills them from
 the input's `acceptance_criteria` and `feature_key`.
 
-`create.required` lists friendly names that must be supplied on create. Story create always
-enforces them. Feature create enforces each one that resolves to a field on the feature create
-screen, whether or not Jira marks that field required. If two friendly names supplied in one create
-or transition resolve to the same Jira field ID, the preflight fails before any write and names both
-friendly names and the field ID.
+### Create requirements
+
+`create` has one optional block per issue type: `story` and `feature`. Each block has an optional
+`required` list of friendly names defined under `fields`. An omitted block or list means an empty
+list. No other keys are allowed, and the older flat `create.required` list is rejected with
+`config_invalid` (`details.where` is the `create` path).
+
+- Story create enforces only `create.story.required`. It always requires the caller's
+  `acceptance_criteria` and `feature_key` as well, even when the list is empty.
+- Feature create enforces only `create.feature.required`. It also follows
+  `feature_create_policy`.
+- Each listed field must have a non-blank value and must be on that issue type's create screen,
+  whether or not Jira marks it required. If it is not on the screen, the preflight fails with a
+  fix; the field is never skipped.
+- Live Jira required fields without a default are enforced for both types, listed or not.
+
+If two friendly names supplied in one create or transition resolve to the same Jira field ID, the
+preflight fails before any write and names both friendly names and the field ID.
 
 | Encoding | Live schema required | Payload sent |
 |----------|----------------------|--------------|
@@ -159,14 +175,25 @@ limit. That shows up as `remote_limit_exceeded` (exit 5).
 `atl config check [--issue KEY]` is read-only. It compares the file with live Jira:
 
 - Each `allowed_issue_types` entry must be creatable in its project.
-- Story create fields (`acceptance_criteria`, `feature_link`, and everything in `create.required`)
-  must resolve to exactly one field on the create screen, with a compatible schema.
+- On the story create screen: `acceptance_criteria`, `feature_link`, and every field in
+  `create.story.required`. On the feature create screen: every field in `create.feature.required`.
+  Each must resolve to exactly one field on that screen, with a compatible schema. Check IDs name
+  the type, for example `EXAMPLE:Story:field:feature_link` or `EXAMPLE:Feature:field:team`.
 - Live required create fields that are not mapped are reported.
 - For each transition source status, `atl` needs a sample issue that Jira reports in that project
-  and status. It uses `--issue KEY` when that issue matches; otherwise it searches for one and
-  re-reads it to confirm the project and status. It then checks the live transition, `auto_set`
-  placement and values, `pre_edit` edit eligibility, and required screen fields. Each transition
-  check carries the `sample_issue` it used.
+  and status. With `--issue KEY`, `atl` looks up that issue for every source status:
+  - If the issue has that key, project, and source status, it is the sample for that source.
+  - If the issue is accessible but its key, project, or status does not match, it is not used for
+    that source. `atl` searches the project for an issue in that status instead.
+  - If looking up the issue fails (for example `not_found`, `forbidden`, or a network error), the
+    command fails with that error. It does not fall back to search.
+
+  Without `--issue`, or after a mismatch, the most recently updated issue from the search is
+  re-read to confirm its project and status. Each source status can therefore use a different
+  sample. If neither `--issue` nor the search gives a matching issue, that source is `unverified`.
+  `atl` then checks the live transition, `auto_set` placement and values, `pre_edit` edit
+  eligibility, and required screen fields. Each transition check carries the `sample_issue` it
+  used.
 - If two creatable issue types share the configured story or feature type name, that type's create
   fields are reported as drift.
 
