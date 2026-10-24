@@ -9,6 +9,7 @@ from typing import Any
 from atlass_cli.config import JiraConfig
 from atlass_cli.contracts import AtlError
 from atlass_cli.metadata import get_issue
+from atlass_cli.response import nested_str
 from atlass_cli.transport import ServiceClient
 
 MAX_TOKENS = 10
@@ -83,8 +84,8 @@ def rank(
         if not isinstance(key, str) or not isinstance(fields, dict) or key == exclude_key:
             continue
         summary = str(fields.get("summary") or "")
-        project = str((fields.get("project") or {}).get("key") or key.rpartition("-")[0])
-        status = (fields.get("status") or {}).get("name")
+        project = nested_str(fields.get("project"), "key") or key.rpartition("-")[0]
+        status = nested_str(fields.get("status"))
         score = 0
         reasons: list[str] = []
         if key in mentioned_keys:
@@ -104,7 +105,7 @@ def rank(
                 key=key,
                 project=project,
                 summary=summary,
-                status=status if isinstance(status, str) else None,
+                status=status,
                 score=score,
                 reasons=tuple(reasons),
             )
@@ -149,16 +150,35 @@ def find(
         f"(project = {jql_quote(p.key)} AND issuetype = {jql_quote(p.feature_type)})"
         for p in sorted(jira.projects.values(), key=lambda p: p.key)
     )
-    clauses = [f"summary ~ {jql_quote(t)}" for t in tokens]
-    if mentioned:
-        clauses.append(f"key in ({', '.join(jql_quote(k) for k in sorted(mentioned))})")
-    jql = f"({scope}) AND ({' OR '.join(clauses)}) ORDER BY key ASC"
+    pool: dict[str, dict[str, Any]] = {}
+    truncated = False
+    issues = _named_issues(client, scope, mentioned) if mentioned else []
+    if tokens:
+        text_issues, truncated = _text_pool(client, scope, tokens)
+        issues.extend(text_issues)
+    for issue in issues:
+        if isinstance(issue, dict) and isinstance(issue.get("key"), str):
+            pool.setdefault(issue["key"], issue)
+    candidates = rank(list(pool.values()), tokens, mentioned, source_project, issue_key, limit)
+    return {
+        "mode": mode,
+        "query": query,
+        "candidates": [c.as_dict() for c in candidates],
+        "candidate_pool_limit": CANDIDATE_POOL,
+        "truncated": truncated,
+        "selection": "caller",
+    }
+
+
+def _search(
+    client: ServiceClient, jql: str, start: int, max_results: int
+) -> tuple[list[Any], int | None]:
     raw = client.get(
         "/rest/api/2/search",
         {
             "jql": jql,
-            "startAt": 0,
-            "maxResults": CANDIDATE_POOL,
+            "startAt": start,
+            "maxResults": max_results,
             "fields": "summary,project,status",
         },
     )
@@ -169,17 +189,63 @@ def find(
             "Jira returned an unexpected search response.",
             "Check that jira.base_url points at Jira Data Center.",
         )
-    candidates = rank(
-        [i for i in issues if isinstance(i, dict)],
-        tokens,
-        mentioned,
-        source_project,
-        issue_key,
-        limit,
+    total = raw.get("total")
+    return issues[:max_results], total if type(total) is int and total >= 0 else None
+
+
+def _text_pool(client: ServiceClient, scope: str, tokens: list[str]) -> tuple[list[Any], bool]:
+    """Fetch the most recently updated matches; report whether the pool may omit any."""
+    clauses = " OR ".join(f"summary ~ {jql_quote(t)}" for t in tokens)
+    jql = f"({scope}) AND ({clauses}) ORDER BY updated DESC"
+    issues: list[Any] = []
+    known_total: int | None = None
+    # Jira may cap maxResults below the pool size, so a short page alone does not prove the end.
+    while len(issues) < CANDIDATE_POOL:
+        page, total = _search(client, jql, len(issues), CANDIDATE_POOL - len(issues))
+        known_total = known_total if total is None else total
+        issues.extend(page)
+        if not page or (known_total is not None and len(issues) >= known_total):
+            break
+    if known_total is not None:
+        return issues, known_total > len(issues)
+    # Without a total, only an empty page short of the pool proves nothing was left out.
+    return issues, len(issues) >= CANDIDATE_POOL
+
+
+def _named_invalid() -> AtlError:
+    return AtlError(
+        "response_invalid",
+        "Jira returned an invalid named feature result.",
+        "Check the Jira search response before relying on feature candidates.",
     )
-    return {
-        "mode": mode,
-        "query": query,
-        "candidates": [c.as_dict() for c in candidates],
-        "selection": "caller",
-    }
+
+
+def _named_issues(client: ServiceClient, scope: str, keys: set[str]) -> list[Any]:
+    """Fetch every mentioned key in scope, independent of the text pool and its limit."""
+    jql = f"({scope}) AND key in ({', '.join(jql_quote(k) for k in sorted(keys))}) ORDER BY key ASC"
+    found: list[Any] = []
+    seen: set[str] = set()
+    known_total: int | None = None
+    while True:
+        issues, total = _search(client, jql, len(found), len(keys))
+        known_total = known_total if total is None else total
+        for issue in issues:
+            key = issue.get("key") if isinstance(issue, dict) else None
+            if (
+                not isinstance(key, str)
+                or key not in keys
+                or key in seen
+                or not isinstance(issue.get("fields"), dict)
+            ):
+                raise _named_invalid()
+            seen.add(key)
+        found.extend(issues)
+        # `key in (...)` matches at most len(keys) issues.
+        expected = len(keys) if known_total is None else min(known_total, len(keys))
+        if len(found) >= expected:
+            return found
+        if not issues:
+            # An empty page ends the lookup only when Jira did not promise more matches.
+            if known_total is not None:
+                raise _named_invalid()
+            return found

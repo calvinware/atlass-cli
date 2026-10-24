@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shlex
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -9,14 +11,19 @@ import pytest
 from atlass_cli.auth import Credential
 from atlass_cli.confluence import update
 from atlass_cli.contracts import AtlError
+from atlass_cli.features import jql_quote
 from atlass_cli.transport import ServiceClient
 from tests.conftest import (
     CONFLUENCE,
     CONFLUENCE_TOKEN,
+    SHELL_SENTINELS,
     FakeServer,
     Harness,
+    backticked,
     confluence_path,
     fixture,
+    run_argv,
+    run_in_posix_shell,
 )
 
 PAGE = confluence_path("/rest/api/content/123456")
@@ -166,12 +173,26 @@ def test_create_unconfirmed_success_is_outcome_unknown(harness: Harness, body: A
     assert result.code == 6, result.out
     assert result.error["code"] == "outcome_unknown"
     assert "data" not in result.out
-    if body != b"not json":
-        assert (
-            """atl confluence page search --cql 'space = "ENG" AND title = "T"'"""
-            in (result.error["fix"])
-        )
+    assert (
+        """atl confluence page search --cql 'space = "ENG" AND type = page AND """
+        """(title = "T")'""" in (result.error["fix"])
+    )
+    assert "recovery_argv" in result.error["details"]
     assert len(harness.server.writes()) == 1
+
+
+def test_create_server_error_includes_recovery_search(harness: Harness) -> None:
+    setup(harness)
+    harness.server.add("POST", CONTENT, {"message": "unavailable"}, status=503)
+    doc = {"space_key": "ENG", "title": " Release notes ", "body_storage": "<p>x</p>"}
+    result = run_input(harness, "confluence", "page", "create", doc=doc)
+    assert result.code == 6
+    assert result.error["code"] == "outcome_unknown"
+    assert result.error["details"]["reason"] == "server error 503"
+    exact = result.error["details"]["recovery_argv"]["exact_search"][-1]
+    assert 'title = " Release notes "' in exact
+    assert 'title = "Release notes"' in exact
+    assert "broad_search" in result.error["details"]["recovery_argv"]
 
 
 def test_create_requires_fields(harness: Harness) -> None:
@@ -554,3 +575,203 @@ def test_update_incomplete_success_marks_write_outcome_unknown() -> None:
         update(client, "123456", {"expected_version": 7, "title": "New"})
     assert info.value.code == "outcome_unknown"
     assert info.value.write_outcome == "unknown"
+
+
+def test_search_next_start_counts_malformed_results(harness: Harness) -> None:
+    setup(harness)
+    body = {
+        "results": [
+            {"id": "1", "type": "page", "title": "A"},
+            "junk",
+            {"type": "page", "title": "no id"},
+            {"id": "4", "type": "page", "title": "D"},
+            {"id": "5", "type": "page", "title": "beyond limit"},
+        ],
+        "_links": {"next": "/rest/api/content/search?start=14"},
+    }
+    harness.server.add("GET", SEARCH, body)
+    result = harness.run(
+        "confluence", "page", "search", "--cql", "type = page", "--start", "10", "--limit", "4"
+    )
+    data = result.data
+    assert [r["id"] for r in data["results"]] == ["1", "4"]
+    assert data["size"] == 2
+    assert data["next_start"] == 14
+    assert harness.server.requests[0].url.params["start"] == "10"
+
+
+def test_search_page_of_only_malformed_results_still_advances(harness: Harness) -> None:
+    setup(harness)
+    harness.server.add("GET", SEARCH, {"results": ["junk", {}], "_links": {"next": "x"}})
+    result = harness.run("confluence", "page", "search", "--cql", "type = page", "--start", "5")
+    assert result.data["results"] == []
+    assert result.data["next_start"] == 7
+
+
+def test_search_raw_empty_page_ends_despite_next_link(harness: Harness) -> None:
+    setup(harness)
+    body = {"results": [], "size": 0, "totalSize": 500, "_links": {"next": "x"}}
+    harness.server.add("GET", SEARCH, body)
+    result = harness.run("confluence", "page", "search", "--cql", "type = page", "--start", "5")
+    assert result.code == 0
+    assert result.data["results"] == []
+    assert result.data["next_start"] is None
+
+
+def test_create_accepts_canonical_space_key_case(harness: Harness) -> None:
+    setup(harness)
+    harness.server.add("POST", CONTENT, CREATED)
+    doc = {"space_key": "eng", "title": "T", "body_storage": "<p>x</p>"}
+    result = run_input(harness, "confluence", "page", "create", doc=doc)
+    assert result.data == {"id": "9", "title": "T", "space_key": "ENG", "version": 1}
+    assert json.loads(harness.server.requests[0].content)["space"] == {"key": "eng"}
+
+
+def test_create_case_insensitive_space_still_rejects_other_space(harness: Harness) -> None:
+    setup(harness)
+    harness.server.add("POST", CONTENT, {**CREATED, "space": {"key": "ENGX"}})
+    doc = {"space_key": "eng", "title": "T", "body_storage": "<p>x</p>"}
+    result = run_input(harness, "confluence", "page", "create", doc=doc)
+    assert result.code == 6
+    assert result.error["code"] == "outcome_unknown"
+    assert "space" in result.error["details"]["reason"]
+
+
+def test_create_accepts_server_trimmed_title_and_reports_it(harness: Harness) -> None:
+    setup(harness)
+    harness.server.add("POST", CONTENT, {**CREATED, "title": "Release notes"})
+    doc = {"space_key": "ENG", "title": "  Release notes \t", "body_storage": "<p>x</p>"}
+    result = run_input(harness, "confluence", "page", "create", doc=doc)
+    assert result.data["title"] == "Release notes"
+    assert json.loads(harness.server.requests[0].content)["title"] == "  Release notes \t"
+
+
+@pytest.mark.parametrize("returned", ["release notes", "Release  notes", "Release notes!", "  "])
+def test_create_rejects_title_changes_beyond_trimming(harness: Harness, returned: str) -> None:
+    setup(harness)
+    harness.server.add("POST", CONTENT, {**CREATED, "title": returned})
+    doc = {"space_key": "ENG", "title": " Release notes ", "body_storage": "<p>x</p>"}
+    result = run_input(harness, "confluence", "page", "create", doc=doc)
+    assert result.code == 6
+    assert result.error["code"] == "outcome_unknown"
+    assert (
+        result.error["details"]["reason"] == "create response did not confirm the submitted title"
+    )
+
+
+def test_create_rejects_page_id_with_trailing_newline(harness: Harness) -> None:
+    setup(harness)
+    harness.server.add("POST", CONTENT, {**CREATED, "id": "9\n"})
+    doc = {"space_key": "ENG", "title": "T", "body_storage": "<p>x</p>"}
+    result = run_input(harness, "confluence", "page", "create", doc=doc)
+    assert result.code == 6
+    assert result.error["details"]["reason"] == "create response did not include a valid page id"
+
+
+@pytest.mark.parametrize(
+    ("title", "exact"),
+    [
+        ("""Won't "fix" $HOME""", 'title = "Won\'t \\"fix\\" $HOME"'),
+        (" Runbook\n", 'title = " Runbook" OR title = "Runbook"'),
+    ],
+    ids=["quoting", "trimmed"],
+)
+def test_create_outcome_unknown_fix_searches_every_accepted_title(
+    harness: Harness, title: str, exact: str
+) -> None:
+    setup(harness)
+    harness.server.add("POST", CONTENT, {**CREATED, "title": "Other"})
+    doc = {"space_key": "ENG", "title": title, "body_storage": "<p>x</p>"}
+    result = run_input(harness, "confluence", "page", "create", doc=doc)
+    assert result.error["code"] == "outcome_unknown"
+    fix = result.error["fix"]
+    exact_cql = f'space = "ENG" AND type = page AND ({exact})'
+    broad_cql = 'space = "ENG" AND type = page ORDER BY created DESC'
+    search = ["atl", "confluence", "page", "search", "--cql"]
+    assert [shlex.split(c) for c in backticked(fix, "atl confluence page search")] == [
+        [*search, exact_cql],
+        [*search, broad_cql],
+    ]
+    assert result.error["details"]["recovery_argv"] == {
+        "exact_search": [*search, exact_cql],
+        "broad_search": [*search, broad_cql],
+    }
+    assert "An empty exact-title search alone does not show the page was not created" in fix
+    assert "atl confluence page read ID" in fix
+    assert "POSIX shells" in fix and "details.recovery_argv" in fix
+    assert "does not retry writes" in fix
+    assert len(harness.server.writes()) == 1
+
+
+@pytest.mark.parametrize("title", SHELL_SENTINELS)
+def test_create_outcome_unknown_commands_stay_literal_in_shells(
+    harness: Harness, title: str, tmp_path: Path
+) -> None:
+    setup(harness)
+    harness.server.add("POST", CONTENT, {**CREATED, "title": "Other"})
+    doc = {"space_key": "ENG", "title": title, "body_storage": "<p>x</p>"}
+    error = run_input(harness, "confluence", "page", "create", doc=doc).error
+    argv = error["details"]["recovery_argv"]
+    shell_dir = tmp_path / "shell"
+    shell_dir.mkdir()
+    commands = backticked(error["fix"], "atl confluence page search")
+    assert [run_in_posix_shell(c, shell_dir) for c in commands] == [
+        argv["exact_search"],
+        argv["broad_search"],
+    ]
+    assert [run_argv(a) for a in argv.values()] == list(argv.values())
+    assert jql_quote(title) in argv["exact_search"][-1]
+
+
+def test_update_accepts_server_trimmed_title_and_reports_it(harness: Harness) -> None:
+    setup(harness)
+    harness.server.add("GET", PAGE, fixture("confluence_page.json"))
+    harness.server.add("PUT", PAGE, {**UPDATED, "title": "New"})
+    result = run_input(
+        harness,
+        "confluence",
+        "page",
+        "update",
+        "123456",
+        doc={"expected_version": 7, "title": " New\n"},
+    )
+    assert result.data["title"] == "New"
+    (put,) = harness.server.writes()
+    assert json.loads(put.content)["title"] == " New\n"
+
+
+def test_body_only_update_reports_trimmed_title(harness: Harness) -> None:
+    setup(harness)
+    page = fixture("confluence_page.json")
+    page["title"] = " Runbook "
+    harness.server.add("GET", PAGE, page)
+    harness.server.add("PUT", PAGE, {"id": "123456", "title": "Runbook", "version": {"number": 8}})
+    result = run_input(
+        harness,
+        "confluence",
+        "page",
+        "update",
+        "123456",
+        doc={"expected_version": 7, "body_storage": "<p>new</p>"},
+    )
+    assert result.data["title"] == "Runbook"
+    (put,) = harness.server.writes()
+    assert json.loads(put.content)["title"] == " Runbook "
+
+
+def test_update_rejects_title_changes_beyond_trimming(harness: Harness) -> None:
+    setup(harness)
+    harness.server.add("GET", PAGE, fixture("confluence_page.json"))
+    harness.server.add("PUT", PAGE, {**UPDATED, "title": "new"})
+    result = run_input(
+        harness,
+        "confluence",
+        "page",
+        "update",
+        "123456",
+        doc={"expected_version": 7, "title": "New"},
+    )
+    assert result.code == 6
+    assert (
+        result.error["details"]["reason"] == "update response did not confirm the submitted title"
+    )

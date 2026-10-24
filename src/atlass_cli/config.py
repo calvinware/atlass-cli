@@ -386,7 +386,7 @@ def _validate_project(v: _Validator, value: Any, where: str) -> ProjectConfig:
         {"key", "allowed_issue_types", "story_type", "feature_type", "fields"},
     )
     key = v.string(section["key"], f"{where}.key", max_len=32)
-    if not PROJECT_KEY_RE.match(key):
+    if not PROJECT_KEY_RE.fullmatch(key):
         raise v.fail(f"{where}.key", "must be an uppercase Jira project key")
     allowed = v.string_list(section["allowed_issue_types"], f"{where}.allowed_issue_types")
     story_type = v.string(section["story_type"], f"{where}.story_type")

@@ -6,9 +6,10 @@ import os
 import re
 import secrets
 import stat
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, cast
 
 from atlass_cli.config import RESERVED_FIELDS, Config, JiraConfig, ProjectConfig, require_jira
 from atlass_cli.contracts import ISSUE_KEY_PATTERN, AtlError
@@ -22,6 +23,7 @@ from atlass_cli.metadata import (
     get_issue,
     get_transitions,
 )
+from atlass_cli.response import nested_str
 from atlass_cli.transport import ServiceClient, sanitize_text, seg
 from atlass_cli.workflow import (
     Check,
@@ -282,7 +284,7 @@ def _create_mismatch(created: Any, project_key: str) -> str | None:
     if not isinstance(created, dict):
         return "create response was not a JSON object"
     key = created.get("key")
-    if not isinstance(key, str) or not ISSUE_KEY_RE.match(key):
+    if not isinstance(key, str) or not ISSUE_KEY_RE.fullmatch(key):
         return "create response did not include a valid issue key"
     if not key.startswith(f"{project_key}-"):
         return f"create response key is not in project {project_key}"
@@ -315,7 +317,7 @@ def story_create(
         )
 
     feature_key = doc.get("feature_key")
-    if isinstance(feature_key, str) and ISSUE_KEY_RE.match(feature_key):
+    if isinstance(feature_key, str) and ISSUE_KEY_RE.fullmatch(feature_key):
         checks.append(_check_feature(client, jira, feature_key))
         values["feature_link"] = feature_key
     else:
@@ -398,9 +400,8 @@ def _check_feature(client: ServiceClient, jira: JiraConfig, key: str) -> Check:
 def feature_create(
     client: ServiceClient, project: ProjectConfig, doc: dict[str, Any]
 ) -> dict[str, Any]:
+    require_feature_confirmation(project, doc)
     confirmation = doc.get("human_confirmation")
-    if project.feature_create_policy == "human_confirmed" and confirmation is None:
-        raise approval_required(project)
     checks: list[Check] = []
     values = _input_fields(project, doc.get("fields", {}), allow_reserved=True)
     description = doc.get("description")
@@ -435,6 +436,12 @@ def feature_create(
         "attestation": attestation,
         "checks": [c.as_dict() for c in checks],
     }
+
+
+def require_feature_confirmation(project: ProjectConfig, doc: dict[str, Any]) -> None:
+    """Apply the one feature-creation approval rule before credentials or remote work."""
+    if project.feature_create_policy == "human_confirmed" and doc.get("human_confirmation") is None:
+        raise approval_required(project)
 
 
 def approval_required(project: ProjectConfig) -> AtlError:
@@ -488,17 +495,8 @@ def _multipart(
     return body(), len(head) + size + len(tail)
 
 
-def attachment_add(client: ServiceClient, jira: JiraConfig, key: str, path: Path) -> dict[str, Any]:
-    limit = jira.max_attachment_bytes
-    try:
-        info = path.stat()
-    except OSError:
-        raise AtlError(
-            "file_invalid",
-            f"File not found or unreadable: {path}",
-            "Pass --file with the path to an existing regular file.",
-            {"path": str(path)},
-        ) from None
+def _checked_size(path: Path, info: os.stat_result, limit: int) -> int:
+    """Return the size of a regular file within ``limit``, or raise a file error."""
     if not stat.S_ISREG(info.st_mode):
         raise AtlError(
             "file_invalid",
@@ -514,19 +512,95 @@ def attachment_add(client: ServiceClient, jira: JiraConfig, key: str, path: Path
             "atl.yaml if the team agrees.",
             {"size": info.st_size, "limit": limit},
         )
-    boundary = secrets.token_hex(16)
+    return info.st_size
+
+
+def _file_error(path: Path, message: str, fix: str = "Check file permissions.") -> AtlError:
+    return AtlError("file_invalid", message, fix, {"path": str(path)})
+
+
+def _same_file(a: os.stat_result, b: os.stat_result) -> bool:
+    return (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
+
+
+def _unchanged(a: os.stat_result, b: os.stat_result) -> bool:
+    return _same_file(a, b) and (a.st_size, a.st_mtime_ns, a.st_ctime_ns) == (
+        b.st_size,
+        b.st_mtime_ns,
+        b.st_ctime_ns,
+    )
+
+
+def _open_checked(path: Path, limit: int) -> tuple[int, os.stat_result]:
+    """Open ``path`` without blocking and return the descriptor of the regular file checked."""
     try:
-        handle = path.open("rb")
+        info = path.stat()
     except OSError:
-        raise AtlError(
-            "file_invalid",
-            f"Cannot open {path}.",
-            "Check file permissions.",
-            {"path": str(path)},
+        raise _file_error(
+            path,
+            f"File not found or unreadable: {path}",
+            "Pass --file with the path to an existing regular file.",
         ) from None
+    _checked_size(path, info, limit)
+    # O_NONBLOCK keeps open() from waiting on a FIFO swapped in after stat(); fstat() rejects it.
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        raise _file_error(path, f"Cannot open {path}.") from None
+    try:
+        opened = os.fstat(fd)
+        _checked_size(path, opened, limit)
+        if not _same_file(info, opened):
+            raise _file_error(
+                path,
+                f"{path} was replaced between the check and the open; nothing was sent.",
+                "Wait until the file is fully written, then retry.",
+            )
+    except OSError:
+        os.close(fd)
+        raise _file_error(path, f"Cannot read {path}.") from None
+    except AtlError:
+        os.close(fd)
+        raise
+    return fd, opened
+
+
+def _snapshot(path: Path, fd: int, opened: os.stat_result, snapshot: BinaryIO) -> None:
+    """Copy the opened file into ``snapshot``, failing if the source changes meanwhile."""
+    try:
+        copied = 0
+        while copied <= opened.st_size:
+            chunk = os.read(fd, min(UPLOAD_CHUNK, opened.st_size + 1 - copied))
+            if not chunk:
+                break
+            snapshot.write(chunk)
+            copied += len(chunk)
+        changed = copied != opened.st_size or not _unchanged(opened, os.fstat(fd))
+        snapshot.seek(0)
+    except OSError:
+        raise _file_error(path, f"Cannot read {path}.") from None
+    if changed:
+        raise _file_error(
+            path,
+            f"{path.name} changed while atl was reading it; nothing was sent.",
+            "Wait until the file is fully written, then retry.",
+        )
+
+
+def attachment_add(client: ServiceClient, jira: JiraConfig, key: str, path: Path) -> dict[str, Any]:
+    fd, opened = _open_checked(path, jira.max_attachment_bytes)
+    size = opened.st_size
+    boundary = secrets.token_hex(16)
     name = os.path.basename(path)
-    with handle:
-        body, length = _multipart(handle, info.st_size, name, boundary)
+    # SECURITY-REVIEW: the bytes are uploaded from an owner-only temporary snapshot (unnamed on
+    # POSIX, delete-on-close on Windows), bounded by jira.max_attachment_bytes, so what is sent is
+    # exactly what was checked even if the source is rewritten during the upload.
+    with os.fdopen(fd, "rb", buffering=0) as source, tempfile.TemporaryFile() as handle:
+        # Windows typeshed models TemporaryFile as a wrapper; its file methods satisfy BinaryIO.
+        snapshot = cast(BinaryIO, handle)
+        _snapshot(path, source.fileno(), opened, snapshot)
+        body, length = _multipart(snapshot, size, name, boundary)
         try:
             result = client.request(
                 "POST",
@@ -543,16 +617,16 @@ def attachment_add(client: ServiceClient, jira: JiraConfig, key: str, path: Path
             error = client.unknown_outcome(
                 f"file {change} while uploading",
                 f"{path.name} {change} while uploading; atl aborted the body before completion "
-                f"and never sent more than {info.st_size} bytes of it. Open {key} in the Jira "
+                f"and never sent more than {size} bytes of it. Open {key} in the Jira "
                 f"issue view and look for an attachment named {sanitize_text(name, 120)!r} "
                 "(complete or partial) before retrying; remove a partial one. Wait until the file "
                 "is fully written before any retry. atl does not retry writes.",
             )
             error.details.update(
-                {"path": str(path), "declared_size": info.st_size, "dispatched": "aborted"}
+                {"path": str(path), "declared_size": size, "dispatched": "aborted"}
             )
             raise error from None
-    attachments = _confirmed_attachments(client, key, result, name, info.st_size)
+    attachments = _confirmed_attachments(client, key, result, name, size)
     return {"key": key, "attachments": attachments}
 
 
@@ -612,12 +686,6 @@ def comment_add(client: ServiceClient, key: str, body: str) -> dict[str, Any]:
     return {"key": key, "comment_id": comment_id}
 
 
-def _name(value: Any, key: str = "name") -> str | None:
-    if isinstance(value, dict) and isinstance(value.get(key), str):
-        return str(value[key])
-    return None
-
-
 def search(client: ServiceClient, jql: str, start: int, limit: int) -> dict[str, Any]:
     raw = client.get(
         "/rest/api/2/search",
@@ -629,11 +697,19 @@ def search(client: ServiceClient, jql: str, start: int, limit: int) -> dict[str,
             "Jira returned an unexpected search response.",
             "Check that jira.base_url points at Jira Data Center.",
         )
+    consumed = raw["issues"][:limit]
     issues = []
-    for item in raw["issues"][:limit]:
+    for item in consumed:
         if not isinstance(item, dict):
             continue
-        fields = item.get("fields") or {}
+        fields = item.get("fields")
+        if not isinstance(fields, dict):
+            raise AtlError(
+                "response_invalid",
+                "Jira returned a search result without a fields object.",
+                "Check that jira.base_url points at Jira Data Center.",
+                {"what": "search issue fields"},
+            )
         issues.append(
             {
                 "key": str(item.get("key", "")),
@@ -641,18 +717,19 @@ def search(client: ServiceClient, jql: str, start: int, limit: int) -> dict[str,
                 "summary": fields.get("summary")
                 if isinstance(fields.get("summary"), str)
                 else None,
-                "status": _name(fields.get("status")),
-                "issue_type": _name(fields.get("issuetype")),
-                "project": _name(fields.get("project"), "key"),
-                "assignee": _name(fields.get("assignee"), "displayName"),
+                "status": nested_str(fields.get("status")),
+                "issue_type": nested_str(fields.get("issuetype")),
+                "project": nested_str(fields.get("project"), "key"),
+                "assignee": nested_str(fields.get("assignee"), "displayName"),
                 "updated": fields.get("updated")
                 if isinstance(fields.get("updated"), str)
                 else None,
             }
         )
     raw_total = raw.get("total")
-    total = raw_total if isinstance(raw_total, int) else start + len(issues)
-    next_start = start + len(issues) if issues and start + len(issues) < total else None
+    end = start + len(consumed)
+    total = raw_total if isinstance(raw_total, int) else end
+    next_start = end if consumed and end < total else None
     return {
         "jql": jql,
         "start": start,
@@ -701,7 +778,7 @@ def _sample_issue(
     raw_fields = hit.get("fields")
     fields: dict[str, Any] = raw_fields if isinstance(raw_fields, dict) else {}
     if isinstance(hit.get("key"), str) and _in_source(
-        project, status, _name(fields.get("project"), "key"), _name(fields.get("status"))
+        project, status, nested_str(fields.get("project"), "key"), nested_str(fields.get("status"))
     ):
         return str(hit["key"])
     return None

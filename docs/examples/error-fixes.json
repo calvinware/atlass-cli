@@ -36,8 +36,8 @@
       "fix": "Re-run with `details.current_key`. Its project must be configured in `atl.yaml`."
     },
     "file_invalid": {
-      "meaning": "The `--file` for an attachment does not exist, is not a regular file, or cannot be opened.",
-      "fix": "Pass the path of an existing, readable regular file. Relative paths resolve from the current directory."
+      "meaning": "The `--file` for an attachment does not exist, is not a regular file, cannot be opened, was replaced between the check and the open, or changed while `atl` was reading it. Nothing was sent.",
+      "fix": "Pass the path of an existing, readable regular file. Relative paths resolve from the current directory. If the file was replaced or changed, wait until it is fully written, then retry."
     },
     "attachment_too_large": {
       "meaning": "The file is larger than `jira.max_attachment_bytes` (default 50 MiB). Nothing was sent.",
@@ -137,7 +137,7 @@
     "outcome_unknown": {
       "meaning": "A write was dispatched but `atl` cannot tell whether it was applied: timeout, disconnect, 408, 499, 5xx, redirect, an attachment that changed during upload, or a success response that does not confirm the write.",
       "fix": "Inspect remote state before any retry, using the method for that write in [Writes and retries](../commands.md#writes-and-retries). Retry only when inspection shows the write was not applied. If you cannot tell, or find duplicates, stop and ask a human.",
-      "details": "`details.reason` says why; for transitions, `details.operations[]` gives each write's status."
+      "details": "`details.reason` says why; for transitions, `details.operations[]` gives each write's status. For transitions and Confluence page create, `details.recovery_argv` gives the inspection commands as argument lists; the commands in `fix` are quoted for POSIX shells only."
     },
     "interrupted": {
       "meaning": "The process was interrupted (for example Ctrl+C) before it finished.",
@@ -151,7 +151,7 @@
     "partial_transition": {
       "meaning": "A `pre_edit` transition applied its edit (PUT) but not the transition (POST): the refresh failed, the checklist no longer passed, or the POST was rejected. The edit stays applied.",
       "fix": "Do not roll back. Inspect the issue's status and edited field values, reconcile them with the issue owner, resolve the failed checks, and get a fresh `ready: true` from `atl jira requirements` before retrying. A retry repeats the edit unconditionally.",
-      "details": "`details.operations[]` shows the edit `succeeded` and the transition `skipped` or `rejected`; `details.atomic` is `false`."
+      "details": "`details.operations[]` shows the edit `succeeded` and the transition `skipped` or `rejected`; `details.atomic` is `false`. `details.recovery_argv` gives the `requirements` and `transition` commands as argument lists; the commands in `fix` are quoted for POSIX shells only."
     }
   }
 }

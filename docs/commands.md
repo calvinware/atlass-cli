@@ -52,7 +52,7 @@ atl login --service jira|confluence|all [--auth pat|basic] [--username NAME]
 | `atl jira story create --input PATH\|-` | `project`, `summary`, `acceptance_criteria`, `feature_key`, optional `description`, `fields` (friendly names) | `key`, `id`, `url`, `checks` |
 | `atl jira requirements KEY --to STATUS` | — | checklist: `ready`, `checks[]`, `plan.operations[]`, `plan.atomic`, `notice` |
 | `atl jira transition KEY --to STATUS` | — | `operations[]` with statuses, `atomic`, `transition_id` |
-| `atl jira feature find --issue KEY \| --text TEXT [--limit N≤25]` | — | `candidates[]` (`key`, `project`, `summary`, `status`, `score`, `reasons`), `selection: "caller"` |
+| `atl jira feature find --issue KEY \| --text TEXT [--limit N≤25]` | — | `candidates[]` (`key`, `project`, `summary`, `status`, `score`, `reasons`), `candidate_pool_limit`, `truncated`, `selection: "caller"` |
 | `atl jira feature create --input PATH\|-` | `project`, `summary`, optional `description`, `fields`, `human_confirmation` | `key`, `policy`, `attestation` (`identity_verified: false`) |
 | `atl jira attachment add KEY --file PATH` | file on disk | `attachments[]` |
 | `atl jira comment add KEY --body-file PATH\|-` | UTF-8 text, max 1 MiB | `comment_id` |
@@ -90,11 +90,11 @@ can only happen after a request is dispatched:
 
 | When | Checks | Failure |
 |------|--------|---------|
-| Before the first write | Arguments and input JSON Schema; `atl.yaml`; credentials; create preflight (above); the transition checklist (`atl jira requirements`); attachment existence, regular-file type, and size limit; Confluence `expected_version` against a fresh read | Input/config errors (exit 2), `requirements_unmet` or `approval_required` (exit 4), `version_conflict` (exit 5), `metadata_incomplete` (exit 6). Nothing is sent. |
+| Before the first write | Arguments and input JSON Schema; `atl.yaml`; credentials; create preflight (above); the transition checklist (`atl jira requirements`); attachment existence, regular-file type, and size limit (checked on the path and again on the opened file); Confluence `expected_version` against a fresh read | Input/config errors (exit 2), `requirements_unmet` or `approval_required` (exit 4), `version_conflict` (exit 5), `metadata_incomplete` (exit 6). Nothing is sent. |
 | While an attachment streams | The file still has the size checked before upload | `outcome_unknown` (exit 6) with `details.dispatched: "aborted"`. The body is never completed, but the request may already have reached Jira, so inspect the issue view for a partial attachment before any retry. |
 | After a `pre_edit` PUT | The issue and its transitions are re-read, and the full checklist runs again before the transition POST | `partial_transition` (exit 7). The edit has already been applied. |
 | When the server handles a write | Server-side workflow validators, field validation, and server limits that REST metadata does not expose | `remote_validation`, `remote_limit_exceeded`, `not_found`, or `conflict` (exit 5). 401 is `auth_failed` and 403 is `forbidden` (exit 3): run `atl login` again, or ask an administrator for access to the project or space. 429 is `rate_limited` (exit 6). A 408, 499, or 5xx answer does not prove the write was refused, so it is `outcome_unknown` (exit 6). `partial_transition` (exit 7) if a `pre_edit` edit already succeeded. |
-| After a 2xx write response | The response confirms the write: a non-empty issue id and a valid issue key in the target project for create; a non-empty comment id; the uploaded attachment name and size; for page create a valid page id, type `page`, the submitted title and space, and version 1; for page update the page id, title, and next version. A write response over the 32 MiB cap is never parsed. | `outcome_unknown` (exit 6) with a command-specific inspection fix. Inspect before any retry. |
+| After a 2xx write response | The response confirms the write: a non-empty issue id and a valid issue key in the target project for create; a non-empty comment id; the uploaded attachment name and size; for page create a valid page id, type `page`, the submitted title (leading and trailing whitespace may be trimmed), the submitted space (any letter case), and version 1; for page update the page id, title (same trimming rule), and next version. A write response over the 32 MiB cap is never parsed. | `outcome_unknown` (exit 6) with a command-specific inspection fix. Inspect before any retry. |
 
 ### Requirements and transitions
 
@@ -116,6 +116,13 @@ Ranking is deterministic:
 - Search is limited to each configured project's `feature_type`.
 - Words of 3 or more characters (stop words removed, at most 10) are matched with
   `summary ~ "word"`. All JQL literals are escaped.
+- The word search takes up to 100 of the most recently updated matches
+  (`candidate_pool_limit`) and ranks them locally. `truncated: true` means more matches may
+  exist: Jira either reported more than it returned, or filled the pool without reporting a
+  total. An older match may be missing; use more specific `--text`. `--limit` only trims the
+  ranked list and never sets `truncated`.
+- Keys of configured projects named in `--text` are fetched by a separate query, so they are
+  always ranked even when the word search is truncated.
 - Score: +100 when a candidate's key appears in `--text`, +10 per shared summary word, and +5 for
   the same project as `--issue`.
 - Ties are broken by project key, then issue number.
@@ -126,11 +133,22 @@ options are mutually exclusive.
 ### Attachments
 
 Before upload, `atl` checks that the file exists, is a regular file, and is no larger than
-`jira.max_attachment_bytes`. The upload is a streamed `multipart/form-data` with an exact
-`Content-Length` and `X-Atlassian-Token: no-check`. If the file shrinks or grows during upload,
-the upload is aborted before the body completes. Because the request may already have reached
-Jira, this is `outcome_unknown` (exit 6) with `details.dispatched: "aborted"`; inspect the issue
-view for a partial attachment before any retry.
+`jira.max_attachment_bytes`. It opens the path without blocking (so a FIFO swapped in after the
+check cannot hang the command), then checks the opened file's type and size and that it is the
+same file (device and inode) that was checked. A path replaced between the check and the open,
+even by a file of the same size, is `file_invalid` and nothing is sent. `atl` then copies the
+opened file into a private temporary snapshot (owner-only; unnamed on POSIX, delete-on-close on
+Windows; at most `jira.max_attachment_bytes`). If the file's size, modification time, or change
+time differs after the copy, it is `file_invalid` and nothing is sent; wait until the file is fully
+written and retry. The upload streams the snapshot, so rewriting the source during the upload does
+not change the bytes sent. Change detection relies on file timestamps, so a same-size rewrite
+within the file system's timestamp resolution while `atl` is copying can go unnoticed.
+
+The upload is a streamed `multipart/form-data` with an exact `Content-Length` and
+`X-Atlassian-Token: no-check`. As a last guard, if the stream yields fewer or more bytes than the
+declared size, the upload is aborted before the body completes. Because the request may already
+have reached Jira, this is `outcome_unknown` (exit 6) with `details.dispatched: "aborted"`; inspect
+the issue view for a partial attachment before any retry.
 
 The command succeeds only when Jira's 2xx response is a non-empty JSON list in which every item has
 a non-empty string `id` and `filename` and a non-negative integer `size`, and at least one item has
@@ -180,8 +198,13 @@ cannot show comments, attachments, or custom field values, so use the method for
 | `jira comment add` | Open the issue in the Jira issue view and look for a comment whose body exactly matches what you sent. |
 | `jira attachment add` | Open the issue in the Jira issue view and look for the exact filename and size. `atl jira requirements KEY --to STATUS` lists attachment names when an attachment rule fails. |
 | `jira transition` | `atl jira requirements KEY --to STATUS` (`from_status`) or `atl jira search --jql 'key = KEY'` (`status`). For a `pre_edit` edit, check the edited field values in the issue view. |
-| `confluence page create` | `atl confluence page search --cql 'space = "KEY" AND title = "<title>"'`, following `next_start` through every result page. Read each candidate with `atl confluence page read ID` and compare `title`, `space_key`, `ancestors`, and `body_storage` with what you sent. |
+| `confluence page create` | Run the searches in `error.fix` (`details.recovery_argv`): first `space = "KEY" AND type = page AND (title = "<submitted>" OR title = "<trimmed>")`, then, if that finds nothing, the space's newest pages (`space = "KEY" AND type = page ORDER BY created DESC`), following `next_start` through every result page. Read each plausible candidate with `atl confluence page read ID` and compare `title`, `space_key`, `ancestors`, and `body_storage` with what you sent. An empty exact-title search alone does not show the page was not created. |
 | `confluence page update` | `atl confluence page read ID` and compare `version`, `title`, and `body_storage` with what you sent. |
+
+Recovery commands inside `error.fix` are quoted for POSIX shells (sh, bash, zsh) only. In
+`cmd.exe`, PowerShell, or a program, do not paste them; pass each list in `details.recovery_argv`
+as separate arguments instead (`outcome_unknown` from a transition or Confluence page create, and
+`partial_transition`).
 
 Agents inspect only through `atl` and, where the table says issue view, by asking a human to
 check it. Agents never call the REST APIs directly. As a human-only exception, a person may use an

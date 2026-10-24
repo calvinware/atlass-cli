@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from typing import Any
@@ -457,8 +458,29 @@ def _failed_status(exc: AtlError) -> str:
     return "rejected" if exc.write_outcome == "rejected" else "not_attempted"
 
 
+POSIX_NOTE = (
+    "The commands above are quoted for POSIX shells (sh, bash, zsh) only; in cmd.exe, "
+    "PowerShell, or a program, pass each list in details.recovery_argv as separate arguments."
+)
+
+
+def _argv(command: str, key: str, to: str) -> list[str]:
+    return ["atl", "jira", command, key, "--to", to]
+
+
+def _posix(argv: list[str]) -> str:
+    return "`" + shlex.join(argv) + "`"
+
+
 def _retry_hint(key: str, to: str) -> str:
-    return f"`atl jira requirements {key} --to '{to}'`"
+    return _posix(_argv("requirements", key, to))
+
+
+def recovery_argv(key: str, to: str) -> dict[str, list[str]]:
+    return {
+        "requirements": _argv("requirements", key, to),
+        "transition": _argv("transition", key, to),
+    }
 
 
 def transition(client: ServiceClient, project: ProjectConfig, key: str, to: str) -> dict[str, Any]:
@@ -492,10 +514,11 @@ def transition(client: ServiceClient, project: ProjectConfig, key: str, to: str)
                         ("unknown", edit_fields),
                         ("not_attempted", checklist.transition_fields, live.id),
                     ),
+                    recovery_argv=recovery_argv(key, to),
                 )
                 exc.fix = (
                     f"Inspect {key} to see whether the edit was applied ({_retry_hint(key, to)}) "
-                    "before running the transition again. atl did not retry."
+                    f"before running the transition again. atl did not retry. {POSIX_NOTE}"
                 )
                 raise
             exc.details.update(
@@ -551,10 +574,11 @@ def transition(client: ServiceClient, project: ProjectConfig, key: str, to: str)
                     edit_state,
                     ("unknown", checklist.transition_fields, live.id),
                 ),
+                recovery_argv=recovery_argv(key, to),
             )
             exc.fix = (
                 f"Inspect {key}'s current status ({_retry_hint(key, to)}) before retrying; the "
-                "transition may or may not have been applied. atl did not retry."
+                f"transition may or may not have been applied. atl did not retry. {POSIX_NOTE}"
             )
             raise
         if edit_done:
@@ -606,12 +630,13 @@ def _partial(
         f"The edit of {key} was applied but the transition to {to!r} was not: {reason}.",
         f"Do not roll back. Inspect {key}'s current status and field values (the edit may "
         "have overwritten a concurrent change), reconcile them with the issue owner, resolve "
-        f"the failed checks or remote errors, and confirm a fresh {_retry_hint(key, to)} is "
-        f"ready before running `atl jira transition {key} --to '{to}'` again. A retry repeats "
-        "the edit (PUT) unconditionally.",
+        f"the failed checks or remote errors, and confirm a fresh {_retry_hint(key, to)} "
+        f"reports ready: true before running {_posix(_argv('transition', key, to))} again. A "
+        f"retry repeats the edit (PUT) unconditionally. {POSIX_NOTE}",
         {
             "key": key,
             "atomic": False,
+            "recovery_argv": recovery_argv(key, to),
             "operations": _ops(
                 ("succeeded", edit_fields),
                 (transition_status, transition_fields, transition_id),

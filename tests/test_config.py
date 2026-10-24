@@ -388,3 +388,9 @@ def test_explicit_field_id(tmp_path: Path) -> None:
     config = parse_config_file(_write(tmp_path, text))
     assert config.jira is not None
     assert config.jira.projects["EXAMPLE"].fields["acceptance_criteria"].id == "customfield_10100"
+
+
+def test_project_key_rejects_trailing_newline(tmp_path: Path) -> None:
+    text = config_text().replace("- key: EXAMPLE", '- key: "EXAMPLE\\n"')
+    assert '"EXAMPLE\\n"' in text
+    _error(tmp_path, text)

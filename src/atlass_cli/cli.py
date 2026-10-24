@@ -127,13 +127,13 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _issue_key(value: str) -> str:
-    if not ISSUE_KEY_RE.match(value):
+    if not ISSUE_KEY_RE.fullmatch(value):
         raise argparse.ArgumentTypeError("must be an issue key such as ABC-123")
     return value
 
 
 def _page_id(value: str) -> str:
-    if not PAGE_ID_RE.match(value):
+    if not PAGE_ID_RE.fullmatch(value):
         raise argparse.ArgumentTypeError("must be a numeric page ID")
     return value
 
@@ -632,8 +632,7 @@ def cmd_feature_create(args: argparse.Namespace, rt: Runtime) -> Any:
     config, doc = _jira_project_command(args, rt, "jira feature create")
     jira_cfg = require_jira(config)
     project = require_project(config, doc["project"])
-    if project.feature_create_policy == "human_confirmed" and "human_confirmation" not in doc:
-        raise jira.approval_required(project)
+    jira.require_feature_confirmation(project, doc)
     with _client(rt, "jira", jira_cfg) as client:
         return jira.feature_create(client, project, doc)
 

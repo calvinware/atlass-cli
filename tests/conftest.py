@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import re
+import shutil
+import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +21,14 @@ from atlass_cli.cli import Runtime, main
 from atlass_cli.contracts import COMMANDS_BY_PATH, command_schema
 
 FIXTURES = Path(__file__).parent / "fixtures"
+# Values that would run a command or split arguments if a shell interpreted them.
+SHELL_SENTINELS = [
+    "$(touch sub-ran)",
+    "a; touch semi-ran",
+    "a & touch amp-ran",
+    "a | touch pipe-ran",
+    'Won\'t "do" $HOME %PATH% ^&',
+]
 JIRA = "https://jira.example.test/jira"
 CONFLUENCE = "https://confluence.example.test/confluence"
 JIRA_TOKEN = "jira-secret-token-123"
@@ -222,3 +235,30 @@ def jira_path(path: str) -> str:
 
 def confluence_path(path: str) -> str:
     return "/confluence" + path
+
+
+def backticked(text: str, prefix: str) -> list[str]:
+    return [c for c in re.findall(r"`([^`]*)`", text) if c.startswith(prefix)]
+
+
+def run_in_posix_shell(command: str, cwd: Path) -> list[str]:
+    """Run ``command`` in a real POSIX shell with ``atl`` stubbed to print its arguments."""
+    sh = shutil.which("sh")
+    if sh is None or os.name == "nt":
+        pytest.skip("needs a POSIX shell")
+    stub = 'atl() { printf "%s\\0" atl "$@"; }\n'
+    # The command under test is atl's own fix text; the shell must keep its values literal.
+    out = subprocess.run(  # noqa: S603 - executing quoted recovery text is the point of the test
+        [sh, "-c", stub + command], cwd=cwd, capture_output=True, check=True
+    )
+    assert sorted(os.listdir(cwd)) == [], "the shell ran an injected command"
+    return out.stdout.decode().split("\0")[:-1]
+
+
+def run_argv(argv: list[str]) -> list[str]:
+    """Pass ``argv[1:]`` to a real process without a shell and return what it received."""
+    script = "import json, sys; print(json.dumps(sys.argv[1:]))"
+    out = subprocess.run(  # noqa: S603 - no shell; argv is passed through literally
+        [sys.executable, "-c", script, *argv[1:]], capture_output=True, check=True
+    )
+    return [argv[0], *json.loads(out.stdout)]

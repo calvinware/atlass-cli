@@ -177,7 +177,7 @@ def _option_unavailable(ref: FieldRef, meta: FieldMeta, expected: str) -> FieldP
 
 
 def _require_key(ref: FieldRef, value: str) -> None:
-    if not ISSUE_KEY_RE.match(value):
+    if not ISSUE_KEY_RE.fullmatch(value):
         raise FieldProblem(
             f"{value!r} is not a Jira issue key.",
             f"Supply {ref.friendly!r} as an issue key such as ABC-123.",
