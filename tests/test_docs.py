@@ -219,6 +219,27 @@ def test_comment_body_file_schema_and_row_say_plain_text(
     assert prop["description"] in row
 
 
+def _embedded_schema_drift(contract: gen.Contract, example: dict[str, Any]) -> list[str]:
+    data = example["success"]["data"]
+    # The example's note says its `error` schema is abbreviated; everything else is verbatim.
+    return [k for k in contract.schema if k != "error" and data.get(k) != contract.schema[k]]
+
+
+def test_embedded_comment_schema_matches_discovered(
+    discovered: tuple[list[gen.Contract], dict[str, str]], examples: dict[str, Any]
+) -> None:
+    contracts, _ = discovered
+    (comment,) = [c for c in contracts if c.path == "jira comment add"]
+    example = examples["schema"]
+    assert example["arguments"] == {"command": "jira comment add"}
+    assert _embedded_schema_drift(comment, example) == []
+
+    reverted = copy.deepcopy(example)
+    body_file = reverted["success"]["data"]["arguments"]["properties"]["body_file"]
+    body_file["description"] = "Path to a JSON file, or '-' for stdin."
+    assert _embedded_schema_drift(comment, reverted) == ["arguments"]
+
+
 def test_missing_error_fix_is_reported(
     discovered: tuple[list[gen.Contract], dict[str, str]], fixes: dict[str, Any]
 ) -> None:

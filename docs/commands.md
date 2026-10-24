@@ -198,7 +198,7 @@ cannot show comments, attachments, or custom field values, so use the method for
 | `jira comment add` | Open the issue in the Jira issue view and look for a comment whose body exactly matches what you sent. |
 | `jira attachment add` | Open the issue in the Jira issue view and look for the exact filename and size. `atl jira requirements KEY --to STATUS` lists attachment names when an attachment rule fails. |
 | `jira transition` | `atl jira requirements KEY --to STATUS` (`from_status`) or `atl jira search --jql 'key = KEY'` (`status`). For a `pre_edit` edit, check the edited field values in the issue view. |
-| `confluence page create` | Run the searches in `error.fix` (`details.recovery_argv`): first `space = "KEY" AND type = page AND (title = "<submitted>" OR title = "<trimmed>")`, then, if that finds nothing, the space's newest pages (`space = "KEY" AND type = page ORDER BY created DESC`), following `next_start` through every result page. Read each plausible candidate with `atl confluence page read ID` and compare `title`, `space_key`, `ancestors`, and `body_storage` with what you sent. An empty exact-title search alone does not show the page was not created. |
+| `confluence page create` | Run the searches in `error.fix` (`details.recovery_argv`): first `space = "KEY" AND type = page AND (title = "<submitted>" OR title = "<trimmed>")`, then, if that finds nothing, the space's newest pages (`space = "KEY" AND type = page ORDER BY created DESC`), following `next_start` through every result page. Read each plausible candidate with `atl confluence page read ID` and compare `title`, `space_key`, `ancestors`, and `body_storage` with what you sent. An empty exact-title search alone does not show the page was not created. Results can shift between pages, so a scan with no match does not establish absence either: ask a human to confirm the page does not exist before any retry. |
 | `confluence page update` | `atl confluence page read ID` and compare `version`, `title`, and `body_storage` with what you sent. |
 
 Recovery commands inside `error.fix` are quoted for POSIX shells (sh, bash, zsh) only. In
@@ -214,6 +214,8 @@ issue view.
 Retry only when inspection shows the write was **not** applied. If it was applied, do not retry:
 continue from the existing item. If you cannot tell, or more than one candidate matches (for
 example two issues with the same summary), stop and ask a human to resolve it, including deleting
-any duplicate by hand. For `partial_transition` (exit 7) and `pre_edit` retries, also follow
+any duplicate by hand. A search whose results changed or were incomplete while you read them
+cannot show that a write was not applied. If the outcome is still uncertain, a human must resolve
+it before any retry. For `partial_transition` (exit 7) and `pre_edit` retries, also follow
 [`pre_edit` (non-atomic)](configuration.md#pre_edit-non-atomic): reconcile current field values
 and get a fresh `ready: true` from `atl jira requirements` first.

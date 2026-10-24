@@ -1144,6 +1144,66 @@ def test_config_check_explicit_issue_in_other_status_falls_back_to_search(
     assert sample["sample_issue"] == "EXAMPLE-1"
 
 
+def test_config_check_reuses_explicit_issue_across_projects(harness: Harness) -> None:
+    setup_config_check(harness)
+    text = config_text()
+    start = text.index("    - key: EXAMPLE")
+    end = text.index("confluence:")
+    other = text[start:end].replace("key: EXAMPLE", "key: OTHER")
+    harness.write_config(text[:end] + other + text[end:])
+    other_types = jira_path("/rest/api/2/issue/createmeta/OTHER/issuetypes")
+    harness.server.add("GET", other_types, fixture("createmeta_issuetypes.json"))
+    harness.server.add("GET", f"{other_types}/10001", fixture("createmeta_story_fields.json"))
+    harness.server.add("GET", f"{other_types}/10000", fixture("createmeta_feature_fields.json"))
+
+    samples = {
+        ("EXAMPLE", "To Do"): "EXAMPLE-1",
+        ("EXAMPLE", "In Progress"): "EXAMPLE-2",
+        ("OTHER", "In Progress"): "OTHER-2",
+    }
+
+    def search(request: httpx.Request) -> httpx.Response:
+        jql = request.url.params["jql"]
+        hits = [
+            {"key": key, "fields": {"status": {"name": s}, "project": {"key": p}}}
+            for (p, s), key in samples.items()
+            if f'project = "{p}"' in jql and f'status = "{s}"' in jql
+        ]
+        return httpx.Response(200, json={"issues": hits})
+
+    harness.server.routes[("GET", SEARCH)] = []
+    harness.server.add("GET", SEARCH, handler=search)
+    for key, body, transitions in (
+        ("OTHER-1", "issue_todo.json", "transitions_todo.json"),
+        ("OTHER-2", "issue_in_progress.json", "transitions_in_progress.json"),
+    ):
+        issue = fixture(body)
+        issue["key"] = key
+        issue["fields"]["project"] = {"key": "OTHER", "id": "10010"}
+        path = jira_path(f"/rest/api/2/issue/{key}")
+        harness.server.add("GET", path, issue)
+        harness.server.add("GET", f"{path}/transitions", fixture(transitions))
+
+    result = harness.run("config", "check", "--issue", "OTHER-1")
+    assert result.code == 0, result.out
+    checks = {c["id"]: c for c in result.data["checks"]}
+    for check_id, sample in (
+        ("EXAMPLE:transition:in_progress:To Do", "EXAMPLE-1"),
+        ("EXAMPLE:transition:done:In Progress", "EXAMPLE-2"),
+        ("OTHER:transition:in_progress:To Do", "OTHER-1"),
+        ("OTHER:transition:done:In Progress", "OTHER-2"),
+    ):
+        assert checks[f"{check_id}:source_status"]["status"] == "pass"
+        assert checks[f"{check_id}:transition_available"]["details"]["sample_issue"] == sample
+    gets = harness.server.paths("GET")
+    # One read of the explicit issue serves every project's source-status lookup.
+    assert gets.count(jira_path("/rest/api/2/issue/OTHER-1")) == 1
+    # The explicit issue matches OTHER/To Do, so that source never searches.
+    searches = [r.url.params["jql"] for r in harness.server.requests if r.url.path == SEARCH]
+    assert not any('project = "OTHER"' in q and 'status = "To Do"' in q for q in searches)
+    assert harness.server.writes() == []
+
+
 @pytest.mark.parametrize(
     "damage", ["missing_fields", "null_fields", "list_fields", "entry_not_object", "no_required"]
 )

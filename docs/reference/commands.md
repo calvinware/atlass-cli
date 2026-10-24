@@ -189,7 +189,7 @@ Success (exit 0):
       "properties": {
         "key": {
           "type": "string",
-          "pattern": "^[A-Z][A-Z0-9_]*-[1-9][0-9]*$"
+          "pattern": "^[A-Z][A-Z0-9_]*-[1-9][0-9]*(?![\\s\\S])"
         },
         "body_file": {
           "type": "string",

@@ -180,9 +180,10 @@ def _create_unknown(client: ServiceClient, reason: str, space_key: str, title: s
         f"`{shlex.join(argv['exact_search'])}`. If that finds nothing, list the space's newest "
         f"pages: `{shlex.join(argv['broad_search'])}`. Read every plausible match with "
         "`atl confluence page read ID` to confirm whether it is yours. An empty exact-title "
-        "search alone does not show the page was not created; retry only when the broader "
-        "search and reads show no such page, and ask a human if you cannot tell. atl does not "
-        "retry writes. The commands above are quoted for POSIX shells (sh, bash, zsh) only; in "
+        "search alone does not show the page was not created, and results can shift between "
+        "pages, so a scan with no match does not show it either. If no page matches or you "
+        "cannot tell, ask a human to confirm the page does not exist before any retry. atl does "
+        "not retry writes. The commands above are quoted for POSIX shells (sh, bash, zsh) only; in "
         "cmd.exe, PowerShell, or a program, pass each list in details.recovery_argv as separate "
         "arguments.",
     )
