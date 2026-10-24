@@ -9,7 +9,7 @@ import stat
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, cast
 
 from atlass_cli.config import RESERVED_FIELDS, Config, JiraConfig, ProjectConfig, require_jira
 from atlass_cli.contracts import ISSUE_KEY_PATTERN, AtlError
@@ -597,8 +597,10 @@ def attachment_add(client: ServiceClient, jira: JiraConfig, key: str, path: Path
     # POSIX, delete-on-close on Windows), bounded by jira.max_attachment_bytes, so what is sent is
     # exactly what was checked even if the source is rewritten during the upload.
     with os.fdopen(fd, "rb", buffering=0) as source, tempfile.TemporaryFile() as handle:
-        _snapshot(path, source.fileno(), opened, handle)
-        body, length = _multipart(handle, size, name, boundary)
+        # Windows typeshed models TemporaryFile as a wrapper; its file methods satisfy BinaryIO.
+        snapshot = cast(BinaryIO, handle)
+        _snapshot(path, source.fileno(), opened, snapshot)
+        body, length = _multipart(snapshot, size, name, boundary)
         try:
             result = client.request(
                 "POST",

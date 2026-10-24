@@ -1840,19 +1840,23 @@ def test_attachment_swapped_for_real_fifo_does_not_block(
 
     def swap() -> None:
         path.unlink()
-        os.mkfifo(path)
+        getattr(os, "mkfifo")(path)  # noqa: B009 - absent from Windows os and typeshed
 
     def hung(signum: int, frame: Any) -> None:
         raise TimeoutError("open() blocked on the FIFO")
 
     monkeypatch.setattr(os, "open", _open_then(path, swap))
-    previous = signal.signal(signal.SIGALRM, hung)
-    signal.setitimer(signal.ITIMER_REAL, 5)
+    # These APIs are intentionally looked up only in this POSIX-only test.
+    alarm = getattr(signal, "SIGALRM")  # noqa: B009 - absent from Windows typeshed
+    timer = getattr(signal, "ITIMER_REAL")  # noqa: B009 - absent from Windows typeshed
+    setitimer = getattr(signal, "setitimer")  # noqa: B009 - absent from Windows typeshed
+    previous = signal.signal(alarm, hung)
+    setitimer(timer, 5)
     try:
         result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous)
+        setitimer(timer, 0)
+        signal.signal(alarm, previous)
     assert result.code == 2
     assert result.error["code"] == "file_invalid"
     assert result.error["message"].startswith("Not a regular file")

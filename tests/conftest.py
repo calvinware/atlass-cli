@@ -244,7 +244,7 @@ def backticked(text: str, prefix: str) -> list[str]:
 def run_in_posix_shell(command: str, cwd: Path) -> list[str]:
     """Run ``command`` in a real POSIX shell with ``atl`` stubbed to print its arguments."""
     sh = shutil.which("sh")
-    if sh is None or sys.platform == "win32":
+    if sh is None or os.name == "nt":
         pytest.skip("needs a POSIX shell")
     stub = 'atl() { printf "%s\\0" atl "$@"; }\n'
     # The command under test is atl's own fix text; the shell must keep its values literal.
