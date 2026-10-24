@@ -173,12 +173,26 @@ def test_create_unconfirmed_success_is_outcome_unknown(harness: Harness, body: A
     assert result.code == 6, result.out
     assert result.error["code"] == "outcome_unknown"
     assert "data" not in result.out
-    if body != b"not json":
-        assert (
-            """atl confluence page search --cql 'space = "ENG" AND type = page AND """
-            """(title = "T")'""" in (result.error["fix"])
-        )
+    assert (
+        """atl confluence page search --cql 'space = "ENG" AND type = page AND """
+        """(title = "T")'""" in (result.error["fix"])
+    )
+    assert "recovery_argv" in result.error["details"]
     assert len(harness.server.writes()) == 1
+
+
+def test_create_server_error_includes_recovery_search(harness: Harness) -> None:
+    setup(harness)
+    harness.server.add("POST", CONTENT, {"message": "unavailable"}, status=503)
+    doc = {"space_key": "ENG", "title": " Release notes ", "body_storage": "<p>x</p>"}
+    result = run_input(harness, "confluence", "page", "create", doc=doc)
+    assert result.code == 6
+    assert result.error["code"] == "outcome_unknown"
+    assert result.error["details"]["reason"] == "server error 503"
+    exact = result.error["details"]["recovery_argv"]["exact_search"][-1]
+    assert 'title = " Release notes "' in exact
+    assert 'title = "Release notes"' in exact
+    assert "broad_search" in result.error["details"]["recovery_argv"]
 
 
 def test_create_requires_fields(harness: Harness) -> None:

@@ -136,7 +136,19 @@ def create(client: ServiceClient, doc: dict[str, Any]) -> dict[str, Any]:
     }
     if "parent_id" in doc:
         body["ancestors"] = [{"id": doc["parent_id"]}]
-    created = client.request("POST", "/rest/api/content", json_body=body)
+    try:
+        created = client.request("POST", "/rest/api/content", json_body=body)
+    except AtlError as exc:
+        if exc.code == "outcome_unknown":
+            recovery = _create_unknown(
+                client,
+                str(exc.details.get("reason", "create outcome unknown")),
+                doc["space_key"],
+                doc["title"],
+            )
+            exc.fix = recovery.fix
+            exc.details["recovery_argv"] = recovery.details["recovery_argv"]
+        raise
     reason = _create_mismatch(created, doc["title"], doc["space_key"])
     if reason is not None:
         raise _create_unknown(client, reason, doc["space_key"], doc["title"])
