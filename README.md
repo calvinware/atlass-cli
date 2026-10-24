@@ -30,22 +30,44 @@ ranked candidates, but never makes those decisions.
 | Tokens pasted into scripts, env files, or chat | A human logs in once; the secret lives only in the OS keyring |
 | Error text to parse | One JSON object, a fixed exit code, and a concrete `fix` |
 
-## 60-second quickstart
+## Story lifecycle
 
-```bash
-# 1. Install from a checkout into its own environment (Python 3.11+; macOS/Linux shown,
-#    Windows in docs/getting-started.md)
-python3 -m venv ~/.local/share/atl/venv
-~/.local/share/atl/venv/bin/python -m pip install .
-export PATH="$PATH:$HOME/.local/share/atl/venv/bin"   # add to your shell profile to keep it
-
-# 2. Discover offline: no config, no credentials
-atl commands
-atl schema 'jira story create'
+```mermaid
+flowchart TD
+    AC["Write acceptance criteria<br/>(caller)"] --> Feature["Find or create feature<br/>(caller chooses)"]
+    Feature --> Story["Story create<br/>(atl preflight)"]
+    Story --> StartCheck["atl jira requirements --to In Progress"]
+    StartCheck --> Start["Transition to In Progress"]
+    Start --> Attach["Attach test results"]
+    Attach --> DoneCheck["atl jira requirements --to Done"]
+    DoneCheck --> Done["Transition to Done"]
 ```
 
-3. **A human configures and logs in.** An admin copies [`atl.example.yaml`](atl.example.yaml) to
-   `atl.yaml` with your team's values. Then a person (never an agent) runs:
+Feature creation runs its own preflight, and a human confirms it first when the project's policy
+requires it. Transition only after `atl jira requirements` reports `ready: true`. The status names
+and the test-results attachment rule are example values from `atl.example.yaml`; your team's
+`atl.yaml` defines its own.
+
+## 60-second quickstart
+
+1. **Install** from a checkout into its own environment (Python 3.11+; macOS/Linux shown, Windows
+   in [Getting started](docs/getting-started.md)):
+
+   ```bash
+   python3 -m venv ~/.local/share/atl/venv
+   ~/.local/share/atl/venv/bin/python -m pip install .
+   export PATH="$PATH:$HOME/.local/share/atl/venv/bin"   # add to your shell profile to keep it
+   ```
+
+2. **Discover** offline, with no config and no credentials:
+
+   ```bash
+   atl commands
+   atl schema 'jira story create'
+   ```
+
+3. **Configure and log in**. An admin copies [`atl.example.yaml`](atl.example.yaml) to `atl.yaml`
+   with your team's values. Then a person (never an agent) runs:
 
    ```bash
    atl login --service jira          # hidden prompt; the token goes to the OS keyring
@@ -53,7 +75,7 @@ atl schema 'jira story create'
    atl config check --issue EXAMPLE-123
    ```
 
-4. **Work:**
+4. **Work**:
 
    ```bash
    atl jira feature find --text "single sign-on"

@@ -17,17 +17,23 @@ criteria and choosing a parent feature, stay with the caller.
 | **Team admin** owning `atl.yaml` | [Cookbook](admin-cookbook.md) | [Configuration reference](configuration.md), [Troubleshooting](troubleshooting.md) |
 | **Contributor** changing `atl` | [Contributing](contributing.md) | [Security](security.md), [Command behavior](commands.md) |
 
-## How it fits together
+## Story lifecycle
 
 ```mermaid
-flowchart LR
-    Caller["Developer or AI agent"] -->|"argv + JSON input"| atl["atl"]
-    Policy["atl.yaml<br/>team rules"] --> atl
-    Keyring["OS keyring<br/>credentials"] --> atl
-    atl -->|"HTTPS, verified TLS"| Jira["Jira Data Center"]
-    atl -->|"HTTPS, verified TLS"| Confluence["Confluence Data Center"]
-    atl -->|"one JSON object + exit code"| Caller
+flowchart TD
+    AC["Write acceptance criteria<br/>(caller)"] --> Feature["Find or create feature<br/>(caller chooses)"]
+    Feature --> Story["Story create<br/>(atl preflight)"]
+    Story --> StartCheck["atl jira requirements --to In Progress"]
+    StartCheck --> Start["Transition to In Progress"]
+    Start --> Attach["Attach test results"]
+    Attach --> DoneCheck["atl jira requirements --to Done"]
+    DoneCheck --> Done["Transition to Done"]
 ```
+
+Feature creation runs its own preflight, and a human confirms it first when the project's policy
+requires it. Transition only after `atl jira requirements` reports `ready: true`. The status names
+and the test-results attachment rule are example values from `atl.example.yaml`; your team's
+`atl.yaml` defines its own.
 
 ## What you get
 

@@ -108,20 +108,36 @@ atl jira transition EXAMPLE-42 --to "In Progress"
 `transition` re-runs the same checklist and refuses with
 [`requirements_unmet`](../reference/errors.md#requirements_unmet) (exit 4) if it is not ready.
 
+On a narrow screen, scroll the next two diagrams sideways to read their labels.
+
+<div role="region" aria-label="Transition decision diagram" tabindex="0" style="overflow-x: auto;">
+<div markdown="1" style="min-width: 720px;">
+
 ```mermaid
 flowchart TD
-    Start(["atl jira requirements KEY --to STATUS"]) --> Configured{"Project and destination<br/>configured in atl.yaml?"}
-    Configured -->|no| ConfigErr["project_not_configured or<br/>transition_not_configured (exit 2)"]
-    Configured -->|yes| Same{"Jira returns the same<br/>key and project?"}
-    Same -->|no| Moved["issue_key_mismatch (exit 2)<br/>re-run with the current key"]
-    Same -->|yes| Evaluate["Evaluate checks: source_status,<br/>transition_available, auto_set,<br/>screen_field, attachment"]
-    Evaluate --> Ready{"ready?"}
-    Ready -->|false| Fix["Apply each failed check's fix"]
-    Fix --> Start
-    Ready -->|true| Atomic{"plan.atomic?"}
-    Atomic -->|true| Post["atl jira transition<br/>one POST"]
-    Atomic -->|false| PreEdit["atl jira transition<br/>PUT, recheck, POST (non-atomic)"]
+    Check(["atl jira requirements<br/>KEY --to STATUS"]) --> Ready{"ready: true?"}
+    Ready -->|"no, or unverified"| Stop["Follow each failed check's fix<br/>nothing is written"]
+    Ready -->|yes| AutoSet{"auto_set configured?"}
+    AutoSet -->|no| Post["Transition POST"]
+    AutoSet -->|yes| OffScreen{"Any auto_set field<br/>off the transition screen?"}
+    OffScreen -->|"no, all on screen"| Post
+    OffScreen -->|"yes, valid pre_edit<br/>confirmed by ready"| Put["PUT off-screen fields"]
+    Put --> Recheck{"Re-read issue,<br/>full recheck ready?"}
+    Recheck -->|"no, or refresh failed"| Skip["Stop, no POST<br/>partial_transition (exit 7)"]
+    Recheck -->|yes| PostOn["Transition POST<br/>with on-screen fields"]
 ```
+
+</div>
+</div>
+
+The initial checklist covers the configured project and destination status, the issue's current
+key and project, the source status, whether the transition is available, where each `auto_set`
+field goes and whether its value is valid, required transition-screen fields, and required
+attachments. An unconfigured project or destination is an exit 2 error, and so is an issue that
+moved to another key or project ([`issue_key_mismatch`](../reference/errors.md#issue_key_mismatch)).
+An `auto_set` field that is off the transition screen fails this first checklist unless
+`pre_edit: true` is set and the field is editable with that value, so an invalid `pre_edit` never
+reaches a write.
 
 Values set during a transition come only from `auto_set` in `atl.yaml`. The checklist cannot see
 workflow validators that Jira does not expose over REST; if one rejects the transition, the result
@@ -131,7 +147,10 @@ is [`remote_validation`](../reference/errors.md#remote_validation) (exit 5).
 
 If `auto_set` targets a field that is not on the transition screen and the team opted in with
 `pre_edit: true`, the plan has an `edit` (PUT) before the `transition` (POST) and
-`"atomic": false`. These are two separate writes:
+`"atomic": false`. These are two separate writes. When everything succeeds:
+
+<div role="region" aria-label="Pre-edit sequence diagram" tabindex="0" style="overflow-x: auto;">
+<div markdown="1" style="min-width: 720px;">
 
 ```mermaid
 sequenceDiagram
@@ -141,33 +160,34 @@ sequenceDiagram
     participant Jira
     Caller->>atl: atl jira transition KEY --to STATUS
     atl->>Jira: Read issue, transitions, editmeta
-    atl->>atl: Checklist must be ready
-    atl->>Jira: PUT /rest/api/2/issue/KEY (off-screen fields only)
-    alt PUT rejected (4xx)
-        atl-->>Caller: original error, usually remote_validation (exit 5): edit rejected, transition not_attempted
-    else PUT outcome unknown
-        atl-->>Caller: outcome_unknown (exit 6): edit unknown, transition not_attempted
-    end
+    atl->>atl: Initial checklist is ready
+    atl->>Jira: PUT issue (off-screen fields only)
     atl->>Jira: Re-read issue and transitions
-    atl->>atl: Re-run the full checklist
-    alt Refresh fails or checklist no longer passes
-        atl-->>Caller: partial_transition (exit 7): edit succeeded, transition skipped
-    end
-    atl->>Jira: POST /rest/api/2/issue/KEY/transitions (on-screen fields)
-    alt POST rejected
-        atl-->>Caller: partial_transition (exit 7): edit succeeded, transition rejected
-    else POST outcome unknown
-        atl-->>Caller: outcome_unknown (exit 6): edit succeeded, transition unknown
-    else 2xx
-        atl-->>Caller: ok, atomic false, both operations succeeded
-    end
+    atl->>atl: Full checklist is still ready
+    atl->>Jira: POST transition (on-screen fields)
+    atl-->>Caller: ok, atomic false, both operations succeeded
 ```
+
+</div>
+</div>
+
+Any other outcome stops at the step that failed:
+
+| Situation | Result | POST |
+|-----------|--------|------|
+| PUT rejected | original error, usually `remote_validation` (exit 5) | not attempted |
+| PUT outcome unknown | `outcome_unknown` (exit 6), edit `unknown` | not attempted |
+| PUT succeeded, refresh fails or checklist no longer passes | `partial_transition` (exit 7) | skipped |
+| PUT succeeded, POST rejected | `partial_transition` (exit 7) | rejected |
+| PUT succeeded, POST outcome unknown | `outcome_unknown` (exit 6), edit `succeeded` | unknown |
+| both succeed | success, `atomic: false` | succeeded |
 
 > [!WARNING]
 > `atl` never rolls back the edit and never retries. A retry sends the PUT again, which can
 > overwrite a change made since. After exit 6 or 7: inspect the issue's status and edited fields,
 > reconcile with the issue owner, and retry only after a fresh `requirements` says
-> `ready: true`. See [`pre_edit` (non-atomic)](../configuration.md#pre_edit-non-atomic).
+> `ready: true`. See [`pre_edit` (non-atomic)](../configuration.md#pre_edit-non-atomic) and
+> [Writes and retries](../commands.md#writes-and-retries).
 
 ## Attach test results and move to Done
 
