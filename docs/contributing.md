@@ -16,7 +16,11 @@ python3.11 -m venv .venv
 ```
 
 On Windows, use `.venv\Scripts\python.exe`. CI runs lint, type checks, tests, and the build on
-Ubuntu, Windows, and macOS with Python 3.11 and 3.13, plus a dependency audit and a docs job.
+Ubuntu, Windows, and macOS with Python 3.11, 3.13, 3.14, and 3.15. The Python 3.15 setup step
+permits prereleases when a final release is unavailable. The dependency audit and the docs job run
+on Ubuntu with Python 3.11, 3.14, and 3.15. Python 3.12 is supported by the 3.11 floor but is not
+a CI matrix entry.
+Keep code compatible with 3.11: mypy checks `python_version = "3.11"` and Ruff targets `py311`.
 
 ## Architecture
 

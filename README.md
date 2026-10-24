@@ -163,6 +163,9 @@ REST endpoints:
 
 Atlassian Cloud is not supported.
 
+`atl` requires **Python 3.11 or later**. CI tests Python 3.11, 3.13, 3.14, and 3.15 on Ubuntu,
+Windows, and macOS. Python 3.12 falls inside that range but is not a CI matrix entry.
+
 > [!IMPORTANT]
 > The fixture-based tests model documented Data Center responses. **They do not prove live
 > compatibility.** Live status is recorded in the checklist below, which is run against a
@@ -202,5 +205,6 @@ python3.11 -m venv .venv
 ```
 
 On Windows, use `.venv\Scripts\python.exe`. CI runs lint, type checks, tests, and the build on
-Ubuntu, Windows, and macOS, plus a dependency audit and a docs job (reference freshness, strict
-site build, and link check). See [Contributing](docs/contributing.md).
+Ubuntu, Windows, and macOS with Python 3.11, 3.13, 3.14, and 3.15, plus a dependency audit and a
+docs job (reference freshness, strict site build, and link check) on Ubuntu with Python 3.11,
+3.14, and 3.15. See [Contributing](docs/contributing.md).
