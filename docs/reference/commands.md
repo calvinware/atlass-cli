@@ -189,12 +189,12 @@ Success (exit 0):
       "properties": {
         "key": {
           "type": "string",
-          "pattern": "^[A-Z][A-Z0-9_]*-[1-9][0-9]*$"
+          "pattern": "^[A-Z][A-Z0-9_]*-[1-9][0-9]*(?![\\s\\S])"
         },
         "body_file": {
           "type": "string",
           "minLength": 1,
-          "description": "Path to a UTF-8 JSON file, or '-' for stdin."
+          "description": "Path to a plain UTF-8 text file (not JSON, max 1 MiB), or '-' for stdin."
         }
       },
       "additionalProperties": false,

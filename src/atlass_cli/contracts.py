@@ -148,6 +148,11 @@ INPUT_PATH: dict[str, Any] = {
     "minLength": 1,
     "description": "Path to a UTF-8 JSON file, or '-' for stdin.",
 }
+TEXT_PATH: dict[str, Any] = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Path to a plain UTF-8 text file (not JSON, max 1 MiB), or '-' for stdin.",
+}
 START: dict[str, Any] = {"type": "integer", "minimum": 0, "default": 0}
 LIMIT: dict[str, Any] = {
     "type": "integer",
@@ -624,7 +629,7 @@ COMMANDS: list[CommandSpec] = [
     CommandSpec(
         path="jira comment add",
         summary="Add a plain-text comment read from a file or stdin.",
-        arguments=_obj({"key": ISSUE_KEY, "body_file": INPUT_PATH}, ["key", "body_file"]),
+        arguments=_obj({"key": ISSUE_KEY, "body_file": TEXT_PATH}, ["key", "body_file"]),
         success=_obj({"key": STR, "comment_id": STR}, ["key", "comment_id"]),
         errors=[*COMMON_REMOTE_ERRORS, *WRITE_ERRORS, "input_invalid"],
     ),

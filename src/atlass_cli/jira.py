@@ -7,7 +7,8 @@ import re
 import secrets
 import stat
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from functools import cache
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 
@@ -16,6 +17,7 @@ from atlass_cli.contracts import ISSUE_KEY_PATTERN, AtlError
 from atlass_cli.features import jql_quote
 from atlass_cli.fields import FieldMeta, FieldProblem, resolve, serialize
 from atlass_cli.metadata import (
+    IssueSnapshot,
     create_fields,
     create_issue_types,
     find_issue_type,
@@ -752,15 +754,21 @@ def _in_source(project: ProjectConfig, status: str, issue_project: Any, issue_st
 
 
 def _sample_issue(
-    client: ServiceClient, project: ProjectConfig, status: str, explicit: str | None
-) -> str | None:
-    """Return an issue that Jira reports in ``project`` and ``status``, or None."""
+    client: ServiceClient,
+    project: ProjectConfig,
+    status: str,
+    explicit: tuple[str, Callable[[], IssueSnapshot]] | None,
+) -> tuple[str, IssueSnapshot | None] | None:
+    """Return an issue that Jira reports in ``project`` and ``status``, or None.
+
+    The snapshot is returned only for the explicit issue; a search hit carries just status and
+    project, so the caller must read the full issue before evaluating it.
+    """
     if explicit is not None:
-        snapshot = get_issue(client, explicit)
-        if snapshot.key == explicit and _in_source(
-            project, status, snapshot.project, snapshot.status
-        ):
-            return explicit
+        key, load = explicit
+        snapshot = load()
+        if snapshot.key == key and _in_source(project, status, snapshot.project, snapshot.status):
+            return key, snapshot
     raw = client.get(
         "/rest/api/2/search",
         {
@@ -780,7 +788,7 @@ def _sample_issue(
     if isinstance(hit.get("key"), str) and _in_source(
         project, status, nested_str(fields.get("project"), "key"), nested_str(fields.get("status"))
     ):
-        return str(hit["key"])
+        return str(hit["key"]), None
     return None
 
 
@@ -793,9 +801,15 @@ def _drift(check: Check) -> Check:
 def config_check(client: ServiceClient, config: Config, explicit_issue: str | None) -> list[Check]:
     jira = require_jira(config)
     checks: list[Check] = []
+    # Read the explicit issue at most once per run, and only if a transition probe needs it.
+    explicit = (
+        (explicit_issue, cache(lambda: get_issue(client, explicit_issue)))
+        if explicit_issue is not None
+        else None
+    )
     for project in jira.projects.values():
         checks.extend(_check_project_create(client, project))
-        checks.extend(_check_project_transitions(client, project, explicit_issue))
+        checks.extend(_check_project_transitions(client, project, explicit))
     return checks
 
 
@@ -958,14 +972,16 @@ def _encoding_check(check_id: str, encoding: str, meta: FieldMeta) -> Check:
 
 
 def _check_project_transitions(
-    client: ServiceClient, project: ProjectConfig, explicit_issue: str | None
+    client: ServiceClient,
+    project: ProjectConfig,
+    explicit: tuple[str, Callable[[], IssueSnapshot]] | None,
 ) -> list[Check]:
     checks: list[Check] = []
     for config in project.transitions.values():
         for source in config.from_statuses:
             prefix = f"{project.key}:transition:{config.name}:{source}"
-            sample = _sample_issue(client, project, source, explicit_issue)
-            if sample is None:
+            found = _sample_issue(client, project, source, explicit)
+            if found is None:
                 checks.append(
                     Check(
                         prefix,
@@ -977,7 +993,9 @@ def _check_project_transitions(
                     )
                 )
                 continue
-            issue = get_issue(client, sample)
+            sample, issue = found
+            if issue is None:
+                issue = get_issue(client, sample)
             if issue.key != sample or not _in_source(project, source, issue.project, issue.status):
                 checks.append(
                     Check(

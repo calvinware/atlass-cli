@@ -27,8 +27,10 @@ atl confluence page search --cql 'space = "DOCS" AND title ~ "release"' --limit 
 
 Results have `id`, `title`, `type`, `space_key`, and `version`. Page through with `--start`
 and `next_start` (`null` on the last page). `--limit` is at most 100. A malformed result is left
-out of `results`, but `next_start` still counts it, so the next page never repeats or skips
-results.
+out of `results`, but `next_start` still counts it, so for a result set that does not change
+between requests the next page neither repeats nor skips results. Offset pagination cannot
+guarantee that when pages are created, edited, moved, or deleted between requests: results can
+then shift, and a later page may repeat or omit some.
 
 ## Create a page
 
@@ -70,10 +72,12 @@ exist. Do not run the create again until you have inspected the space. `error.fi
    you submitted.
 4. If a page matches what you submitted, the create was applied. Continue with that page ID and
    do not create it again.
-5. Retry the create only when the broader search and reads establish that the submitted page was
-   not created. If
-   the outcome is still ambiguous (a search or read fails, a page has your title but different
-   content, or more than one page matches), stop and ask a human.
+5. Results can shift between requests while you page through them, so even a completed scan can
+   miss the created page. A changing or incomplete result set cannot show that the page is absent.
+   If you find no match, do not retry the create yourself. Stop and ask a human to confirm in
+   Confluence that the page does not exist before anyone retries. Also stop and ask a human if the
+   outcome is otherwise ambiguous (a search or read fails, a page has your title but different
+   content, or more than one page matches).
 
 The full rule for every write is in [Writes and retries](../commands.md#writes-and-retries).
 

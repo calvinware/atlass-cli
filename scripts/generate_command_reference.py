@@ -12,7 +12,6 @@ argument parser before anything is rendered.
 from __future__ import annotations
 
 import argparse
-import copy
 import difflib
 import json
 import re
@@ -44,16 +43,6 @@ EXAMPLE_KEYS = frozenset(
 FIX_KEYS = frozenset({"meaning", "fix", "details"})
 # The schema calls the `schema` command's positional `command`; argparse stores it as `path`.
 ARGUMENT_DEST_ALIASES = {"command": "path"}
-# Rendered-note corrections for schema descriptions known to be wrong, keyed by (command,
-# argument) and mapped to (published text, rendered text). The published text must still match,
-# so the override fails loudly once the CLI schema is corrected and can then be removed.
-# `jira comment add --body-file` reads plain UTF-8 text, not JSON (tracked as a CLI follow-up).
-ARGUMENT_NOTE_OVERRIDES = {
-    ("jira comment add", "body_file"): (
-        "Path to a UTF-8 JSON file, or '-' for stdin.",
-        "Path to a plain UTF-8 text file (not JSON, max 1 MiB), or '-' for stdin.",
-    ),
-}
 # Success `data` fields that echo a parsed CLI argument, keyed by argparse dest.
 ECHOED_ARGUMENTS = {
     "key": "key",
@@ -590,22 +579,6 @@ def render_commands(
     return "\n".join(out) + "\n"
 
 
-def argument_schema(contract: Contract) -> dict[str, Any]:
-    """The published arguments schema with ARGUMENT_NOTE_OVERRIDES applied for rendering."""
-    schema: dict[str, Any] = copy.deepcopy(contract.schema["arguments"])
-    for (path, name), (published, rendered) in ARGUMENT_NOTE_OVERRIDES.items():
-        if path != contract.path:
-            continue
-        prop = schema.get("properties", {}).get(name, {})
-        if prop.get("description") != published:
-            raise GenerationError(
-                f"ARGUMENT_NOTE_OVERRIDES[{(path, name)!r}] is stale: the schema description is "
-                f"{prop.get('description')!r}. Remove or update the override."
-            )
-        prop["description"] = rendered
-    return schema
-
-
 def _command_section(
     contract: Contract, parser: argparse.ArgumentParser, example: dict[str, Any]
 ) -> list[str]:
@@ -623,7 +596,7 @@ def _command_section(
         "**Arguments**",
         "",
     ]
-    rows = property_rows(argument_schema(contract))
+    rows = property_rows(schema["arguments"])
     if rows:
         out += ["| Argument | CLI | Type | Required | Notes |", "|---|---|---|---|---|"]
         for name, kind, required, notes in rows:
