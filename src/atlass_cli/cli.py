@@ -319,7 +319,7 @@ def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in pairs:
         if key in out:
-            raise ValueError(f"duplicate key {key!r}")
+            raise ValueError("duplicate JSON key")
         out[key] = value
     return out
 
@@ -328,10 +328,29 @@ def _reject_constant(name: str) -> Any:
     raise ValueError(f"{name} is not valid JSON")
 
 
-def _schema_problem(error: ValidationError) -> dict[str, Any]:
+def _schema_path(error: ValidationError, schema: dict[str, Any], known_keys: frozenset[str]) -> str:
+    """Show schema-defined and atl.yaml-configured names, but mask other caller-defined keys."""
+    parts: list[str] = []
+    current: Any = schema
+    for part in error.absolute_path:
+        if isinstance(part, int):
+            parts.append(str(part))
+            current = current.get("items", {}) if isinstance(current, dict) else {}
+        elif isinstance(current, dict) and part in current.get("properties", {}):
+            parts.append(str(part))
+            current = current["properties"][part]
+        else:
+            parts.append(str(part) if part in known_keys else "<field>")
+            current = current.get("additionalProperties", {}) if isinstance(current, dict) else {}
+    return sanitize_text("/" + "/".join(parts), 300)
+
+
+def _schema_problem(
+    error: ValidationError, schema: dict[str, Any], known_keys: frozenset[str]
+) -> dict[str, Any]:
     """Describe a schema violation by location and rule, never by the rejected value."""
     problem: dict[str, Any] = {
-        "path": sanitize_text("/" + "/".join(str(p) for p in error.absolute_path), 300),
+        "path": _schema_path(error, schema, known_keys),
         "validator": str(error.validator),
     }
     expected = error.validator_value
@@ -352,7 +371,9 @@ def _schema_problem(error: ValidationError) -> dict[str, Any]:
     return problem
 
 
-def read_json_input(rt: Runtime, source: str, spec: CommandSpec) -> dict[str, Any]:
+def read_json_input(
+    rt: Runtime, source: str, spec: CommandSpec, known_keys: frozenset[str] = frozenset()
+) -> dict[str, Any]:
     assert spec.input is not None
     text = _read_source(rt, source, "input", MAX_INPUT_BYTES)
     try:
@@ -371,7 +392,7 @@ def read_json_input(rt: Runtime, source: str, spec: CommandSpec) -> dict[str, An
             "input_invalid",
             f"The input does not match the {spec.path} input schema.",
             f"Correct the listed problems; see `atl schema '{spec.path}'` (input).",
-            {"errors": [_schema_problem(e) for e in errors[:20]]},
+            {"errors": [_schema_problem(e, spec.input, known_keys) for e in errors[:20]]},
         )
     assert isinstance(doc, dict)
     return doc
@@ -590,8 +611,13 @@ def cmd_config_check(args: argparse.Namespace, rt: Runtime) -> Any:
 def _jira_project_command(
     args: argparse.Namespace, rt: Runtime, spec_path: str
 ) -> tuple[Config, dict[str, Any]]:
-    doc = read_json_input(rt, args.input, COMMANDS_BY_PATH[spec_path])
-    return _load(rt, args), doc
+    config = _load(rt, args)
+    known = frozenset(
+        name
+        for project in (config.jira.projects.values() if config.jira else ())
+        for name in project.fields
+    )
+    return config, read_json_input(rt, args.input, COMMANDS_BY_PATH[spec_path], known)
 
 
 def cmd_story_create(args: argparse.Namespace, rt: Runtime) -> Any:

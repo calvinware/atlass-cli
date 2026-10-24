@@ -155,7 +155,7 @@ def test_schema_errors_omit_rejected_values(harness: Harness) -> None:
     doc = {
         "project": SECRET_SENTINEL,
         "summary": ["x"],
-        "fields": {"team": {"v": SECRET_SENTINEL}},
+        "fields": {"work_started": {"v": SECRET_SENTINEL}},
         "unexpected": SECRET_SENTINEL,
     }
     result = harness.run("jira", "story", "create", "--input", "-", stdin=json.dumps(doc).encode())
@@ -165,11 +165,23 @@ def test_schema_errors_omit_rejected_values(harness: Harness) -> None:
     problems = {p["path"]: p for p in result.error["details"]["errors"]}
     assert problems["/summary"] == {"path": "/summary", "validator": "type", "expected": "string"}
     assert problems["/project"]["validator"] == "pattern"
-    assert problems["/fields/team"]["validator"] == "oneOf"
+    assert problems["/fields/work_started"]["validator"] == "oneOf"
     assert "summary" in problems["/"]["allowed"]
+
+    doc["fields"] = {SECRET_SENTINEL: {"v": "invalid"}}
+    result = harness.run("jira", "story", "create", "--input", "-", stdin=json.dumps(doc).encode())
+    assert result.error["code"] == "input_invalid"
+    assert SECRET_SENTINEL not in result.stdout
+    assert "/fields/<field>" in {problem["path"] for problem in result.error["details"]["errors"]}
 
     result = harness.run("jira", "story", "create", "--input", "-", stdin=b"{}")
     assert result.error["details"]["errors"][0]["missing"] == ["project", "summary"]
+
+    duplicate = json.dumps({"project": "EXAMPLE", "summary": "ok"})[:-1]
+    duplicate += f', "{SECRET_SENTINEL}": 1, "{SECRET_SENTINEL}": 2}}'
+    result = harness.run("jira", "story", "create", "--input", "-", stdin=duplicate.encode())
+    assert result.error["code"] == "input_invalid"
+    assert SECRET_SENTINEL not in result.stdout
 
 
 def test_internal_error_is_sanitized(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:

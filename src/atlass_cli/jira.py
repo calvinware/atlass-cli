@@ -232,9 +232,9 @@ def _input_fields(
     if unknown:
         raise AtlError(
             "input_invalid",
-            f"Unknown field name(s) for {project.key}: {', '.join(unknown)}.",
+            f"{len(unknown)} unknown field name(s) for {project.key}.",
             f"Use friendly names defined in atl.yaml: {', '.join(sorted(project.fields))}.",
-            {"unknown": unknown},
+            {"unknown_count": len(unknown), "allowed": sorted(project.fields)},
         )
     reserved = sorted(name for name in raw if name in RESERVED_FIELDS)
     if reserved and not allow_reserved:
