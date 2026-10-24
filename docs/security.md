@@ -24,7 +24,7 @@ others do not apply.
 | Jira workflow integrity | writes that skip team rules; silent partial writes; false success | Jira story/feature create run the create preflight and transitions run the workflow checklist (`atl jira requirements`) before the first write; the transition checklist re-runs after a `pre_edit` PUT. Comments, attachments, and Confluence writes are not governed by the workflow checklist; they have their own checks (non-empty comment body within 1 MiB; attachment is an existing regular file within `max_attachment_bytes`; Confluence `expected_version` against a fresh read, page type, and a well-formed title, version, and body). Also: `pre_edit` is opt-in; ordered operation statuses; `partial_transition` / `outcome_unknown`; success only when the response confirms the write; no automatic retries |
 | Agent driving `atl` | prompt injection from remote content; invented approvals | remote content is labeled untrusted data; the CLI never writes acceptance criteria or picks features; `human_confirmation` is an attestation, never identity proof |
 | Team config | malicious or malformed YAML | `SafeLoader` subclass; no custom tags, anchors, aliases, or duplicate keys; strict schema; 256 KiB cap |
-| Local resources | huge inputs or responses | caps on input JSON (10 MiB), comments (1 MiB), secrets (4 KiB), config (256 KiB), and responses (32 MiB); bounded pagination and search limits |
+| Local resources | huge inputs or responses | caps on input JSON (10 MiB), comments (1 MiB), secrets (4 KiB), config (256 KiB), and responses (32 MiB); bounded pagination and search limits, including a feature-find word-search pool of at most 100 recent matches (`truncated` reports when more may exist) |
 
 ## Chapter applicability
 
@@ -57,8 +57,12 @@ others do not apply.
   with the caller: acceptance criteria, feature choice, and human approval for features.
   `human_confirmed` blocks feature creation until an attestation is supplied, and the result
   states `identity_verified: false`.
-- **LLM10 Unbounded consumption:** search limits are capped at 100 (25 for feature find), metadata
-  pagination at 50 pages, and inputs and responses are size-capped. No write is retried.
+- **LLM10 Unbounded consumption:** search limits are capped at 100, metadata pagination at 50
+  pages, and inputs and responses are size-capped. Feature find returns at most 25 ranked
+  candidates (`--limit`), but that cap does not bound the work behind it: keys named in `--text`
+  are fetched by a separate key lookup bounded by the number of named keys, and the word search
+  reads at most `CANDIDATE_POOL` (100) of the most recently updated matches and reports
+  `truncated: true` when older matches may have been left out. No write is retried.
 
 ## Partial-write handling
 

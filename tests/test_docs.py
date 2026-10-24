@@ -205,25 +205,18 @@ def test_examples_must_match_their_call(
     assert any(expected in p and command in p for p in problems), problems
 
 
-def test_comment_body_file_row_says_plain_text() -> None:
-    reference = gen.COMMANDS_MD.read_text(encoding="utf-8")
-    (row,) = [line for line in reference.splitlines() if line.startswith("| `body_file` |")]
-    assert "plain UTF-8 text file" in row
-    assert "JSON file" not in row
-
-
-def test_stale_argument_note_override_fails(
-    discovered: tuple[list[gen.Contract], dict[str, str]], monkeypatch: pytest.MonkeyPatch
+def test_comment_body_file_schema_and_row_say_plain_text(
+    discovered: tuple[list[gen.Contract], dict[str, str]],
 ) -> None:
     contracts, _ = discovered
     (comment,) = [c for c in contracts if c.path == "jira comment add"]
-    fixed = copy.deepcopy(comment.schema)
-    fixed["arguments"]["properties"]["body_file"]["description"] = "Path to a UTF-8 text file."
-    with pytest.raises(gen.GenerationError, match="is stale"):
-        gen.argument_schema(gen.Contract(comment.path, comment.summary, fixed))
-    assert comment.schema["arguments"]["properties"]["body_file"]["description"] == (
-        "Path to a UTF-8 JSON file, or '-' for stdin."
-    )
+    prop = comment.schema["arguments"]["properties"]["body_file"]
+    assert "plain UTF-8 text file" in prop["description"]
+    assert "JSON file" not in prop["description"]
+    assert prop["minLength"] == 1
+    reference = gen.COMMANDS_MD.read_text(encoding="utf-8")
+    (row,) = [line for line in reference.splitlines() if line.startswith("| `body_file` |")]
+    assert prop["description"] in row
 
 
 def test_missing_error_fix_is_reported(

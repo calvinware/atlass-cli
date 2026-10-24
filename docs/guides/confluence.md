@@ -27,8 +27,10 @@ atl confluence page search --cql 'space = "DOCS" AND title ~ "release"' --limit 
 
 Results have `id`, `title`, `type`, `space_key`, and `version`. Page through with `--start`
 and `next_start` (`null` on the last page). `--limit` is at most 100. A malformed result is left
-out of `results`, but `next_start` still counts it, so the next page never repeats or skips
-results.
+out of `results`, but `next_start` still counts it, so for a result set that does not change
+between requests the next page neither repeats nor skips results. Offset pagination cannot
+guarantee that when pages are created, edited, moved, or deleted between requests: results can
+then shift, and a later page may repeat or omit some.
 
 ## Create a page
 

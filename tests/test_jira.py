@@ -1091,6 +1091,26 @@ def test_config_check_probes_transitions_with_sample(harness: Harness) -> None:
     assert checks[f"{in_progress}:transition_available"]["details"]["sample_issue"] == "EXAMPLE-2"
 
 
+def test_config_check_reads_each_sample_issue_once(harness: Harness) -> None:
+    setup_config_check(harness)
+    result = harness.run("config", "check", "--issue", "EXAMPLE-1")
+    assert result.code == 0, result.out
+    checks = {c["id"]: c for c in result.data["checks"]}
+    for check_id, sample in (
+        ("EXAMPLE:transition:in_progress:To Do", "EXAMPLE-1"),
+        ("EXAMPLE:transition:done:In Progress", "EXAMPLE-2"),
+    ):
+        assert checks[f"{check_id}:source_status"]["status"] == "pass"
+        assert checks[f"{check_id}:transition_available"]["details"]["sample_issue"] == sample
+    gets = harness.server.paths("GET")
+    # The explicit issue is read once and reused; the searched sample is read once before probing.
+    assert gets.count(ISSUE_1) == 1
+    assert gets.count(ISSUE_2) == 1
+    assert gets.count(f"{ISSUE_1}/transitions") == 1
+    assert gets.count(f"{ISSUE_2}/transitions") == 1
+    assert harness.server.writes() == []
+
+
 @pytest.mark.parametrize("lie", ["search_status", "issue_status"])
 def test_config_check_wrong_status_sample_is_unverified(harness: Harness, lie: str) -> None:
     setup_create(harness)
@@ -1425,6 +1445,7 @@ def test_config_check_explicit_issue_mismatch_uses_searched_sample(
         assert ids[check_id]["status"] == "pass"
         assert ids[check_id]["details"]["sample_issue"] == sample
     assert f"{ISSUE_3}/transitions" not in harness.server.paths()
+    assert harness.server.paths("GET").count(ISSUE_3) == 1
     # Each searched sample is re-read before it is probed.
     assert harness.server.paths("GET").count(ISSUE_1) == 1
     assert harness.server.paths("GET").count(ISSUE_2) == 1
