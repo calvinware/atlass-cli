@@ -1,0 +1,26 @@
+{
+  "maxResults": 100,
+  "startAt": 0,
+  "total": 3,
+  "isLast": true,
+  "values": [
+    {
+      "self": "https://jira.example.test/jira/rest/api/2/issuetype/10001",
+      "id": "10001",
+      "name": "Story",
+      "subtask": false
+    },
+    {
+      "self": "https://jira.example.test/jira/rest/api/2/issuetype/10000",
+      "id": "10000",
+      "name": "Feature",
+      "subtask": false
+    },
+    {
+      "self": "https://jira.example.test/jira/rest/api/2/issuetype/10002",
+      "id": "10002",
+      "name": "Bug",
+      "subtask": false
+    }
+  ]
+}

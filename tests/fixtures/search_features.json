@@ -1,0 +1,46 @@
+{
+  "startAt": 0,
+  "maxResults": 100,
+  "total": 3,
+  "issues": [
+    {
+      "id": "1",
+      "key": "EXAMPLE-12",
+      "fields": {
+        "summary": "Login audit trail",
+        "project": {
+          "key": "EXAMPLE"
+        },
+        "status": {
+          "name": "Open"
+        }
+      }
+    },
+    {
+      "id": "2",
+      "key": "EXAMPLE-10",
+      "fields": {
+        "summary": "Single sign-on for login",
+        "project": {
+          "key": "EXAMPLE"
+        },
+        "status": {
+          "name": "Open"
+        }
+      }
+    },
+    {
+      "id": "3",
+      "key": "EXAMPLE-11",
+      "fields": {
+        "summary": "Reporting dashboards",
+        "project": {
+          "key": "EXAMPLE"
+        },
+        "status": {
+          "name": "Open"
+        }
+      }
+    }
+  ]
+}

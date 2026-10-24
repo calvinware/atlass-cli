@@ -1,0 +1,38 @@
+# atl team configuration (version 1). Copy to atl.yaml in the repository root and replace the
+# placeholder values with your team's real URLs, field names/IDs, and workflow statuses.
+# Never put credentials in this file; use `atl login`, which stores them in the OS keyring.
+version: 1
+jira:
+  base_url: https://jira.example.test/jira
+  # ca_bundle: /path/to/team-ca.pem
+  max_attachment_bytes: 52428800
+  projects:
+    - key: EXAMPLE
+      allowed_issue_types: [Story, Feature]
+      story_type: Story
+      feature_type: Feature
+      feature_create_policy: human_confirmed # or automatic
+      fields:
+        acceptance_criteria: {jira_name: Acceptance Criteria, encoding: text}
+        feature_link: {jira_name: Parent Link, encoding: issue_key_string}
+        work_started: {jira_name: Work Started, encoding: single_option}
+      create:
+        required: [acceptance_criteria, feature_link]
+      transitions:
+        in_progress:
+          from: [To Do]
+          to: In Progress
+          pre_edit: false
+          auto_set: {work_started: Yes}
+          require: []
+        done:
+          from: [In Progress]
+          to: Done
+          pre_edit: false
+          auto_set: {}
+          require:
+            - kind: attachment_filename
+              pattern: "{key}_TestResults_*"
+confluence:
+  base_url: https://confluence.example.test/confluence
+  # ca_bundle: /path/to/team-ca.pem
