@@ -2,7 +2,8 @@
 
 This page takes you from a fresh machine to a verified `atl` setup on Windows, macOS, or Linux.
 You need Python 3.11 or later, network access to your Jira and Confluence Data Center servers,
-and a native OS keyring.
+and a native OS keyring. CI tests Python 3.11, 3.13, 3.14, and 3.15 on all three systems; 3.12
+is not a CI matrix entry.
 
 > [!IMPORTANT]
 > A **human** runs `atl login`. The secret goes from a hidden prompt (or stdin) straight into the
