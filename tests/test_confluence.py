@@ -147,6 +147,8 @@ def test_create_sends_storage(harness: Harness) -> None:
         {k: v for k, v in CREATED.items() if k != "title"},
         {**CREATED, "title": "Other"},
         {k: v for k, v in CREATED.items() if k != "space"},
+        {**CREATED, "space": "ENG"},
+        {**CREATED, "space": ["ENG"]},
         {**CREATED, "space": {"key": "OPS"}},
         {k: v for k, v in CREATED.items() if k != "version"},
         {**CREATED, "version": {"number": 2}},

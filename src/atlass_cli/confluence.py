@@ -32,7 +32,8 @@ def _version(page: dict[str, Any]) -> int:
 
 
 def _space_key(page: dict[str, Any]) -> str | None:
-    key = (page.get("space") or {}).get("key")
+    space = page.get("space")
+    key = space.get("key") if isinstance(space, dict) else None
     return key if isinstance(key, str) else None
 
 
