@@ -4,13 +4,23 @@ import copy
 import json
 import re
 import shlex
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 
 from atlass_cli import transport, workflow
-from tests.conftest import Harness, config_text, fixture, jira_path
+from tests.conftest import (
+    SHELL_SENTINELS,
+    Harness,
+    backticked,
+    config_text,
+    fixture,
+    jira_path,
+    run_argv,
+    run_in_posix_shell,
+)
 
 KEY = "EXAMPLE-1"
 ISSUE = jira_path(f"/rest/api/2/issue/{KEY}")
@@ -655,7 +665,33 @@ def test_partial_fix_commands_are_shell_quoted(to: str) -> None:
         ["atl", "jira", "transition", KEY, "--to", to],
     ]
     assert "Do not roll back" in error.fix
-    assert "Inspect" in error.fix and "fresh" in error.fix
+    assert "Inspect" in error.fix and "fresh" in error.fix and "ready: true" in error.fix
+    assert "POSIX shells" in error.fix and "details.recovery_argv" in error.fix
+
+
+@pytest.mark.parametrize("to", SHELL_SENTINELS)
+def test_partial_fix_commands_stay_literal_in_a_real_posix_shell(to: str, tmp_path: Path) -> None:
+    error = workflow._partial(KEY, to, [], [], None, "skipped", "refresh failed", {})
+    commands = backticked(error.fix, "atl jira")
+    assert [run_in_posix_shell(c, tmp_path) for c in commands] == [
+        ["atl", "jira", "requirements", KEY, "--to", to],
+        ["atl", "jira", "transition", KEY, "--to", to],
+    ]
+    # The inspect -> reconcile -> fresh ready: true -> transition order is preserved.
+    fix = error.fix
+    assert fix.index("Inspect") < fix.index("reconcile") < fix.index("ready: true")
+    assert fix.index(commands[0]) < fix.index("ready: true") < fix.index(commands[1])
+
+
+@pytest.mark.parametrize("to", SHELL_SENTINELS)
+def test_partial_recovery_argv_is_literal_without_a_shell(to: str) -> None:
+    error = workflow._partial(KEY, to, [], [], None, "skipped", "refresh failed", {})
+    argv = error.details["recovery_argv"]
+    assert argv == {
+        "requirements": ["atl", "jira", "requirements", KEY, "--to", to],
+        "transition": ["atl", "jira", "transition", KEY, "--to", to],
+    }
+    assert [run_argv(a) for a in argv.values()] == list(argv.values())
 
 
 def test_requirements_hint_round_trips_apostrophe() -> None:

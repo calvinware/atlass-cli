@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import stat
 import sys
 from pathlib import Path
@@ -14,7 +15,14 @@ from atlass_cli import jira as jira_module
 from atlass_cli.auth import Credential
 from atlass_cli.config import JiraConfig, parse_config_file
 from atlass_cli.contracts import AtlError
-from atlass_cli.features import CANDIDATE_POOL, jql_quote, rank, tokenize
+from atlass_cli.features import (
+    CANDIDATE_POOL,
+    WEIGHT_EXACT_KEY,
+    WEIGHT_TOKEN,
+    jql_quote,
+    rank,
+    tokenize,
+)
 from atlass_cli.jira import attachment_add, feature_create
 from atlass_cli.transport import ServiceClient
 from tests.conftest import (
@@ -620,9 +628,7 @@ def setup_find(harness: Harness) -> None:
         jql = request.url.params["jql"]
         if "key in (" not in jql:
             return httpx.Response(200, json=search_body)
-        matches = [
-            issue for issue in search_body["issues"] if f'"{issue["key"]}"' in jql
-        ]
+        matches = [issue for issue in search_body["issues"] if f'"{issue["key"]}"' in jql]
         start = int(request.url.params["startAt"])
         size = int(request.url.params["maxResults"])
         return httpx.Response(
@@ -754,7 +760,7 @@ def test_attachment_exactly_at_limit(harness: Harness) -> None:
     assert b"\r\n\r\nxxxxxxxxxx\r\n--" in request.content
 
 
-def test_attachment_growing_file_never_exceeds_declared_size(
+def test_attachment_growing_while_read_is_rejected_before_sending(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     setup_attach(harness)
@@ -763,13 +769,34 @@ def test_attachment_growing_file_never_exceeds_declared_size(
     real_fstat = os.fstat
 
     def fstat_then_grow(fd: int) -> os.stat_result:
-        # Grow after both pre-upload checks so only the stream-time check can catch it.
         declared = real_fstat(fd)
         with path.open("ab") as handle:
-            handle.write(b"y" * 100)
+            handle.write(b"y")
         return declared
 
     monkeypatch.setattr(os, "fstat", fstat_then_grow)
+    harness.server.add("POST", ATTACH, handler=_attachment_ok)
+    result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
+    assert result.code == 2
+    assert result.error["code"] == "file_invalid"
+    assert "changed while atl was reading it" in result.error["message"]
+    assert harness.server.requests == []
+
+
+def test_attachment_stream_guard_aborts_body_that_grows(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_attach(harness)
+    (harness.tmp_path / "f.txt").write_bytes(b"x" * 5)
+    real_snapshot = jira_module._snapshot
+
+    def snapshot_then_grow(path: Path, fd: int, opened: os.stat_result, handle: Any) -> None:
+        real_snapshot(path, fd, opened, handle)
+        handle.seek(0, os.SEEK_END)
+        handle.write(b"y" * 100)
+        handle.seek(0)
+
+    monkeypatch.setattr(jira_module, "_snapshot", snapshot_then_grow)
     harness.server.add("POST", ATTACH, handler=_attachment_ok)
     result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
     assert result.code == 6
@@ -1727,12 +1754,12 @@ def test_createmeta_empty_page_with_markers_still_fails_closed(
 
 
 def _open_then(path: Path, action: Any) -> Any:
-    real_open = Path.open
+    real_open = os.open
 
-    def patched(self: Path, *args: Any, **kwargs: Any) -> Any:
-        if self == path and args[:1] == ("rb",):
+    def patched(target: Any, *args: Any, **kwargs: Any) -> Any:
+        if os.fspath(target) == os.fspath(path):
             action()
-        return real_open(self, *args, **kwargs)
+        return real_open(target, *args, **kwargs)
 
     return patched
 
@@ -1743,7 +1770,7 @@ def test_attachment_grown_past_limit_before_open_is_rejected(
     setup_attach(harness)
     path = harness.tmp_path / "f.txt"
     path.write_bytes(b"x" * 5)
-    monkeypatch.setattr(Path, "open", _open_then(path, lambda: path.write_bytes(b"x" * 11)))
+    monkeypatch.setattr(os, "open", _open_then(path, lambda: path.write_bytes(b"x" * 11)))
     harness.server.add("POST", ATTACH, handler=_attachment_ok)
     result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
     assert result.code == 2
@@ -1793,7 +1820,7 @@ def test_attachment_uses_opened_file_size(
     setup_attach(harness)
     path = harness.tmp_path / "f.txt"
     path.write_bytes(b"x" * 5)
-    monkeypatch.setattr(Path, "open", _open_then(path, lambda: path.write_bytes(b"y" * 8)))
+    monkeypatch.setattr(os, "open", _open_then(path, lambda: path.write_bytes(b"y" * 8)))
     reply = _attachment_reply([{"id": "500", "filename": "f.txt", "size": 8}])
     harness.server.add("POST", ATTACH, handler=reply)
     result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
@@ -1801,3 +1828,250 @@ def test_attachment_uses_opened_file_size(
     (request,) = harness.server.requests
     assert int(request.headers["content-length"]) == len(request.content)
     assert b"\r\n\r\nyyyyyyyy\r\n--" in request.content
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs POSIX FIFOs")
+def test_attachment_swapped_for_real_fifo_does_not_block(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_attach(harness)
+    path = harness.tmp_path / "f.txt"
+    path.write_bytes(b"x")
+
+    def swap() -> None:
+        path.unlink()
+        os.mkfifo(path)
+
+    def hung(signum: int, frame: Any) -> None:
+        raise TimeoutError("open() blocked on the FIFO")
+
+    monkeypatch.setattr(os, "open", _open_then(path, swap))
+    previous = signal.signal(signal.SIGALRM, hung)
+    signal.setitimer(signal.ITIMER_REAL, 5)
+    try:
+        result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+    assert result.code == 2
+    assert result.error["code"] == "file_invalid"
+    assert result.error["message"].startswith("Not a regular file")
+    assert harness.server.requests == []
+
+
+def test_attachment_same_size_replacement_before_open_is_rejected(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_attach(harness)
+    path = harness.tmp_path / "f.txt"
+    path.write_bytes(b"x" * 5)
+    other = harness.tmp_path / "other.txt"
+    other.write_bytes(b"y" * 5)
+    monkeypatch.setattr(os, "open", _open_then(path, lambda: os.replace(other, path)))
+    harness.server.add("POST", ATTACH, handler=_attachment_ok)
+    result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
+    assert result.code == 2
+    assert result.error["code"] == "file_invalid"
+    assert "was replaced" in result.error["message"]
+    assert harness.server.requests == []
+
+
+def test_attachment_uploads_snapshot_despite_in_stream_rewrite(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_attach(harness)
+    path = harness.tmp_path / "f.txt"
+    path.write_bytes(b"x" * 5)
+    real_multipart = jira_module._multipart
+
+    def rewrite_then_stream(*args: Any) -> Any:
+        with path.open("r+b") as handle:
+            handle.write(b"y" * 5)
+        return real_multipart(*args)
+
+    monkeypatch.setattr(jira_module, "_multipart", rewrite_then_stream)
+    harness.server.add(
+        "POST", ATTACH, handler=_attachment_reply([{"id": "500", "filename": "f.txt", "size": 5}])
+    )
+    result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
+    assert result.code == 0, result.out
+    (request,) = harness.server.requests
+    assert b"\r\n\r\nxxxxx\r\n--" in request.content
+    assert path.read_bytes() == b"yyyyy"
+
+
+@pytest.mark.parametrize("first_markers", [{"total": 99}, {"total": 99, "isLast": False}])
+def test_createmeta_earlier_total_bounds_unmarked_empty_page(
+    harness: Harness, first_markers: dict[str, Any]
+) -> None:
+    meta = fixture("createmeta_story_fields.json")
+    unmarked = {k: v for k, v in meta.items() if k not in ("isLast", "total")}
+    setup_create(harness)
+    harness.server.routes[("GET", STORY_FIELDS)] = []
+    harness.server.add(
+        "GET", STORY_FIELDS, {**unmarked, **first_markers, "values": meta["values"][:4]}
+    )
+    harness.server.add("GET", STORY_FIELDS, {**unmarked, "startAt": 4, "values": []})
+    result = create_story(harness, STORY)
+    assert result.code == 6
+    assert result.error["code"] == "metadata_incomplete"
+    assert result.error["details"]["total"] == 99
+    assert harness.server.writes() == []
+
+
+def test_createmeta_earlier_total_ends_unmarked_pages(harness: Harness) -> None:
+    meta = fixture("createmeta_story_fields.json")
+    unmarked = {k: v for k, v in meta.items() if k not in ("isLast", "total")}
+    end = len(meta["values"])
+    setup_create(harness)
+    harness.server.routes[("GET", STORY_FIELDS)] = []
+    harness.server.add(
+        "GET", STORY_FIELDS, {**unmarked, "total": end, "values": meta["values"][:4]}
+    )
+    harness.server.add(
+        "GET", STORY_FIELDS, {**unmarked, "startAt": 4, "values": meta["values"][4:]}
+    )
+    assert create_story(harness, STORY).code == 0
+    assert harness.server.paths("GET").count(STORY_FIELDS) == 2
+
+
+def test_createmeta_changed_total_fails_closed(harness: Harness) -> None:
+    meta = fixture("createmeta_story_fields.json")
+    end = len(meta["values"])
+    setup_create(harness)
+    harness.server.routes[("GET", STORY_FIELDS)] = []
+    first = {**meta, "values": meta["values"][:4], "isLast": False, "total": end + 1}
+    harness.server.add("GET", STORY_FIELDS, first)
+    harness.server.add(
+        "GET",
+        STORY_FIELDS,
+        {**meta, "values": meta["values"][4:], "isLast": True, "total": end, "startAt": 4},
+    )
+    result = create_story(harness, STORY)
+    assert result.error["code"] == "metadata_incomplete"
+    assert result.error["details"]["previous_total"] == end + 1
+    assert harness.server.writes() == []
+
+
+def _text_starts(harness: Harness) -> list[str]:
+    return [q["startAt"] for q in _search_requests(harness) if "key in (" not in q["jql"]]
+
+
+@pytest.mark.parametrize(
+    ("hits", "send_total", "starts", "truncated"),
+    [
+        (150, True, ["0", "50"], True),
+        (80, True, ["0", "50"], False),
+        (150, False, ["0", "50"], True),
+        (80, False, ["0", "50", "80"], False),
+    ],
+    ids=["over-pool-total", "under-pool-total", "over-pool-no-total", "under-pool-no-total"],
+)
+def test_feature_find_text_pool_pages_past_server_cap(
+    harness: Harness, hits: int, send_total: bool, starts: list[str], truncated: bool
+) -> None:
+    harness.write_config()
+    harness.store()
+    text_hits = [_feature(n, f"login {n}") for n in range(1, hits + 1)]
+    search = _feature_search(text_hits, [], page_cap=50, send_total=send_total)
+    harness.server.add("GET", SEARCH, handler=search)
+    data = harness.run("jira", "feature", "find", "--text", "login", "--limit", "25").data
+    assert _text_starts(harness) == starts
+    assert data["truncated"] is truncated
+    # Ties rank by key number, so the lowest-numbered pooled hit leads.
+    assert data["candidates"][0]["key"] == "EXAMPLE-1"
+    assert len(data["candidates"]) == 25
+    requested = [int(q["maxResults"]) for q in _search_requests(harness)]
+    assert requested == [CANDIDATE_POOL - int(start) for start in starts]
+
+
+def test_feature_find_text_pool_empty_page_short_of_total_is_truncated(harness: Harness) -> None:
+    harness.write_config()
+    harness.store()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params["startAt"])
+        issues = [_feature(1, "login"), _feature(2, "login")] if start == 0 else []
+        return httpx.Response(200, json={"startAt": start, "total": 5, "issues": issues})
+
+    harness.server.add("GET", SEARCH, handler=respond)
+    data = harness.run("jira", "feature", "find", "--text", "login").data
+    assert [c["key"] for c in data["candidates"]] == ["EXAMPLE-1", "EXAMPLE-2"]
+    assert data["truncated"] is True
+    assert _text_starts(harness) == ["0", "2"]
+
+
+def test_feature_find_named_empty_page_short_of_total_is_response_invalid(
+    harness: Harness,
+) -> None:
+    harness.write_config()
+    harness.store()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params["startAt"])
+        issues = [_feature(5, "Alpha")] if start == 0 else []
+        return httpx.Response(200, json={"startAt": start, "total": 2, "issues": issues})
+
+    harness.server.add("GET", SEARCH, handler=respond)
+    result = harness.run("jira", "feature", "find", "--text", "EXAMPLE-5 EXAMPLE-6")
+    assert result.code == 6
+    assert result.error["code"] == "response_invalid"
+    assert result.error["message"] == "Jira returned an invalid named feature result."
+    assert harness.server.writes() == []
+
+
+def test_feature_find_named_keys_page_without_total(harness: Harness) -> None:
+    harness.write_config()
+    harness.store()
+    named = [_feature(5, "Alpha"), _feature(6, "Beta")]
+    harness.server.add(
+        "GET", SEARCH, handler=_feature_search([], named, page_cap=1, send_total=False)
+    )
+    data = harness.run("jira", "feature", "find", "--text", "EXAMPLE-5 EXAMPLE-6 EXAMPLE-7").data
+    assert [c["key"] for c in data["candidates"]] == ["EXAMPLE-5", "EXAMPLE-6"]
+    named_starts = [q["startAt"] for q in _search_requests(harness) if "key in (" in q["jql"]]
+    assert named_starts == ["0", "1", "2"]
+
+
+def test_feature_find_overlapping_text_and_named_hit_ranks_once(harness: Harness) -> None:
+    harness.write_config()
+    harness.store()
+    overlap = _feature(5, "Legacy login portal")
+    text_hits = [overlap, _feature(6, "login widget")]
+    harness.server.add("GET", SEARCH, handler=_feature_search(text_hits, [overlap]))
+    data = harness.run("jira", "feature", "find", "--text", "login EXAMPLE-5").data
+    assert [(c["key"], c["score"]) for c in data["candidates"]] == [
+        ("EXAMPLE-5", WEIGHT_EXACT_KEY + WEIGHT_TOKEN),
+        ("EXAMPLE-6", WEIGHT_TOKEN),
+    ]
+
+
+def test_feature_find_named_jql_is_scoped_to_configured_feature_type(harness: Harness) -> None:
+    harness.write_config()
+    harness.store()
+    feature = _feature(5, "Alpha")
+    story = _feature(7, "Story mentioned by key")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        jql = request.url.params["jql"]
+        # Simulate Jira applying the JQL scope: a story is only excluded by the type clause.
+        issues = [feature] if 'issuetype = "Feature"' in jql else [feature, story]
+        return httpx.Response(200, json={"startAt": 0, "total": len(issues), "issues": issues})
+
+    harness.server.add("GET", SEARCH, handler=respond)
+    data = harness.run("jira", "feature", "find", "--text", "EXAMPLE-5 EXAMPLE-7").data
+    assert [c["key"] for c in data["candidates"]] == ["EXAMPLE-5"]
+    (named_query,) = [q for q in _search_requests(harness) if "key in (" in q["jql"]]
+    assert named_query["jql"].startswith(
+        '((project = "EXAMPLE" AND issuetype = "Feature")) AND key in ("EXAMPLE-5", "EXAMPLE-7")'
+    )
+
+
+def test_search_raw_empty_page_ends_despite_advertised_total(harness: Harness) -> None:
+    harness.write_config()
+    harness.store()
+    harness.server.add("GET", SEARCH, {"startAt": 20, "total": 500, "issues": []})
+    result = harness.run("jira", "search", "--jql", "x", "--start", "20", "--limit", "10")
+    assert result.code == 0
+    assert result.data["issues"] == []
+    assert result.data["next_start"] is None

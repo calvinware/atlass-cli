@@ -61,6 +61,7 @@ def paginate(client: ServiceClient, path: str, what: str) -> list[dict[str, Any]
     """Fetch every page of a Jira ``values`` paged response, failing closed if incomplete."""
     values: list[dict[str, Any]] = []
     start = 0
+    known_total: int | None = None
     for _ in range(MAX_META_PAGES):
         page = client.get(path, {"startAt": start, "maxResults": META_PAGE_SIZE})
         if not isinstance(page, dict) or not isinstance(page.get("values"), list):
@@ -79,6 +80,12 @@ def paginate(client: ServiceClient, path: str, what: str) -> list[dict[str, Any]
         total = page.get("total")
         if total is not None and (type(total) is not int or total < 0):
             raise incomplete(what, {"start_at": start, "reason": "invalid total"})
+        if total is not None and known_total is not None and total != known_total:
+            raise incomplete(
+                what, {"start_at": start, "total": total, "previous_total": known_total}
+            )
+        # A total from any earlier page still bounds pages that omit it.
+        known_total = total = known_total if total is None else total
         if total is not None and len(values) > total:
             raise incomplete(what, {"received": len(values), "total": total})
         if is_last is True:

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-import re
 import shlex
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -11,14 +11,19 @@ import pytest
 from atlass_cli.auth import Credential
 from atlass_cli.confluence import update
 from atlass_cli.contracts import AtlError
+from atlass_cli.features import jql_quote
 from atlass_cli.transport import ServiceClient
 from tests.conftest import (
     CONFLUENCE,
     CONFLUENCE_TOKEN,
+    SHELL_SENTINELS,
     FakeServer,
     Harness,
+    backticked,
     confluence_path,
     fixture,
+    run_argv,
+    run_in_posix_shell,
 )
 
 PAGE = confluence_path("/rest/api/content/123456")
@@ -170,8 +175,8 @@ def test_create_unconfirmed_success_is_outcome_unknown(harness: Harness, body: A
     assert "data" not in result.out
     if body != b"not json":
         assert (
-            """atl confluence page search --cql 'space = "ENG" AND title = "T"'"""
-            in (result.error["fix"])
+            """atl confluence page search --cql 'space = "ENG" AND type = page AND """
+            """(title = "T")'""" in (result.error["fix"])
         )
     assert len(harness.server.writes()) == 1
 
@@ -589,6 +594,16 @@ def test_search_page_of_only_malformed_results_still_advances(harness: Harness) 
     assert result.data["next_start"] == 7
 
 
+def test_search_raw_empty_page_ends_despite_next_link(harness: Harness) -> None:
+    setup(harness)
+    body = {"results": [], "size": 0, "totalSize": 500, "_links": {"next": "x"}}
+    harness.server.add("GET", SEARCH, body)
+    result = harness.run("confluence", "page", "search", "--cql", "type = page", "--start", "5")
+    assert result.code == 0
+    assert result.data["results"] == []
+    assert result.data["next_start"] is None
+
+
 def test_create_accepts_canonical_space_key_case(harness: Harness) -> None:
     setup(harness)
     harness.server.add("POST", CONTENT, CREATED)
@@ -639,22 +654,59 @@ def test_create_rejects_page_id_with_trailing_newline(harness: Harness) -> None:
     assert result.error["details"]["reason"] == "create response did not include a valid page id"
 
 
-def _backticked(text: str, prefix: str) -> list[str]:
-    return [c for c in re.findall(r"`([^`]*)`", text) if c.startswith(prefix)]
-
-
-def test_create_outcome_unknown_fix_shell_quotes_cql(harness: Harness) -> None:
+@pytest.mark.parametrize(
+    ("title", "exact"),
+    [
+        ("""Won't "fix" $HOME""", 'title = "Won\'t \\"fix\\" $HOME"'),
+        (" Runbook\n", 'title = " Runbook" OR title = "Runbook"'),
+    ],
+    ids=["quoting", "trimmed"],
+)
+def test_create_outcome_unknown_fix_searches_every_accepted_title(
+    harness: Harness, title: str, exact: str
+) -> None:
     setup(harness)
     harness.server.add("POST", CONTENT, {**CREATED, "title": "Other"})
-    doc = {"space_key": "ENG", "title": """Won't "fix" $HOME""", "body_storage": "<p>x</p>"}
+    doc = {"space_key": "ENG", "title": title, "body_storage": "<p>x</p>"}
     result = run_input(harness, "confluence", "page", "create", doc=doc)
     assert result.error["code"] == "outcome_unknown"
     fix = result.error["fix"]
-    (command,) = _backticked(fix, "atl confluence page search")
-    cql = 'space = "ENG" AND title = "Won\'t \\"fix\\" $HOME"'
-    assert shlex.split(command) == ["atl", "confluence", "page", "search", "--cql", cql]
+    exact_cql = f'space = "ENG" AND type = page AND ({exact})'
+    broad_cql = 'space = "ENG" AND type = page ORDER BY created DESC'
+    search = ["atl", "confluence", "page", "search", "--cql"]
+    assert [shlex.split(c) for c in backticked(fix, "atl confluence page search")] == [
+        [*search, exact_cql],
+        [*search, broad_cql],
+    ]
+    assert result.error["details"]["recovery_argv"] == {
+        "exact_search": [*search, exact_cql],
+        "broad_search": [*search, broad_cql],
+    }
+    assert "An empty exact-title search alone does not show the page was not created" in fix
+    assert "atl confluence page read ID" in fix
+    assert "POSIX shells" in fix and "details.recovery_argv" in fix
     assert "does not retry writes" in fix
     assert len(harness.server.writes()) == 1
+
+
+@pytest.mark.parametrize("title", SHELL_SENTINELS)
+def test_create_outcome_unknown_commands_stay_literal_in_shells(
+    harness: Harness, title: str, tmp_path: Path
+) -> None:
+    setup(harness)
+    harness.server.add("POST", CONTENT, {**CREATED, "title": "Other"})
+    doc = {"space_key": "ENG", "title": title, "body_storage": "<p>x</p>"}
+    error = run_input(harness, "confluence", "page", "create", doc=doc).error
+    argv = error["details"]["recovery_argv"]
+    shell_dir = tmp_path / "shell"
+    shell_dir.mkdir()
+    commands = backticked(error["fix"], "atl confluence page search")
+    assert [run_in_posix_shell(c, shell_dir) for c in commands] == [
+        argv["exact_search"],
+        argv["broad_search"],
+    ]
+    assert [run_argv(a) for a in argv.values()] == list(argv.values())
+    assert jql_quote(title) in argv["exact_search"][-1]
 
 
 def test_update_accepts_server_trimmed_title_and_reports_it(harness: Harness) -> None:

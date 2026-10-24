@@ -46,21 +46,32 @@ JSON
 case (Confluence returns its canonical key), and the title may differ only by trimmed leading or
 trailing whitespace. The result reports the space key and title Confluence confirmed. Anything else after the request was sent is
 [`outcome_unknown`](../reference/errors.md#outcome_unknown) (exit 6): the page may or may not
-exist. Do not run the create again until you have inspected the space:
+exist. Do not run the create again until you have inspected the space. `error.fix` and
+`details.recovery_argv` give the exact searches for your title:
 
-1. Search for the title. The search is only a starting point for finding candidates:
+1. Search for both titles the create would have accepted: the submitted title and, if it has
+   leading or trailing whitespace, the trimmed title. The search is only a starting point for
+   finding candidates:
 
    ```bash
-   atl confluence page search --cql 'space = "DOCS" AND title = "Release 1.4 notes"'
+   atl confluence page search --cql 'space = "DOCS" AND type = page AND (title = "Release 1.4 notes")'
    ```
 
-2. Collect every candidate. While `next_start` is not `null`, repeat the search with
-   `--start NEXT_START`.
-3. Read each candidate with `atl confluence page read ID` and compare its `title`, `space_key`,
-   `ancestors` (your `parent_id`), and `body_storage` with what you submitted.
+2. If that finds nothing, broaden within the space and list its newest pages. An empty exact-title
+   search alone does not show the page was not created:
+
+   ```bash
+   atl confluence page search --cql 'space = "DOCS" AND type = page ORDER BY created DESC'
+   ```
+
+3. Collect every candidate. While `next_start` is not `null`, repeat the search with
+   `--start NEXT_START`. Read each plausible candidate with `atl confluence page read ID` and
+   compare its `title`, `space_key`, `ancestors` (your `parent_id`), and `body_storage` with what
+   you submitted.
 4. If a page matches what you submitted, the create was applied. Continue with that page ID and
    do not create it again.
-5. Retry the create only when inspection establishes that the submitted page was not created. If
+5. Retry the create only when the broader search and reads establish that the submitted page was
+   not created. If
    the outcome is still ambiguous (a search or read fails, a page has your title but different
    content, or more than one page matches), stop and ask a human.
 

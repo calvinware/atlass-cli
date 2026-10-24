@@ -93,9 +93,9 @@
 
 ### `file_invalid`
 
-**Exit 2.** The `--file` for an attachment does not exist, is not a regular file, or cannot be opened.
+**Exit 2.** The `--file` for an attachment does not exist, is not a regular file, cannot be opened, was replaced between the check and the open, or changed while `atl` was reading it. Nothing was sent.
 
-**Fix:** Pass the path of an existing, readable regular file. Relative paths resolve from the current directory.
+**Fix:** Pass the path of an existing, readable regular file. Relative paths resolve from the current directory. If the file was replaced or changed, wait until it is fully written, then retry.
 
 **Returned by:** [`atl jira attachment add`](commands.md#atl-jira-attachment-add).
 
@@ -295,7 +295,7 @@
 
 **Fix:** Inspect remote state before any retry, using the method for that write in [Writes and retries](../commands.md#writes-and-retries). Retry only when inspection shows the write was not applied. If you cannot tell, or find duplicates, stop and ask a human.
 
-**Details:** `details.reason` says why; for transitions, `details.operations[]` gives each write's status.
+**Details:** `details.reason` says why; for transitions, `details.operations[]` gives each write's status. For transitions and Confluence page create, `details.recovery_argv` gives the inspection commands as argument lists; the commands in `fix` are quoted for POSIX shells only.
 
 **Returned by:** [`atl jira story create`](commands.md#atl-jira-story-create), [`atl jira transition`](commands.md#atl-jira-transition), [`atl jira feature create`](commands.md#atl-jira-feature-create), [`atl jira attachment add`](commands.md#atl-jira-attachment-add), [`atl jira comment add`](commands.md#atl-jira-comment-add), [`atl confluence page create`](commands.md#atl-confluence-page-create), [`atl confluence page update`](commands.md#atl-confluence-page-update).
 
@@ -323,6 +323,6 @@
 
 **Fix:** Do not roll back. Inspect the issue's status and edited field values, reconcile them with the issue owner, resolve the failed checks, and get a fresh `ready: true` from `atl jira requirements` before retrying. A retry repeats the edit unconditionally.
 
-**Details:** `details.operations[]` shows the edit `succeeded` and the transition `skipped` or `rejected`; `details.atomic` is `false`.
+**Details:** `details.operations[]` shows the edit `succeeded` and the transition `skipped` or `rejected`; `details.atomic` is `false`. `details.recovery_argv` gives the `requirements` and `transition` commands as argument lists; the commands in `fix` are quoted for POSIX shells only.
 
 **Returned by:** [`atl jira transition`](commands.md#atl-jira-transition).

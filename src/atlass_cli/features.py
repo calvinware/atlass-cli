@@ -197,9 +197,27 @@ def _text_pool(client: ServiceClient, scope: str, tokens: list[str]) -> tuple[li
     """Fetch the most recently updated matches; report whether the pool may omit any."""
     clauses = " OR ".join(f"summary ~ {jql_quote(t)}" for t in tokens)
     jql = f"({scope}) AND ({clauses}) ORDER BY updated DESC"
-    issues, total = _search(client, jql, 0, CANDIDATE_POOL)
-    truncated = total > len(issues) if total is not None else len(issues) >= CANDIDATE_POOL
-    return issues, truncated
+    issues: list[Any] = []
+    known_total: int | None = None
+    # Jira may cap maxResults below the pool size, so a short page alone does not prove the end.
+    while len(issues) < CANDIDATE_POOL:
+        page, total = _search(client, jql, len(issues), CANDIDATE_POOL - len(issues))
+        known_total = known_total if total is None else total
+        issues.extend(page)
+        if not page or (known_total is not None and len(issues) >= known_total):
+            break
+    if known_total is not None:
+        return issues, known_total > len(issues)
+    # Without a total, only an empty page short of the pool proves nothing was left out.
+    return issues, len(issues) >= CANDIDATE_POOL
+
+
+def _named_invalid() -> AtlError:
+    return AtlError(
+        "response_invalid",
+        "Jira returned an invalid named feature result.",
+        "Check the Jira search response before relying on feature candidates.",
+    )
 
 
 def _named_issues(client: ServiceClient, scope: str, keys: set[str]) -> list[Any]:
@@ -207,8 +225,10 @@ def _named_issues(client: ServiceClient, scope: str, keys: set[str]) -> list[Any
     jql = f"({scope}) AND key in ({', '.join(jql_quote(k) for k in sorted(keys))}) ORDER BY key ASC"
     found: list[Any] = []
     seen: set[str] = set()
+    known_total: int | None = None
     while True:
         issues, total = _search(client, jql, len(found), len(keys))
+        known_total = known_total if total is None else total
         for issue in issues:
             key = issue.get("key") if isinstance(issue, dict) else None
             if (
@@ -217,14 +237,15 @@ def _named_issues(client: ServiceClient, scope: str, keys: set[str]) -> list[Any
                 or key in seen
                 or not isinstance(issue.get("fields"), dict)
             ):
-                raise AtlError(
-                    "response_invalid",
-                    "Jira returned an invalid named feature result.",
-                    "Check the Jira search response before relying on feature candidates.",
-                )
+                raise _named_invalid()
             seen.add(key)
         found.extend(issues)
-        # `key in (...)` matches at most len(keys) issues; an empty page means no progress.
-        expected = len(keys) if total is None else min(total, len(keys))
-        if not issues or len(found) >= expected:
+        # `key in (...)` matches at most len(keys) issues.
+        expected = len(keys) if known_total is None else min(known_total, len(keys))
+        if len(found) >= expected:
+            return found
+        if not issues:
+            # An empty page ends the lookup only when Jira did not promise more matches.
+            if known_total is not None:
+                raise _named_invalid()
             return found

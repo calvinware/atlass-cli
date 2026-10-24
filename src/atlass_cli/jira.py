@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import stat
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -514,42 +515,89 @@ def _checked_size(path: Path, info: os.stat_result, limit: int) -> int:
     return info.st_size
 
 
-def attachment_add(client: ServiceClient, jira: JiraConfig, key: str, path: Path) -> dict[str, Any]:
-    limit = jira.max_attachment_bytes
+def _file_error(path: Path, message: str, fix: str = "Check file permissions.") -> AtlError:
+    return AtlError("file_invalid", message, fix, {"path": str(path)})
+
+
+def _same_file(a: os.stat_result, b: os.stat_result) -> bool:
+    return (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
+
+
+def _unchanged(a: os.stat_result, b: os.stat_result) -> bool:
+    return _same_file(a, b) and (a.st_size, a.st_mtime_ns, a.st_ctime_ns) == (
+        b.st_size,
+        b.st_mtime_ns,
+        b.st_ctime_ns,
+    )
+
+
+def _open_checked(path: Path, limit: int) -> tuple[int, os.stat_result]:
+    """Open ``path`` without blocking and return the descriptor of the regular file checked."""
     try:
         info = path.stat()
     except OSError:
-        raise AtlError(
-            "file_invalid",
+        raise _file_error(
+            path,
             f"File not found or unreadable: {path}",
             "Pass --file with the path to an existing regular file.",
-            {"path": str(path)},
         ) from None
-    # Checked before open so a FIFO or device is never opened (opening a FIFO can block).
     _checked_size(path, info, limit)
-    boundary = secrets.token_hex(16)
+    # O_NONBLOCK keeps open() from waiting on a FIFO swapped in after stat(); fstat() rejects it.
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
     try:
-        handle = path.open("rb")
+        fd = os.open(path, flags)
     except OSError:
-        raise AtlError(
-            "file_invalid",
-            f"Cannot open {path}.",
-            "Check file permissions.",
-            {"path": str(path)},
-        ) from None
+        raise _file_error(path, f"Cannot open {path}.") from None
+    try:
+        opened = os.fstat(fd)
+        _checked_size(path, opened, limit)
+        if not _same_file(info, opened):
+            raise _file_error(
+                path,
+                f"{path} was replaced between the check and the open; nothing was sent.",
+                "Wait until the file is fully written, then retry.",
+            )
+    except OSError:
+        os.close(fd)
+        raise _file_error(path, f"Cannot read {path}.") from None
+    except AtlError:
+        os.close(fd)
+        raise
+    return fd, opened
+
+
+def _snapshot(path: Path, fd: int, opened: os.stat_result, snapshot: BinaryIO) -> None:
+    """Copy the opened file into ``snapshot``, failing if the source changes meanwhile."""
+    try:
+        copied = 0
+        while copied <= opened.st_size:
+            chunk = os.read(fd, min(UPLOAD_CHUNK, opened.st_size + 1 - copied))
+            if not chunk:
+                break
+            snapshot.write(chunk)
+            copied += len(chunk)
+        changed = copied != opened.st_size or not _unchanged(opened, os.fstat(fd))
+        snapshot.seek(0)
+    except OSError:
+        raise _file_error(path, f"Cannot read {path}.") from None
+    if changed:
+        raise _file_error(
+            path,
+            f"{path.name} changed while atl was reading it; nothing was sent.",
+            "Wait until the file is fully written, then retry.",
+        )
+
+
+def attachment_add(client: ServiceClient, jira: JiraConfig, key: str, path: Path) -> dict[str, Any]:
+    fd, opened = _open_checked(path, jira.max_attachment_bytes)
+    size = opened.st_size
+    boundary = secrets.token_hex(16)
     name = os.path.basename(path)
-    with handle:
-        # Re-check the opened object: the path may have been replaced or grown since stat().
-        try:
-            opened = os.fstat(handle.fileno())
-        except OSError:
-            raise AtlError(
-                "file_invalid",
-                f"Cannot read {path}.",
-                "Check file permissions.",
-                {"path": str(path)},
-            ) from None
-        size = _checked_size(path, opened, limit)
+    # SECURITY-REVIEW: the bytes are uploaded from an owner-only temporary snapshot (unnamed on
+    # POSIX, delete-on-close on Windows), bounded by jira.max_attachment_bytes, so what is sent is
+    # exactly what was checked even if the source is rewritten during the upload.
+    with os.fdopen(fd, "rb", buffering=0) as source, tempfile.TemporaryFile() as handle:
+        _snapshot(path, source.fileno(), opened, handle)
         body, length = _multipart(handle, size, name, boundary)
         try:
             result = client.request(

@@ -133,13 +133,22 @@ options are mutually exclusive.
 ### Attachments
 
 Before upload, `atl` checks that the file exists, is a regular file, and is no larger than
-`jira.max_attachment_bytes`. It checks the type and size again on the opened file, so a file
-replaced or grown between the check and the open is rejected before anything is sent. The
-`Content-Length` and the confirmed size use the opened file's size. The upload is a streamed `multipart/form-data` with an exact
-`Content-Length` and `X-Atlassian-Token: no-check`. If the file shrinks or grows during upload,
-the upload is aborted before the body completes. Because the request may already have reached
-Jira, this is `outcome_unknown` (exit 6) with `details.dispatched: "aborted"`; inspect the issue
-view for a partial attachment before any retry.
+`jira.max_attachment_bytes`. It opens the path without blocking (so a FIFO swapped in after the
+check cannot hang the command), then checks the opened file's type and size and that it is the
+same file (device and inode) that was checked. A path replaced between the check and the open,
+even by a file of the same size, is `file_invalid` and nothing is sent. `atl` then copies the
+opened file into a private temporary snapshot (owner-only; unnamed on POSIX, delete-on-close on
+Windows; at most `jira.max_attachment_bytes`). If the file's size, modification time, or change
+time differs after the copy, it is `file_invalid` and nothing is sent; wait until the file is fully
+written and retry. The upload streams the snapshot, so rewriting the source during the upload does
+not change the bytes sent. Change detection relies on file timestamps, so a same-size rewrite
+within the file system's timestamp resolution while `atl` is copying can go unnoticed.
+
+The upload is a streamed `multipart/form-data` with an exact `Content-Length` and
+`X-Atlassian-Token: no-check`. As a last guard, if the stream yields fewer or more bytes than the
+declared size, the upload is aborted before the body completes. Because the request may already
+have reached Jira, this is `outcome_unknown` (exit 6) with `details.dispatched: "aborted"`; inspect
+the issue view for a partial attachment before any retry.
 
 The command succeeds only when Jira's 2xx response is a non-empty JSON list in which every item has
 a non-empty string `id` and `filename` and a non-negative integer `size`, and at least one item has
@@ -189,8 +198,13 @@ cannot show comments, attachments, or custom field values, so use the method for
 | `jira comment add` | Open the issue in the Jira issue view and look for a comment whose body exactly matches what you sent. |
 | `jira attachment add` | Open the issue in the Jira issue view and look for the exact filename and size. `atl jira requirements KEY --to STATUS` lists attachment names when an attachment rule fails. |
 | `jira transition` | `atl jira requirements KEY --to STATUS` (`from_status`) or `atl jira search --jql 'key = KEY'` (`status`). For a `pre_edit` edit, check the edited field values in the issue view. |
-| `confluence page create` | `atl confluence page search --cql 'space = "KEY" AND title = "<title>"'`, following `next_start` through every result page. Read each candidate with `atl confluence page read ID` and compare `title`, `space_key`, `ancestors`, and `body_storage` with what you sent. |
+| `confluence page create` | Run the searches in `error.fix` (`details.recovery_argv`): first `space = "KEY" AND type = page AND (title = "<submitted>" OR title = "<trimmed>")`, then, if that finds nothing, the space's newest pages (`space = "KEY" AND type = page ORDER BY created DESC`), following `next_start` through every result page. Read each plausible candidate with `atl confluence page read ID` and compare `title`, `space_key`, `ancestors`, and `body_storage` with what you sent. An empty exact-title search alone does not show the page was not created. |
 | `confluence page update` | `atl confluence page read ID` and compare `version`, `title`, and `body_storage` with what you sent. |
+
+Recovery commands inside `error.fix` are quoted for POSIX shells (sh, bash, zsh) only. In
+`cmd.exe`, PowerShell, or a program, do not paste them; pass each list in `details.recovery_argv`
+as separate arguments instead (`outcome_unknown` from a transition or Confluence page create, and
+`partial_transition`).
 
 Agents inspect only through `atl` and, where the table says issue view, by asking a human to
 check it. Agents never call the REST APIs directly. As a human-only exception, a person may use an

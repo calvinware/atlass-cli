@@ -139,13 +139,7 @@ def create(client: ServiceClient, doc: dict[str, Any]) -> dict[str, Any]:
     created = client.request("POST", "/rest/api/content", json_body=body)
     reason = _create_mismatch(created, doc["title"], doc["space_key"])
     if reason is not None:
-        cql = f"space = {jql_quote(doc['space_key'])} AND title = {jql_quote(doc['title'])}"
-        raise client.unknown_outcome(
-            reason,
-            f"Search for the page before retrying: `atl confluence page search --cql "
-            f"{shlex.quote(cql)}`. Read any match with `atl confluence page read ID` to confirm "
-            "it is yours. atl does not retry writes.",
-        )
+        raise _create_unknown(client, reason, doc["space_key"], doc["title"])
     assert isinstance(created, dict)
     return {
         "id": created["id"],
@@ -153,6 +147,35 @@ def create(client: ServiceClient, doc: dict[str, Any]) -> dict[str, Any]:
         "space_key": created["space"]["key"],
         "version": 1,
     }
+
+
+def _create_unknown(client: ServiceClient, reason: str, space_key: str, title: str) -> AtlError:
+    """Build recovery guidance covering every title the create confirmation would accept."""
+    titles = list(dict.fromkeys(t for t in (title, title.strip()) if t))
+    exact = (
+        f"space = {jql_quote(space_key)} AND type = page AND ("
+        + " OR ".join(f"title = {jql_quote(t)}" for t in titles)
+        + ")"
+    )
+    broad = f"space = {jql_quote(space_key)} AND type = page ORDER BY created DESC"
+    argv = {
+        "exact_search": ["atl", "confluence", "page", "search", "--cql", exact],
+        "broad_search": ["atl", "confluence", "page", "search", "--cql", broad],
+    }
+    error = client.unknown_outcome(
+        reason,
+        f"Do not retry yet. Search for the page under its submitted and edge-trimmed titles: "
+        f"`{shlex.join(argv['exact_search'])}`. If that finds nothing, list the space's newest "
+        f"pages: `{shlex.join(argv['broad_search'])}`. Read every plausible match with "
+        "`atl confluence page read ID` to confirm whether it is yours. An empty exact-title "
+        "search alone does not show the page was not created; retry only when the broader "
+        "search and reads show no such page, and ask a human if you cannot tell. atl does not "
+        "retry writes. The commands above are quoted for POSIX shells (sh, bash, zsh) only; in "
+        "cmd.exe, PowerShell, or a program, pass each list in details.recovery_argv as separate "
+        "arguments.",
+    )
+    error.details["recovery_argv"] = argv
+    return error
 
 
 def _title_confirmed(submitted: str, returned: Any) -> bool:

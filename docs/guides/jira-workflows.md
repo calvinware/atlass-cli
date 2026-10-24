@@ -200,7 +200,9 @@ atl jira transition EXAMPLE-42 --to Done
 ```
 
 Before upload, `atl` checks that the file exists, is a regular file, and is within
-`jira.max_attachment_bytes`. The upload succeeds only when Jira's response confirms the file name
+`jira.max_attachment_bytes`, then uploads a private snapshot of the opened file. A file that is
+replaced or changes while `atl` reads it is rejected before anything is sent (see
+[Attachments](../commands.md#attachments)). The upload succeeds only when Jira's response confirms the file name
 and size. If the requirement fails, the check lists the attachment names on the issue and the
 exact pattern it needs.
 
