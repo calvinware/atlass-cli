@@ -8,10 +8,13 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 
-ISSUE_KEY_PATTERN = r"^[A-Z][A-Z0-9_]*-[1-9][0-9]*$"
-PROJECT_KEY_PATTERN = r"^[A-Z][A-Z0-9_]*$"
-PAGE_ID_PATTERN = r"^[1-9][0-9]{0,19}$"
-SPACE_KEY_PATTERN = r"^~?[A-Za-z0-9_.@-]{1,255}$"
+# `(?![\s\S])` is an absolute end in both Python and ECMAScript; `$` also matches before a
+# trailing newline in Python, and `\Z` is not valid in ECMAScript JSON Schema patterns.
+_END = r"(?![\s\S])"
+ISSUE_KEY_PATTERN = r"^[A-Z][A-Z0-9_]*-[1-9][0-9]*" + _END
+PROJECT_KEY_PATTERN = r"^[A-Z][A-Z0-9_]*" + _END
+PAGE_ID_PATTERN = r"^[1-9][0-9]{0,19}" + _END
+SPACE_KEY_PATTERN = r"^~?[A-Za-z0-9_.@-]{1,255}" + _END
 
 MAX_SEARCH_LIMIT = 100
 MAX_QUERY_CHARS = 4000
@@ -551,9 +554,19 @@ COMMANDS: list[CommandSpec] = [
                         ["key", "project", "summary", "score", "reasons"],
                     )
                 ),
+                "candidate_pool_limit": {
+                    "const": 100,
+                    "description": "Most text matches (newest updated first) ranked locally. "
+                    "Keys named in --text are always fetched and ranked.",
+                },
+                "truncated": {
+                    "type": "boolean",
+                    "description": "True when the text search may have matched more issues than "
+                    "the candidate pool held. --limit trimming does not set this.",
+                },
                 "selection": {"const": "caller"},
             },
-            ["mode", "query", "candidates", "selection"],
+            ["mode", "query", "candidates", "candidate_pool_limit", "truncated", "selection"],
         ),
         errors=[*COMMON_REMOTE_ERRORS, "usage_error", "project_not_configured"],
     ),

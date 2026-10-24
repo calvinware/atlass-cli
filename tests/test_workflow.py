@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import copy
 import json
+import re
+import shlex
 from typing import Any
 
 import httpx
 import pytest
 
-from atlass_cli import transport
+from atlass_cli import transport, workflow
 from tests.conftest import Harness, config_text, fixture, jira_path
 
 KEY = "EXAMPLE-1"
@@ -639,3 +641,40 @@ def test_partial_when_allowed_value_changes_after_put(harness: Harness) -> None:
     assert refreshed["auto_set:work_started"]["status"] == "fail"
     assert [r.method for r in harness.server.writes()] == ["PUT"]
     assert [p for p in harness.server.paths() if p == EDITMETA] == [EDITMETA, EDITMETA]
+
+
+def _commands(text: str) -> list[list[str]]:
+    return [shlex.split(c) for c in re.findall(r"`(atl [^`]*)`", text)]
+
+
+@pytest.mark.parametrize("to", ["Won't Do", 'Say "hi"', "a b; rm -rf ~", "$(x)"])
+def test_partial_fix_commands_are_shell_quoted(to: str) -> None:
+    error = workflow._partial(KEY, to, [], [], None, "skipped", "refresh failed", {})
+    assert _commands(error.fix) == [
+        ["atl", "jira", "requirements", KEY, "--to", to],
+        ["atl", "jira", "transition", KEY, "--to", to],
+    ]
+    assert "Do not roll back" in error.fix
+    assert "Inspect" in error.fix and "fresh" in error.fix
+
+
+def test_requirements_hint_round_trips_apostrophe() -> None:
+    (argv,) = _commands(workflow._retry_hint(KEY, "Won't Do"))
+    assert argv == ["atl", "jira", "requirements", KEY, "--to", "Won't Do"]
+
+
+@pytest.mark.parametrize("fields", ["x", [], None, "missing"])
+def test_malformed_issue_fields_are_response_invalid(harness: Harness, fields: Any) -> None:
+    issue = fixture("issue_todo.json")
+    if fields == "missing":
+        del issue["fields"]
+    else:
+        issue["fields"] = fields
+    setup(harness)
+    harness.server.routes[("GET", ISSUE)] = []
+    harness.server.add("GET", ISSUE, issue)
+    result = harness.run("jira", "requirements", KEY, "--to", "In Progress")
+    assert result.code == 6
+    assert result.error["code"] == "response_invalid"
+    assert result.error["details"] == {"what": "issue"}
+    assert harness.server.writes() == []

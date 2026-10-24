@@ -26,7 +26,9 @@ atl confluence page search --cql 'space = "DOCS" AND title ~ "release"' --limit 
 ```
 
 Results have `id`, `title`, `type`, `space_key`, and `version`. Page through with `--start`
-and `next_start` (`null` on the last page). `--limit` is at most 100.
+and `next_start` (`null` on the last page). `--limit` is at most 100. A malformed result is left
+out of `results`, but `next_start` still counts it, so the next page never repeats or skips
+results.
 
 ## Create a page
 
@@ -40,7 +42,9 @@ JSON
 ```
 
 `parent_id` is optional. The command succeeds only when Confluence confirms a page ID, type
-`page`, the submitted title and space, and version 1. Anything else after the request was sent is
+`page`, the submitted title and space, and version 1. The space key may differ only in letter
+case (Confluence returns its canonical key), and the title may differ only by trimmed leading or
+trailing whitespace. The result reports the space key and title Confluence confirmed. Anything else after the request was sent is
 [`outcome_unknown`](../reference/errors.md#outcome_unknown) (exit 6): the page may or may not
 exist. Do not run the create again until you have inspected the space:
 
@@ -105,4 +109,5 @@ JSON
 - On [`version_conflict`](../reference/errors.md#version_conflict), read the page again, merge your
   change into the current body, and resubmit with the new version.
 - If the update's success response does not confirm the page ID, title, and next version, the
-  result is `outcome_unknown`. Run `atl confluence page read ID` and compare before any retry.
+  result is `outcome_unknown`. As with create, a title that differs only by trimmed leading or
+  trailing whitespace is confirmed, and the result reports the confirmed title. Run `atl confluence page read ID` and compare before any retry.

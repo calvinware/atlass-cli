@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -11,7 +12,17 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from atlass_cli import cli
-from atlass_cli.contracts import COMMANDS, COMMANDS_BY_PATH, ERROR_CODES, ExitCode, command_schema
+from atlass_cli.contracts import (
+    COMMANDS,
+    COMMANDS_BY_PATH,
+    ERROR_CODES,
+    ISSUE_KEY_PATTERN,
+    PAGE_ID_PATTERN,
+    PROJECT_KEY_PATTERN,
+    SPACE_KEY_PATTERN,
+    ExitCode,
+    command_schema,
+)
 from tests.conftest import Harness
 
 
@@ -271,3 +282,65 @@ def test_installed_entry_point_emits_single_json(tmp_path: Path) -> None:
     assert len(proc.stdout.splitlines()) == 1
     assert json.loads(proc.stdout)["error"]["code"] == "usage_error"
     assert proc.stderr == ""
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["jira", "requirements", "EXAMPLE-1\n", "--to", "Done"],
+        ["jira", "feature", "find", "--issue", "EXAMPLE-1\n"],
+        ["confluence", "page", "read", "123456\n"],
+    ],
+)
+def test_key_and_id_arguments_reject_trailing_newline(harness: Harness, argv: list[str]) -> None:
+    harness.write_config()
+    harness.store()
+    result = harness.run(*argv)
+    assert result.code == ExitCode.INPUT
+    assert result.error["code"] == "usage_error"
+    assert harness.server.requests == []
+
+
+@pytest.mark.parametrize(
+    ("path", "doc"),
+    [
+        ("jira story create", {"project": "EXAMPLE\n", "summary": "x"}),
+        ("jira feature create", {"project": "EXAMPLE\n", "summary": "x"}),
+        ("confluence page create", {"space_key": "ENG\n", "title": "T", "body_storage": ""}),
+        (
+            "confluence page create",
+            {"space_key": "ENG", "title": "T", "body_storage": "", "parent_id": "1000\n"},
+        ),
+    ],
+)
+def test_input_schemas_reject_trailing_newline(
+    harness: Harness, path: str, doc: dict[str, Any]
+) -> None:
+    harness.write_config()
+    harness.store()
+    harness.store("confluence")
+    result = harness.run(*path.split(), "--input", "-", stdin=json.dumps(doc).encode())
+    assert result.code == ExitCode.INPUT
+    assert result.error["code"] == "input_invalid"
+    assert harness.server.requests == []
+    valid = {k: v.rstrip("\n") if isinstance(v, str) else v for k, v in doc.items()}
+    input_schema = command_schema(COMMANDS_BY_PATH[path])["input"]
+    Draft202012Validator(input_schema).validate(valid)
+
+
+@pytest.mark.parametrize(
+    ("pattern", "valid"),
+    [
+        (ISSUE_KEY_PATTERN, "ABC-1"),
+        (PROJECT_KEY_PATTERN, "ABC"),
+        (PAGE_ID_PATTERN, "123456"),
+        (SPACE_KEY_PATTERN, "~user"),
+    ],
+)
+def test_key_patterns_have_portable_absolute_end(pattern: str, valid: str) -> None:
+    # `\Z` is Python-only; JSON Schema patterns must also work in ECMAScript validators.
+    assert "\\Z" not in pattern and not pattern.endswith("$")
+    assert re.fullmatch(pattern, valid)
+    for bad in (valid + "\n", valid + "\r\n", valid + "\nX"):
+        assert re.search(pattern, bad) is None
+        assert not Draft202012Validator({"type": "string", "pattern": pattern}).is_valid(bad)

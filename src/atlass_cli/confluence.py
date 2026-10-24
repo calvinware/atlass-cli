@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 from typing import Any
 
 from atlass_cli.contracts import PAGE_ID_PATTERN, AtlError
@@ -100,8 +101,9 @@ def search(client: ServiceClient, cql: str, start: int, limit: int) -> dict[str,
     )
     if not isinstance(raw, dict) or not isinstance(raw.get("results"), list):
         raise _invalid("search")
+    consumed = raw["results"][:limit]
     results = []
-    for item in raw["results"][:limit]:
+    for item in consumed:
         if not isinstance(item, dict) or "id" not in item:
             continue
         results.append(
@@ -119,7 +121,7 @@ def search(client: ServiceClient, cql: str, start: int, limit: int) -> dict[str,
         "start": start,
         "limit": limit,
         "size": len(results),
-        "next_start": start + len(results) if has_next and results else None,
+        "next_start": start + len(consumed) if has_next and consumed else None,
         "results": results,
         "content_trust": "untrusted",
     }
@@ -137,20 +139,29 @@ def create(client: ServiceClient, doc: dict[str, Any]) -> dict[str, Any]:
     created = client.request("POST", "/rest/api/content", json_body=body)
     reason = _create_mismatch(created, doc["title"], doc["space_key"])
     if reason is not None:
+        cql = f"space = {jql_quote(doc['space_key'])} AND title = {jql_quote(doc['title'])}"
         raise client.unknown_outcome(
             reason,
-            "Search for the page before retrying: `atl confluence page search --cql "
-            f"'space = {jql_quote(doc['space_key'])} AND title = {jql_quote(doc['title'])}'`. "
-            "Read any match with `atl confluence page read ID` to confirm it is yours. atl does "
-            "not retry writes.",
+            f"Search for the page before retrying: `atl confluence page search --cql "
+            f"{shlex.quote(cql)}`. Read any match with `atl confluence page read ID` to confirm "
+            "it is yours. atl does not retry writes.",
         )
     assert isinstance(created, dict)
     return {
         "id": created["id"],
         "title": created["title"],
-        "space_key": doc["space_key"],
+        "space_key": created["space"]["key"],
         "version": 1,
     }
+
+
+def _title_confirmed(submitted: str, returned: Any) -> bool:
+    """Accept the submitted title, or the same nonblank title with edge whitespace trimmed."""
+    return (
+        isinstance(returned, str)
+        and bool(returned.strip())
+        and returned.strip() == submitted.strip()
+    )
 
 
 def _create_mismatch(created: Any, title: str, space_key: str) -> str | None:
@@ -158,13 +169,14 @@ def _create_mismatch(created: Any, title: str, space_key: str) -> str | None:
     if not isinstance(created, dict):
         return "create response was not a JSON object"
     page_id = created.get("id")
-    if not isinstance(page_id, str) or not PAGE_ID_RE.match(page_id):
+    if not isinstance(page_id, str) or not PAGE_ID_RE.fullmatch(page_id):
         return "create response did not include a valid page id"
     if created.get("type") != "page":
         return "create response did not confirm the content type page"
-    if created.get("title") != title:
+    if not _title_confirmed(title, created.get("title")):
         return "create response did not confirm the submitted title"
-    if _space_key(created) != space_key:
+    returned_space = _space_key(created)
+    if returned_space is None or returned_space.casefold() != space_key.casefold():
         return "create response did not confirm the submitted space"
     raw_version = created.get("version")
     number = raw_version.get("number") if isinstance(raw_version, dict) else None
@@ -228,9 +240,10 @@ def update(client: ServiceClient, page_id: str, doc: dict[str, Any]) -> dict[str
             f"with what you submitted (version {expected + 1} expected) before retrying. atl "
             "does not retry writes.",
         )
+    assert isinstance(updated, dict)
     return {
         "id": page_id,
-        "title": title,
+        "title": updated["title"],
         "version": expected + 1,
         "previous_version": expected,
     }
@@ -242,7 +255,7 @@ def _update_mismatch(updated: Any, page_id: str, title: str, version: int) -> st
         return "update response was not a JSON object"
     if updated.get("id") != page_id:
         return "update response did not confirm the page id"
-    if updated.get("title") != title:
+    if not _title_confirmed(title, updated.get("title")):
         return "update response did not confirm the submitted title"
     raw_version = updated.get("version")
     number = raw_version.get("number") if isinstance(raw_version, dict) else None

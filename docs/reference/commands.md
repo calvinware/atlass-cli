@@ -392,7 +392,7 @@ atl config check [--issue ISSUE] [--config PATH]
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `issue` | `--issue ISSUE` | string | no | pattern `^[A-Z][A-Z0-9_]*-[1-9][0-9]*$` |
+| `issue` | `--issue ISSUE` | string | no | pattern `^[A-Z][A-Z0-9_]*-[1-9][0-9]*(?![\s\S])` |
 
 **Input**
 
@@ -559,7 +559,7 @@ A JSON object from `--input PATH`, or from stdin with `--input -`. Unknown prope
 
 | Property | Type | Required | Notes |
 |---|---|---|---|
-| `project` | string | yes | pattern `^[A-Z][A-Z0-9_]*$` |
+| `project` | string | yes | pattern `^[A-Z][A-Z0-9_]*(?![\s\S])` |
 | `summary` | string | yes | min length 1; max length 255 |
 | `acceptance_criteria` | string | no | max length 32767; Caller-authored acceptance criteria. atl never writes this text. |
 | `feature_key` | string | no | Caller-chosen parent feature key. atl never chooses a feature. |
@@ -702,7 +702,7 @@ atl jira requirements KEY --to TO [--config PATH]
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `key` | `KEY` | string | yes | pattern `^[A-Z][A-Z0-9_]*-[1-9][0-9]*$` |
+| `key` | `KEY` | string | yes | pattern `^[A-Z][A-Z0-9_]*-[1-9][0-9]*(?![\s\S])` |
 | `to` | `--to TO` | string | yes |   |
 
 **Input**
@@ -835,7 +835,7 @@ atl jira transition KEY --to TO [--config PATH]
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `key` | `KEY` | string | yes | pattern `^[A-Z][A-Z0-9_]*-[1-9][0-9]*$` |
+| `key` | `KEY` | string | yes | pattern `^[A-Z][A-Z0-9_]*-[1-9][0-9]*(?![\s\S])` |
 | `to` | `--to TO` | string | yes |   |
 
 **Input**
@@ -973,7 +973,7 @@ atl jira feature find (--issue ISSUE | --text TEXT) [--limit LIMIT] [--config PA
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `issue` | `--issue ISSUE` | string | no | pattern `^[A-Z][A-Z0-9_]*-[1-9][0-9]*$` |
+| `issue` | `--issue ISSUE` | string | no | pattern `^[A-Z][A-Z0-9_]*-[1-9][0-9]*(?![\s\S])` |
 | `text` | `--text TEXT` | string | no | min length 1; max length 1000 |
 | `limit` | `--limit LIMIT` | integer | no | min 1; max 25; default `10` |
 
@@ -992,6 +992,8 @@ Success `data` fields:
 | `mode` | one of `issue`, `text` | yes |
 | `query` | string | yes |
 | `candidates` | array of objects | yes |
+| `candidate_pool_limit` | constant `100` | yes |
+| `truncated` | boolean | yes |
 | `selection` | constant `caller` | yes |
 
 **Example**
@@ -1030,6 +1032,8 @@ Success (exit 0):
         ]
       }
     ],
+    "candidate_pool_limit": 100,
+    "truncated": false,
     "selection": "caller"
   }
 }
@@ -1080,7 +1084,7 @@ A JSON object from `--input PATH`, or from stdin with `--input -`. Unknown prope
 
 | Property | Type | Required | Notes |
 |---|---|---|---|
-| `project` | string | yes | pattern `^[A-Z][A-Z0-9_]*$` |
+| `project` | string | yes | pattern `^[A-Z][A-Z0-9_]*(?![\s\S])` |
 | `summary` | string | yes | min length 1; max length 255 |
 | `description` | string | no | max length 32767 |
 | `fields` | object (friendly field name to string or array of strings) | no | Extra values keyed by friendly field names from atl.yaml. |
@@ -1188,7 +1192,7 @@ atl jira attachment add KEY --file FILE [--config PATH]
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `key` | `KEY` | string | yes | pattern `^[A-Z][A-Z0-9_]*-[1-9][0-9]*$` |
+| `key` | `KEY` | string | yes | pattern `^[A-Z][A-Z0-9_]*-[1-9][0-9]*(?![\s\S])` |
 | `file` | `--file FILE` | string | yes |   |
 
 **Input**
@@ -1266,7 +1270,7 @@ atl jira comment add KEY --body-file BODY_FILE [--config PATH]
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `key` | `KEY` | string | yes | pattern `^[A-Z][A-Z0-9_]*-[1-9][0-9]*$` |
+| `key` | `KEY` | string | yes | pattern `^[A-Z][A-Z0-9_]*-[1-9][0-9]*(?![\s\S])` |
 | `body_file` | `--body-file BODY_FILE` | string | yes | min length 1; Path to a plain UTF-8 text file (not JSON, max 1 MiB), or '-' for stdin. |
 
 **Input**
@@ -1450,7 +1454,7 @@ atl confluence page read ID [--config PATH]
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `id` | `ID` | string | yes | pattern `^[1-9][0-9]{0,19}$` |
+| `id` | `ID` | string | yes | pattern `^[1-9][0-9]{0,19}(?![\s\S])` |
 
 **Input**
 
@@ -1644,10 +1648,10 @@ A JSON object from `--input PATH`, or from stdin with `--input -`. Unknown prope
 
 | Property | Type | Required | Notes |
 |---|---|---|---|
-| `space_key` | string | yes | pattern `^~?[A-Za-z0-9_.@-]{1,255}$` |
+| `space_key` | string | yes | pattern `^~?[A-Za-z0-9_.@-]{1,255}(?![\s\S])` |
 | `title` | string | yes | min length 1; max length 255 |
 | `body_storage` | string | yes | max length 5242880 |
-| `parent_id` | string | no | pattern `^[1-9][0-9]{0,19}$` |
+| `parent_id` | string | no | pattern `^[1-9][0-9]{0,19}(?![\s\S])` |
 
 **Output**
 
@@ -1732,7 +1736,7 @@ atl confluence page update ID --input INPUT [--config PATH]
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `id` | `ID` | string | yes | pattern `^[1-9][0-9]{0,19}$` |
+| `id` | `ID` | string | yes | pattern `^[1-9][0-9]{0,19}(?![\s\S])` |
 | `input` | `--input INPUT` | string | yes | min length 1; Path to a UTF-8 JSON file, or '-' for stdin. |
 
 **Input**

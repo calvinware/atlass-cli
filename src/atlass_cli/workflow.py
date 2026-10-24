@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from typing import Any
@@ -458,7 +459,7 @@ def _failed_status(exc: AtlError) -> str:
 
 
 def _retry_hint(key: str, to: str) -> str:
-    return f"`atl jira requirements {key} --to '{to}'`"
+    return f"`atl jira requirements {shlex.quote(key)} --to {shlex.quote(to)}`"
 
 
 def transition(client: ServiceClient, project: ProjectConfig, key: str, to: str) -> dict[str, Any]:
@@ -607,8 +608,8 @@ def _partial(
         f"Do not roll back. Inspect {key}'s current status and field values (the edit may "
         "have overwritten a concurrent change), reconcile them with the issue owner, resolve "
         f"the failed checks or remote errors, and confirm a fresh {_retry_hint(key, to)} is "
-        f"ready before running `atl jira transition {key} --to '{to}'` again. A retry repeats "
-        "the edit (PUT) unconditionally.",
+        f"ready before running `atl jira transition {shlex.quote(key)} --to {shlex.quote(to)}` "
+        "again. A retry repeats the edit (PUT) unconditionally.",
         {
             "key": key,
             "atomic": False,

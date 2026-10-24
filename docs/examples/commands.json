@@ -343,6 +343,8 @@
             {"key": "EXAMPLE-10", "project": "EXAMPLE", "summary": "Single sign-on for internal tools", "status": "In Progress", "score": 20, "reasons": ["summary shares 2 word(s): single, sign"]},
             {"key": "EXAMPLE-7", "project": "EXAMPLE", "summary": "Login audit trail", "status": "To Do", "score": 10, "reasons": ["summary shares 1 word(s): login"]}
           ],
+          "candidate_pool_limit": 100,
+          "truncated": false,
           "selection": "caller"
         }
       },

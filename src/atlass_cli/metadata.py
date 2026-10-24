@@ -88,6 +88,9 @@ def paginate(client: ServiceClient, path: str, what: str) -> list[dict[str, Any]
         if is_last is None and total is not None and len(values) == total:
             return values
         if not batch:
+            # Without isLast or total, an empty page is the only end marker Jira sends.
+            if is_last is None and total is None:
+                return values
             raise incomplete(what, {"received": len(values), "total": total})
         start += len(batch)
     raise incomplete(what, {"received": len(values), "max_pages": MAX_META_PAGES})
@@ -154,6 +157,8 @@ def get_issue(client: ServiceClient, key: str) -> IssueSnapshot:
         f"/rest/api/2/issue/{seg(key)}",
         {"fields": "status,attachment,project,issuetype,summary"},
     )
+    if not isinstance(raw, dict) or not isinstance(raw.get("fields"), dict):
+        raise _invalid("issue")
     try:
         fields = raw["fields"]
         attachments = fields.get("attachment") or []

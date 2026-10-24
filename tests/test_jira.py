@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -9,11 +10,12 @@ from typing import Any
 import httpx
 import pytest
 
+from atlass_cli import jira as jira_module
 from atlass_cli.auth import Credential
-from atlass_cli.config import parse_config_file
+from atlass_cli.config import JiraConfig, parse_config_file
 from atlass_cli.contracts import AtlError
-from atlass_cli.features import jql_quote, rank, tokenize
-from atlass_cli.jira import attachment_add
+from atlass_cli.features import CANDIDATE_POOL, jql_quote, rank, tokenize
+from atlass_cli.jira import attachment_add, feature_create
 from atlass_cli.transport import ServiceClient
 from tests.conftest import (
     JIRA,
@@ -612,7 +614,22 @@ def test_story_builtins_apply_with_empty_story_required(harness: Harness, missin
 def setup_find(harness: Harness) -> None:
     harness.write_config()
     harness.store()
-    harness.server.add("GET", SEARCH, fixture("search_features.json"))
+    search_body = fixture("search_features.json")
+
+    def search_response(request: httpx.Request) -> httpx.Response:
+        jql = request.url.params["jql"]
+        if "key in (" not in jql:
+            return httpx.Response(200, json=search_body)
+        matches = [
+            issue for issue in search_body["issues"] if f'"{issue["key"]}"' in jql
+        ]
+        start = int(request.url.params["startAt"])
+        size = int(request.url.params["maxResults"])
+        return httpx.Response(
+            200, json={"issues": matches[start : start + size], "total": len(matches)}
+        )
+
+    harness.server.add("GET", SEARCH, handler=search_response)
     harness.server.add("GET", jira_path("/rest/api/2/issue/EXAMPLE-1"), fixture("issue_todo.json"))
 
 
@@ -743,17 +760,16 @@ def test_attachment_growing_file_never_exceeds_declared_size(
     setup_attach(harness)
     path = harness.tmp_path / "f.txt"
     path.write_bytes(b"x" * 5)
-    real_stat = Path.stat
-    declared = real_stat(path)
+    real_fstat = os.fstat
 
-    def stat_then_grow(self: Path, **kwargs: Any) -> os.stat_result:
-        if self == path:
-            with path.open("ab") as handle:
-                handle.write(b"y" * 100)
-            return declared
-        return real_stat(self, **kwargs)
+    def fstat_then_grow(fd: int) -> os.stat_result:
+        # Grow after both pre-upload checks so only the stream-time check can catch it.
+        declared = real_fstat(fd)
+        with path.open("ab") as handle:
+            handle.write(b"y" * 100)
+        return declared
 
-    monkeypatch.setattr(Path, "stat", stat_then_grow)
+    monkeypatch.setattr(os, "fstat", fstat_then_grow)
     harness.server.add("POST", ATTACH, handler=_attachment_ok)
     result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
     assert result.code == 6
@@ -1420,3 +1436,368 @@ def test_config_check_searched_sample_failing_reread_is_unverified(
     assert todo["details"]["sample_issue"] == "EXAMPLE-1"
     assert f"{ISSUE_1}/transitions" not in harness.server.paths()
     assert ids["EXAMPLE:transition:done:In Progress:transition_available"]["status"] == "pass"
+
+
+# --------------------------------------------------------------------------- review regressions
+
+
+def _client(server: FakeServer) -> ServiceClient:
+    return ServiceClient(
+        "jira", JIRA, Credential(auth="pat", secret=JIRA_TOKEN), transport=server.transport()
+    )
+
+
+def _jira_config(tmp_path: Path, **kwargs: Any) -> JiraConfig:
+    path = tmp_path / "atl.yaml"
+    path.write_text(config_text(**kwargs))
+    jira_config = parse_config_file(path).jira
+    assert jira_config is not None
+    return jira_config
+
+
+def _feature(number: int, summary: str) -> dict[str, Any]:
+    return {
+        "id": str(number),
+        "key": f"EXAMPLE-{number}",
+        "fields": {"summary": summary, "project": {"key": "EXAMPLE"}, "status": {"name": "Open"}},
+    }
+
+
+def _feature_search(
+    text_hits: list[dict[str, Any]],
+    named_hits: list[dict[str, Any]],
+    *,
+    page_cap: int | None = None,
+    send_total: bool = True,
+) -> Any:
+    """Serve feature-find searches: `key in` queries get named hits, others get text hits."""
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        params = request.url.params
+        hits = named_hits if "key in (" in params["jql"] else text_hits
+        start, size = int(params["startAt"]), int(params["maxResults"])
+        size = min(size, page_cap) if page_cap else size
+        body: dict[str, Any] = {"startAt": start, "maxResults": size}
+        body["issues"] = hits[start : start + size]
+        if send_total:
+            body["total"] = len(hits)
+        return httpx.Response(200, json=body)
+
+    return respond
+
+
+def _search_requests(harness: Harness) -> list[httpx.QueryParams]:
+    return [r.url.params for r in harness.server.requests if r.url.path == SEARCH]
+
+
+def test_feature_find_named_key_survives_full_text_pool(harness: Harness) -> None:
+    harness.write_config()
+    harness.store()
+    text_hits = [_feature(1000 + n, f"login widget {n}") for n in range(250)]
+    named = _feature(5, "Legacy login portal")
+    text_hits.insert(200, named)
+    harness.server.add("GET", SEARCH, handler=_feature_search(text_hits, [named]))
+    data = harness.run("jira", "feature", "find", "--text", "login EXAMPLE-5").data
+    keys = [c["key"] for c in data["candidates"]]
+    assert keys[0] == "EXAMPLE-5"
+    assert data["candidates"][0]["score"] == 110
+    assert len(keys) == len(set(keys)) == 10
+    assert data["candidate_pool_limit"] == CANDIDATE_POOL == 100
+    assert data["truncated"] is True
+    named_query, text_query = _search_requests(harness)
+    assert 'key in ("EXAMPLE-5")' in named_query["jql"]
+    assert 'summary ~ "login"' not in named_query["jql"]
+    assert 'summary ~ "login"' in text_query["jql"]
+    assert "key in" not in text_query["jql"]
+    assert text_query["jql"].endswith("ORDER BY updated DESC")
+    assert text_query["maxResults"] == "100"
+    assert harness.server.writes() == []
+
+
+def test_feature_find_named_keys_page_past_server_cap(harness: Harness) -> None:
+    harness.write_config()
+    harness.store()
+    named = [_feature(5, "Alpha"), _feature(6, "Beta")]
+    search = _feature_search([], named, page_cap=1)
+    harness.server.add("GET", SEARCH, handler=search)
+    data = harness.run("jira", "feature", "find", "--text", "EXAMPLE-5 EXAMPLE-6 EXAMPLE-7").data
+    assert [c["key"] for c in data["candidates"]] == ["EXAMPLE-5", "EXAMPLE-6"]
+    assert data["truncated"] is False
+    named_starts = [q["startAt"] for q in _search_requests(harness) if "key in (" in q["jql"]]
+    assert named_starts == ["0", "1"]
+
+
+@pytest.mark.parametrize(
+    "named_hits",
+    [
+        [_feature(5, "Alpha"), _feature(5, "Alpha")],
+        [_feature(5, "Alpha"), {"key": "EXAMPLE-6"}],
+        [_feature(5, "Alpha"), {"key": "EXAMPLE-99", "fields": {}}],
+    ],
+    ids=["duplicate", "missing-fields", "unexpected-key"],
+)
+def test_feature_find_rejects_invalid_named_results(
+    harness: Harness, named_hits: list[dict[str, Any]]
+) -> None:
+    harness.write_config()
+    harness.store()
+    harness.server.add("GET", SEARCH, handler=_feature_search([], named_hits, page_cap=1))
+    result = harness.run("jira", "feature", "find", "--text", "EXAMPLE-5 EXAMPLE-6")
+    assert result.code == 6
+    assert result.error["code"] == "response_invalid"
+    assert harness.server.writes() == []
+
+
+def test_feature_find_limit_alone_is_not_truncation(harness: Harness) -> None:
+    setup_find(harness)
+    data = harness.run("jira", "feature", "find", "--text", "login sign", "--limit", "1").data
+    assert len(data["candidates"]) == 1
+    assert data["truncated"] is False
+
+
+@pytest.mark.parametrize(("hits", "truncated"), [(100, True), (99, False)])
+def test_feature_find_truncation_without_total(
+    harness: Harness, hits: int, truncated: bool
+) -> None:
+    harness.write_config()
+    harness.store()
+    text_hits = [_feature(n, f"login {n}") for n in range(1, hits + 1)]
+    harness.server.add("GET", SEARCH, handler=_feature_search(text_hits, [], send_total=False))
+    assert harness.run("jira", "feature", "find", "--text", "login").data["truncated"] is truncated
+
+
+@pytest.mark.parametrize("project", ["EXAMPLE", ["EXAMPLE"], {"key": 7}, None])
+@pytest.mark.parametrize("status", ["Open", ["Open"], {"name": 1}, None])
+def test_rank_tolerates_malformed_nested_values(project: Any, status: Any) -> None:
+    issues = [
+        {"key": "EXAMPLE-5", "fields": {"summary": "login", "project": project, "status": status}}
+    ]
+    (candidate,) = rank(issues, ["login"], set(), "EXAMPLE", None, 10)
+    assert candidate.project == "EXAMPLE"
+    assert candidate.status is None
+    assert candidate.score == 15
+
+
+def test_search_next_start_counts_malformed_items(harness: Harness) -> None:
+    harness.write_config()
+    harness.store()
+    body = {
+        "startAt": 10,
+        "total": 50,
+        "issues": [
+            {"id": "1", "key": "EXAMPLE-1", "fields": {}},
+            "junk",
+            {"id": "3", "key": "EXAMPLE-3", "fields": {}},
+            {"id": "4", "key": "EXAMPLE-4", "fields": {}},
+        ],
+    }
+    harness.server.add("GET", SEARCH, body)
+    result = harness.run("jira", "search", "--jql", "x", "--start", "10", "--limit", "3")
+    assert [i["key"] for i in result.data["issues"]] == ["EXAMPLE-1", "EXAMPLE-3"]
+    assert result.data["next_start"] == 13
+    assert result.data["total"] == 50
+
+
+def test_search_without_total_uses_raw_count(harness: Harness) -> None:
+    harness.write_config()
+    harness.store()
+    harness.server.add("GET", SEARCH, {"issues": ["junk", "junk"]})
+    result = harness.run("jira", "search", "--jql", "x", "--start", "4", "--limit", "2")
+    assert result.data["issues"] == []
+    assert result.data["total"] == 6
+    assert result.data["next_start"] is None
+
+
+@pytest.mark.parametrize("fields", ["missing", None, "x", [], 3])
+def test_search_malformed_fields_is_response_invalid(harness: Harness, fields: Any) -> None:
+    harness.write_config()
+    harness.store()
+    item: dict[str, Any] = {"id": "1", "key": "EXAMPLE-1"}
+    if fields != "missing":
+        item["fields"] = fields
+    harness.server.add("GET", SEARCH, {"total": 1, "issues": [item]})
+    result = harness.run("jira", "search", "--jql", "x")
+    assert result.code == 6
+    assert result.error["code"] == "response_invalid"
+    assert harness.server.writes() == []
+
+
+@pytest.mark.parametrize("fields", ["missing", None, "x", []])
+def test_get_issue_malformed_fields_is_response_invalid(harness: Harness, fields: Any) -> None:
+    harness.write_config()
+    harness.store()
+    issue = fixture("issue_todo.json")
+    if fields == "missing":
+        del issue["fields"]
+    else:
+        issue["fields"] = fields
+    harness.server.add("GET", jira_path("/rest/api/2/issue/EXAMPLE-1"), issue)
+    result = harness.run("jira", "feature", "find", "--issue", "EXAMPLE-1")
+    assert result.code == 6
+    assert result.error["code"] == "response_invalid"
+    assert harness.server.paths() == [jira_path("/rest/api/2/issue/EXAMPLE-1")]
+
+
+def test_story_create_rejects_feature_key_with_trailing_newline(harness: Harness) -> None:
+    setup_create(harness)
+    result = create_story(harness, {**STORY, "feature_key": "EXAMPLE-10\n"})
+    assert result.code == 4
+    assert checks(result.error)["feature_key"]["status"] == "fail"
+    assert FEATURE_ISSUE not in harness.server.paths()
+    assert harness.server.writes() == []
+
+
+def test_create_response_key_with_trailing_newline_is_unknown(harness: Harness) -> None:
+    setup_create(harness)
+    harness.server.routes[("POST", CREATE)] = []
+    harness.server.add("POST", CREATE, {"id": "30001", "key": "EXAMPLE-42\n"}, status=201)
+    result = create_story(harness, STORY)
+    assert result.code == 6
+    assert result.error["details"]["reason"] == "create response did not include a valid issue key"
+
+
+def test_feature_create_domain_gate_cannot_be_bypassed(tmp_path: Path) -> None:
+    project = _jira_config(tmp_path).projects["EXAMPLE"]
+    server = FakeServer()
+    with pytest.raises(AtlError) as info:
+        feature_create(_client(server), project, {"project": "EXAMPLE", "summary": "SSO"})
+    assert info.value.code == "approval_required"
+    assert info.value.exit_code == 4
+    assert server.requests == []
+
+
+def test_feature_create_cli_uses_domain_approval_rule(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_create(harness)
+    calls: list[dict[str, Any]] = []
+    real = jira_module.require_feature_confirmation
+
+    def spy(project: Any, doc: dict[str, Any]) -> None:
+        calls.append(doc)
+        real(project, doc)
+
+    monkeypatch.setattr(jira_module, "require_feature_confirmation", spy)
+    result = create_feature(harness, {"project": "EXAMPLE", "summary": "SSO"})
+    assert result.error["code"] == "approval_required"
+    assert result.code == 4
+    assert calls == [{"project": "EXAMPLE", "summary": "SSO"}]
+    assert harness.server.requests == []
+
+
+def test_feature_create_missing_approval_precedes_missing_credentials(harness: Harness) -> None:
+    harness.write_config(config_text(policy="human_confirmed"))
+    result = create_feature(harness, {"project": "EXAMPLE", "summary": "SSO"})
+    assert result.code == 4
+    assert result.error["code"] == "approval_required"
+    assert harness.server.requests == []
+
+
+def test_createmeta_empty_final_page_without_markers(harness: Harness) -> None:
+    meta = fixture("createmeta_story_fields.json")
+    unmarked = {k: v for k, v in meta.items() if k not in ("isLast", "total")}
+    setup_create(harness)
+    harness.server.routes[("GET", STORY_FIELDS)] = []
+    end = len(meta["values"])
+    harness.server.add("GET", STORY_FIELDS, {**unmarked, "values": meta["values"][:4]})
+    harness.server.add(
+        "GET", STORY_FIELDS, {**unmarked, "startAt": 4, "values": meta["values"][4:]}
+    )
+    harness.server.add("GET", STORY_FIELDS, {**unmarked, "startAt": end, "values": []})
+    assert create_story(harness, STORY).code == 0
+    starts = [
+        r.url.params["startAt"] for r in harness.server.requests if r.url.path == STORY_FIELDS
+    ]
+    assert starts == ["0", "4", str(end)]
+
+
+@pytest.mark.parametrize("markers", [{"isLast": False}, {"total": 99}])
+def test_createmeta_empty_page_with_markers_still_fails_closed(
+    harness: Harness, markers: dict[str, Any]
+) -> None:
+    meta = fixture("createmeta_story_fields.json")
+    unmarked = {k: v for k, v in meta.items() if k not in ("isLast", "total")}
+    setup_create(harness)
+    harness.server.routes[("GET", STORY_FIELDS)] = []
+    harness.server.add("GET", STORY_FIELDS, {**unmarked, "values": meta["values"][:4]})
+    harness.server.add("GET", STORY_FIELDS, {**unmarked, **markers, "startAt": 4, "values": []})
+    result = create_story(harness, STORY)
+    assert result.error["code"] == "metadata_incomplete"
+    assert harness.server.writes() == []
+
+
+def _open_then(path: Path, action: Any) -> Any:
+    real_open = Path.open
+
+    def patched(self: Path, *args: Any, **kwargs: Any) -> Any:
+        if self == path and args[:1] == ("rb",):
+            action()
+        return real_open(self, *args, **kwargs)
+
+    return patched
+
+
+def test_attachment_grown_past_limit_before_open_is_rejected(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_attach(harness)
+    path = harness.tmp_path / "f.txt"
+    path.write_bytes(b"x" * 5)
+    monkeypatch.setattr(Path, "open", _open_then(path, lambda: path.write_bytes(b"x" * 11)))
+    harness.server.add("POST", ATTACH, handler=_attachment_ok)
+    result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
+    assert result.code == 2
+    assert result.error["code"] == "attachment_too_large"
+    assert result.error["details"] == {"size": 11, "limit": 10}
+    assert harness.server.requests == []
+
+
+def test_attachment_replaced_by_non_regular_file_is_rejected(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_attach(harness)
+    (harness.tmp_path / "f.txt").write_bytes(b"x")
+    real_fstat = os.fstat
+
+    def fifo_fstat(fd: int) -> os.stat_result:
+        info = list(real_fstat(fd))
+        info[0] = stat.S_IFIFO | 0o644
+        return os.stat_result(info)
+
+    monkeypatch.setattr(os, "fstat", fifo_fstat)
+    harness.server.add("POST", ATTACH, handler=_attachment_ok)
+    result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
+    assert result.code == 2
+    assert result.error["code"] == "file_invalid"
+    assert harness.server.requests == []
+
+
+def test_attachment_fstat_failure_is_file_invalid(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_attach(harness)
+    (harness.tmp_path / "f.txt").write_bytes(b"x")
+
+    def broken(fd: int) -> os.stat_result:
+        raise OSError("gone")
+
+    monkeypatch.setattr(os, "fstat", broken)
+    result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
+    assert result.error["code"] == "file_invalid"
+    assert harness.server.requests == []
+
+
+def test_attachment_uses_opened_file_size(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_attach(harness)
+    path = harness.tmp_path / "f.txt"
+    path.write_bytes(b"x" * 5)
+    monkeypatch.setattr(Path, "open", _open_then(path, lambda: path.write_bytes(b"y" * 8)))
+    reply = _attachment_reply([{"id": "500", "filename": "f.txt", "size": 8}])
+    harness.server.add("POST", ATTACH, handler=reply)
+    result = harness.run("jira", "attachment", "add", "EXAMPLE-1", "--file", "f.txt")
+    assert result.code == 0, result.out
+    (request,) = harness.server.requests
+    assert int(request.headers["content-length"]) == len(request.content)
+    assert b"\r\n\r\nyyyyyyyy\r\n--" in request.content
