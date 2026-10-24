@@ -51,6 +51,10 @@ plugins:
 hooks:
   - scripts/mkdocs_hooks.py
 
+# Site-only rules for shared Markdown, such as GitHub's light/dark image fragments.
+extra_css:
+  - stylesheets/extra.css
+
 markdown_extensions:
   - admonition
   - attr_list

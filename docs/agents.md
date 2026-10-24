@@ -40,26 +40,54 @@ Every invocation prints exactly one JSON object, including `--help` and argument
 {"ok": false, "error": {"code": "requirements_unmet", "message": "...", "fix": "...", "details": {}}}
 ```
 
-A minimal Python wrapper passes arguments as a list (no shell) and reads only stdout:
+A minimal Python wrapper passes arguments as a list (no shell), reads only stdout, and stops at
+every branch that needs a fix or an inspection:
 
 ```python
 import json
 import subprocess
 
+UNCERTAIN_WRITE = ("outcome_unknown", "partial_transition")  # exit 6 and exit 7
 
-def atl(*args: str, stdin: str | None = None) -> tuple[int, dict]:
+
+class Stop(Exception):
+    """Do what the message says, or show it to the human, before running anything else."""
+
+
+def atl(*args: str, stdin: str | None = None) -> dict:
     proc = subprocess.run(
         ["atl", *args], input=stdin, capture_output=True, text=True, check=False
     )
-    return proc.returncode, json.loads(proc.stdout)
+    out = json.loads(proc.stdout)
+    if out.get("ok") is not (proc.returncode == 0):
+        raise Stop(f"atl exit {proc.returncode} does not match its JSON envelope")
+    return out
 
 
-code, out = atl("jira", "requirements", "EXAMPLE-42", "--to", "Done")
-if out["ok"] and out["data"]["ready"]:
-    code, out = atl("jira", "transition", "EXAMPLE-42", "--to", "Done")
-elif not out["ok"]:
-    print(out["error"]["fix"])  # do this, or show it to the human, before retrying
+def transition(key: str, to: str) -> dict:
+    out = atl("jira", "requirements", key, "--to", to)
+    if not out["ok"]:
+        raise Stop(out["error"]["fix"])
+    checklist = out["data"]
+    if not checklist["ready"]:
+        failed = [c for c in checklist["checks"] if c["status"] not in ("pass", "not_applicable")]
+        raise Stop("\n".join(f"{c['id']}: {c['fix']}" for c in failed) or "not ready")
+
+    out = atl("jira", "transition", key, "--to", to)  # once; never loop on a write
+    if out["ok"]:
+        return out["data"]
+    error = out["error"]
+    if error["code"] in UNCERTAIN_WRITE:
+        raise Stop(
+            f"{error['fix']} Inspect {key} as described in 'Writes and retries' "
+            "(docs/commands.md) before any retry."
+        )
+    raise Stop(error["fix"])
 ```
+
+Call it as `transition("EXAMPLE-42", "Done")`. A `Stop` is never a signal to retry: after
+`outcome_unknown` or `partial_transition`, follow
+[After an unknown or partial write](#after-an-unknown-or-partial-write) first.
 
 ## Exit codes
 

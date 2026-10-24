@@ -1267,7 +1267,7 @@ atl jira comment add KEY --body-file BODY_FILE [--config PATH]
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
 | `key` | `KEY` | string | yes | pattern `^[A-Z][A-Z0-9_]*-[1-9][0-9]*$` |
-| `body_file` | `--body-file BODY_FILE` | string | yes | min length 1; Path to a UTF-8 JSON file, or '-' for stdin. |
+| `body_file` | `--body-file BODY_FILE` | string | yes | min length 1; Path to a plain UTF-8 text file (not JSON, max 1 MiB), or '-' for stdin. |
 
 **Input**
 

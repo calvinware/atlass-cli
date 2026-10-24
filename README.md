@@ -33,8 +33,11 @@ ranked candidates, but never makes those decisions.
 ## 60-second quickstart
 
 ```bash
-# 1. Install from a checkout (Python 3.11+)
-pipx install .                       # or: python3.11 -m pip install .
+# 1. Install from a checkout into its own environment (Python 3.11+; macOS/Linux shown,
+#    Windows in docs/getting-started.md)
+python3 -m venv ~/.local/share/atl/venv
+~/.local/share/atl/venv/bin/python -m pip install .
+export PATH="$PATH:$HOME/.local/share/atl/venv/bin"   # add to your shell profile to keep it
 
 # 2. Discover offline: no config, no credentials
 atl commands

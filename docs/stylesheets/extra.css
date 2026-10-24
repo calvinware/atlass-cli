@@ -1,0 +1,7 @@
+/* Shared Markdown marks theme-specific images with GitHub's #gh-light-mode-only and
+   #gh-dark-mode-only fragments. GitHub hides the inactive one; on the site, show only the image
+   for the active Material palette (which follows the palette toggle, not just the OS setting). */
+[data-md-color-scheme="default"] img[src$="#gh-dark-mode-only"],
+[data-md-color-scheme="slate"] img[src$="#gh-light-mode-only"] {
+  display: none;
+}

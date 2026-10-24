@@ -12,6 +12,7 @@ argument parser before anything is rendered.
 from __future__ import annotations
 
 import argparse
+import copy
 import difflib
 import json
 import re
@@ -43,6 +44,29 @@ EXAMPLE_KEYS = frozenset(
 FIX_KEYS = frozenset({"meaning", "fix", "details"})
 # The schema calls the `schema` command's positional `command`; argparse stores it as `path`.
 ARGUMENT_DEST_ALIASES = {"command": "path"}
+# Rendered-note corrections for schema descriptions known to be wrong, keyed by (command,
+# argument) and mapped to (published text, rendered text). The published text must still match,
+# so the override fails loudly once the CLI schema is corrected and can then be removed.
+# `jira comment add --body-file` reads plain UTF-8 text, not JSON (tracked as a CLI follow-up).
+ARGUMENT_NOTE_OVERRIDES = {
+    ("jira comment add", "body_file"): (
+        "Path to a UTF-8 JSON file, or '-' for stdin.",
+        "Path to a plain UTF-8 text file (not JSON, max 1 MiB), or '-' for stdin.",
+    ),
+}
+# Success `data` fields that echo a parsed CLI argument, keyed by argparse dest.
+ECHOED_ARGUMENTS = {
+    "key": "key",
+    "id": "id",
+    "to": "to",
+    "text": "query",
+    "jql": "jql",
+    "cql": "cql",
+    "start": "start",
+    "limit": "limit",
+    "path": "command",
+}
+PASSING_CHECK = ("pass", "not_applicable")
 URL_RE = re.compile(r"https?://([^/\s\"'`]+)")
 SECRET_MARKERS = ("Bearer ", "Basic ", "Authorization")
 SAFE_HOST_SUFFIX = ".example.test"
@@ -204,6 +228,7 @@ def validate_examples(contracts: list[Contract], examples: dict[str, Any]) -> li
             problems.append(f"{where}: missing keys {absent}")
             continue
         argv = example["argv"]
+        parsed: argparse.Namespace | None = None
         try:
             parsed = parser.parse_args(argv)
         except Exception as exc:  # noqa: BLE001 - report any parser rejection as a problem
@@ -211,7 +236,11 @@ def validate_examples(contracts: list[Contract], examples: dict[str, Any]) -> li
         else:
             if parsed.command != contract.path:
                 problems.append(f"{where}: argv parses as {parsed.command!r}")
+                parsed = None
         problems += _schema_errors(schema["arguments"], example["arguments"], f"{where}.arguments")
+        leaf = leaves.get(contract.path)
+        if parsed is not None and leaf is not None:
+            problems += _argv_mismatches(contract, leaf, parsed, example["arguments"], where)
         problems += _argument_mapping(contract, leaves.get(contract.path), where)
         if schema["input"] is None:
             if example["input"] is not None:
@@ -232,12 +261,148 @@ def validate_examples(contracts: list[Contract], examples: dict[str, Any]) -> li
             problems.append(f"{where}: error code {code!r} is not in this command's error_codes")
         if not isinstance(example.get("error_scenario"), str) or not example["error_scenario"]:
             problems.append(f"{where}: error_scenario must describe the failing call")
+        if parsed is not None:
+            problems += semantic_problems(parsed, example, where)
         for text in _strings(example):
             for host in URL_RE.findall(text):
                 if not host.endswith(SAFE_HOST_SUFFIX):
                     problems.append(f"{where}: URL host {host!r} is not a *{SAFE_HOST_SUFFIX} host")
             if any(marker in text for marker in SECRET_MARKERS):
                 problems.append(f"{where}: example text looks like a credential header")
+    return problems
+
+
+def _parsed_value(parsed: argparse.Namespace, dest: str) -> Any:
+    value = getattr(parsed, dest, None)
+    # nargs="+" positionals (the `schema` command path) are one space-joined argument.
+    return " ".join(value) if isinstance(value, list) else value
+
+
+def _argv_mismatches(
+    contract: Contract,
+    parser: argparse.ArgumentParser,
+    parsed: argparse.Namespace,
+    arguments: Any,
+    where: str,
+) -> list[str]:
+    """Each documented argument must equal what argparse produces from argv, after type
+    conversion; an argument left out of `arguments` must be left at its parser default."""
+    if not isinstance(arguments, dict):
+        return []
+    actions = {a.dest: a for a in _cli_actions(parser)}
+    problems = []
+    for name in contract.schema["arguments"].get("properties", {}):
+        dest = ARGUMENT_DEST_ALIASES.get(name, name)
+        if dest not in actions:
+            continue
+        actual = _parsed_value(parsed, dest)
+        expected = arguments[name] if name in arguments else actions[dest].default
+        if actual != expected:
+            problems.append(f"{where}: argv gives {name}={actual!r} but arguments has {expected!r}")
+    return problems
+
+
+def _failing(checks: Any) -> list[Any]:
+    if not isinstance(checks, list):
+        return []
+    return [c for c in checks if isinstance(c, dict) and c.get("status") not in PASSING_CHECK]
+
+
+def _checklist_problems(checklist: Any, label: str) -> list[str]:
+    if not isinstance(checklist, dict) or "ready" not in checklist:
+        return []
+    problems = []
+    ready = checklist.get("transition") is not None and not _failing(checklist.get("checks"))
+    if checklist["ready"] != ready:
+        problems.append(f"{label}: ready is {checklist['ready']!r} but its checks imply {ready!r}")
+    transition = checklist.get("transition")
+    operations = (checklist.get("plan") or {}).get("operations") or []
+    if (
+        isinstance(transition, dict)
+        and operations
+        and operations[-1].get("transition_id") != transition.get("id")
+    ):
+        problems.append(f"{label}: the planned transition_id differs from transition.id")
+    return problems
+
+
+def semantic_problems(parsed: argparse.Namespace, example: dict[str, Any], where: str) -> list[str]:
+    """Shown results must agree with the call that produced them.
+
+    Schema validation alone accepts a success for a different key, destination, query, or
+    version; these rules catch that.
+    """
+    problems: list[str] = []
+    success = example.get("success")
+    data = success.get("data") if isinstance(success, dict) else None
+    error_body = example.get("error")
+    error = error_body.get("error") if isinstance(error_body, dict) else None
+    if not isinstance(data, dict) or not isinstance(error, dict):
+        return problems
+    raw_details = error.get("details")
+    details: dict[str, Any] = raw_details if isinstance(raw_details, dict) else {}
+    payload = example["input"] if isinstance(example.get("input"), dict) else {}
+
+    def expect(label: str, actual: Any, expected: Any) -> None:
+        if actual != expected:
+            problems.append(f"{where}: {label} is {actual!r} but the call implies {expected!r}")
+
+    for dest, field in ECHOED_ARGUMENTS.items():
+        if field in data and hasattr(parsed, dest):
+            expect(f"success.data.{field}", data[field], _parsed_value(parsed, dest))
+    for field in ("project", "space_key", "title"):
+        if field in payload and field in data:
+            expect(f"success.data.{field}", data[field], payload[field])
+    url, key = data.get("url"), data.get("key")
+    if isinstance(url, str) and isinstance(key, str) and not url.endswith(f"/browse/{key}"):
+        problems.append(f"{where}: success.data.url does not point at {key}")
+    file_arg = getattr(parsed, "file", None)
+    if isinstance(file_arg, str) and isinstance(data.get("attachments"), list):
+        names = [a.get("filename") for a in data["attachments"] if isinstance(a, dict)]
+        expect("success.data.attachments filenames", names, [Path(file_arg).name])
+    if "human_confirmation" in payload and isinstance(data.get("attestation"), dict):
+        attested = {k: data["attestation"].get(k) for k in payload["human_confirmation"]}
+        expect("success.data.attestation", attested, payload["human_confirmation"])
+
+    expected_version = payload.get("expected_version")
+    if isinstance(expected_version, int):
+        expect("success.data.previous_version", data.get("previous_version"), expected_version)
+        expect("success.data.version", data.get("version"), expected_version + 1)
+        if error.get("code") == "version_conflict":
+            expect(
+                "error.details.expected_version", details.get("expected_version"), expected_version
+            )
+            current = details.get("current_version")
+            if not isinstance(current, int) or current == expected_version:
+                problems.append(f"{where}: version_conflict needs a different current_version")
+
+    if "ready" in data:
+        problems += _checklist_problems(data, f"{where}: success.data")
+    elif _failing(data.get("checks")):
+        problems.append(f"{where}: success.data.checks has a failing check")
+    if data.get("status") == "pass" and "summary" in data:
+        expect("success.data.summary", data["summary"], {"pass": len(data.get("checks", []))})
+    operations = data.get("operations")
+    if isinstance(operations, list) and operations:
+        if any(op.get("status") != "succeeded" for op in operations if isinstance(op, dict)):
+            problems.append(f"{where}: a successful write must show every operation succeeded")
+        if "transition_id" in data:
+            expect(
+                "success.data.transition_id",
+                data["transition_id"],
+                operations[-1].get("transition_id"),
+            )
+
+    checklist = details.get("checklist")
+    if isinstance(checklist, dict):
+        problems += _checklist_problems(checklist, f"{where}: error.details.checklist")
+        for dest in ("key", "to"):
+            if dest in checklist and hasattr(parsed, dest):
+                expect(f"error.details.checklist.{dest}", checklist[dest], getattr(parsed, dest))
+    if error.get("code") == "requirements_unmet":
+        checks = (checklist or {}).get("checks", details.get("checks"))
+        if not _failing(checks):
+            problems.append(f"{where}: requirements_unmet must show at least one failing check")
     return problems
 
 
@@ -425,6 +590,22 @@ def render_commands(
     return "\n".join(out) + "\n"
 
 
+def argument_schema(contract: Contract) -> dict[str, Any]:
+    """The published arguments schema with ARGUMENT_NOTE_OVERRIDES applied for rendering."""
+    schema: dict[str, Any] = copy.deepcopy(contract.schema["arguments"])
+    for (path, name), (published, rendered) in ARGUMENT_NOTE_OVERRIDES.items():
+        if path != contract.path:
+            continue
+        prop = schema.get("properties", {}).get(name, {})
+        if prop.get("description") != published:
+            raise GenerationError(
+                f"ARGUMENT_NOTE_OVERRIDES[{(path, name)!r}] is stale: the schema description is "
+                f"{prop.get('description')!r}. Remove or update the override."
+            )
+        prop["description"] = rendered
+    return schema
+
+
 def _command_section(
     contract: Contract, parser: argparse.ArgumentParser, example: dict[str, Any]
 ) -> list[str]:
@@ -442,7 +623,7 @@ def _command_section(
         "**Arguments**",
         "",
     ]
-    rows = property_rows(schema["arguments"])
+    rows = property_rows(argument_schema(contract))
     if rows:
         out += ["| Argument | CLI | Type | Required | Notes |", "|---|---|---|---|---|"]
         for name, kind, required, notes in rows:

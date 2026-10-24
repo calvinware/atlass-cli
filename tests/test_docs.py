@@ -122,6 +122,110 @@ def test_invalid_examples_are_reported(
     assert any(expected in p for p in problems), problems
 
 
+def _set(path: list[Any], value: Any) -> Any:
+    def mutate(example: dict[str, Any]) -> None:
+        target = example
+        for part in path[:-1]:
+            target = target[part]
+        target[path[-1]] = value
+
+    return mutate
+
+
+# Each mutation keeps every schema valid, so only the argv and semantic checks can catch it.
+@pytest.mark.parametrize(
+    ("command", "mutate", "expected"),
+    [
+        ("jira transition", _set(["argv", 2], "EXAMPLE-43"), "argv gives key='EXAMPLE-43'"),
+        ("jira transition", _set(["argv", 4], "In Progress"), "argv gives to='In Progress'"),
+        ("jira feature find", _set(["argv", 4], "audit log"), "argv gives text='audit log'"),
+        ("jira search", _set(["argv", 5], "25"), "argv gives limit=25"),
+        ("jira search", _set(["arguments", "start"], 0), None),
+        ("jira search", _set(["arguments", "start"], 40), "argv gives start=0"),
+        ("schema", _set(["argv", 1], "jira search"), "argv gives command='jira search'"),
+        ("jira transition", _set(["success", "data", "key"], "EXAMPLE-43"), "success.data.key"),
+        ("jira requirements", _set(["success", "data", "to"], "Done"), "success.data.to"),
+        ("jira feature find", _set(["success", "data", "query"], "sso"), "success.data.query"),
+        ("confluence page read", _set(["success", "data", "id"], "123457"), "success.data.id"),
+        (
+            "confluence page update",
+            _set(["input", "expected_version"], 2),
+            "success.data.previous_version",
+        ),
+        ("confluence page update", _set(["success", "data", "version"], 5), "success.data.version"),
+        (
+            "confluence page update",
+            _set(["error", "error", "details", "current_version"], 3),
+            "different current_version",
+        ),
+        ("confluence page create", _set(["success", "data", "title"], "Other"), "data.title"),
+        (
+            "jira story create",
+            _set(["success", "data", "url"], "https://jira.example.test/x"),
+            "url",
+        ),
+        (
+            "jira attachment add",
+            _set(["success", "data", "attachments", 0, "filename"], "other.xml"),
+            "filenames",
+        ),
+        ("jira requirements", _set(["success", "data", "ready"], False), "ready is False"),
+        (
+            "jira transition",
+            _set(["error", "error", "details", "checklist", "ready"], True),
+            "ready is True",
+        ),
+        (
+            "jira transition",
+            _set(["error", "error", "details", "checklist", "checks", 2, "status"], "pass"),
+            "at least one failing check",
+        ),
+        (
+            "jira transition",
+            _set(["success", "data", "operations", 0, "status"], "failed"),
+            "every operation succeeded",
+        ),
+        ("config check", _set(["success", "data", "summary"], {"pass": 8}), "summary"),
+    ],
+)
+def test_examples_must_match_their_call(
+    discovered: tuple[list[gen.Contract], dict[str, str]],
+    examples: dict[str, Any],
+    command: str,
+    mutate: Any,
+    expected: str | None,
+) -> None:
+    contracts, _ = discovered
+    broken = copy.deepcopy(examples)
+    mutate(broken[command])
+    problems = gen.validate_examples(contracts, broken)
+    if expected is None:
+        assert problems == []
+        return
+    assert any(expected in p and command in p for p in problems), problems
+
+
+def test_comment_body_file_row_says_plain_text() -> None:
+    reference = gen.COMMANDS_MD.read_text(encoding="utf-8")
+    (row,) = [line for line in reference.splitlines() if line.startswith("| `body_file` |")]
+    assert "plain UTF-8 text file" in row
+    assert "JSON file" not in row
+
+
+def test_stale_argument_note_override_fails(
+    discovered: tuple[list[gen.Contract], dict[str, str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contracts, _ = discovered
+    (comment,) = [c for c in contracts if c.path == "jira comment add"]
+    fixed = copy.deepcopy(comment.schema)
+    fixed["arguments"]["properties"]["body_file"]["description"] = "Path to a UTF-8 text file."
+    with pytest.raises(gen.GenerationError, match="is stale"):
+        gen.argument_schema(gen.Contract(comment.path, comment.summary, fixed))
+    assert comment.schema["arguments"]["properties"]["body_file"]["description"] == (
+        "Path to a UTF-8 JSON file, or '-' for stdin."
+    )
+
+
 def test_missing_error_fix_is_reported(
     discovered: tuple[list[gen.Contract], dict[str, str]], fixes: dict[str, Any]
 ) -> None:
@@ -305,3 +409,241 @@ def test_cookbook_recipes_are_valid_config(tmp_path: Path) -> None:
 def test_example_json_files_are_valid_json() -> None:
     for name in ("commands.json", "error-fixes.json"):
         json.loads((DOCS / "examples" / name).read_text(encoding="utf-8"))
+
+
+# --------------------------------------------------------------------------- agent wrapper
+
+READY_CHECKLIST = {
+    "key": "EXAMPLE-42",
+    "to": "Done",
+    "ready": True,
+    "checks": [{"id": "source_status", "status": "pass", "fix": None}],
+}
+NOT_READY_CHECKLIST = {
+    **READY_CHECKLIST,
+    "ready": False,
+    "checks": [
+        {"id": "source_status", "status": "pass", "fix": None},
+        {"id": "field:resolution", "status": "not_applicable", "fix": None},
+        {"id": "attachment:{key}_TestResults_*", "status": "fail", "fix": "Attach test results."},
+    ],
+}
+
+
+def _ok(data: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    return 0, {"ok": True, "data": data}
+
+
+def _err(exit_code: int, code: str, fix: str) -> tuple[int, dict[str, Any]]:
+    return exit_code, {
+        "ok": False,
+        "error": {"code": code, "message": "m", "fix": fix, "details": {}},
+    }
+
+
+@pytest.fixture
+def agent_wrapper(tmp_path: Path) -> dict[str, Any]:
+    """Load the copyable Python wrapper from docs/agents.md exactly as published."""
+    import runpy
+
+    text = (DOCS / "agents.md").read_text(encoding="utf-8")
+    (block,) = re.findall(r"```python\n(.*?)```", text, re.S)
+    module = tmp_path / "agent_wrapper.py"
+    module.write_text(block, encoding="utf-8")
+    return runpy.run_path(str(module))
+
+
+def _fake_cli(
+    monkeypatch: pytest.MonkeyPatch, replies: dict[str, tuple[int, dict[str, Any]]]
+) -> list[list[str]]:
+    import subprocess
+    from types import SimpleNamespace
+
+    calls: list[list[str]] = []
+
+    def run(argv: list[str], **kwargs: Any) -> SimpleNamespace:
+        assert argv[0] == "atl" and kwargs.get("shell") is not True
+        calls.append(argv)
+        exit_code, envelope = replies[argv[2]]
+        return SimpleNamespace(returncode=exit_code, stdout=json.dumps(envelope) + "\n")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    return calls
+
+
+def test_agent_wrapper_transitions_when_ready(
+    agent_wrapper: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    done = {"key": "EXAMPLE-42", "to": "Done", "operations": []}
+    calls = _fake_cli(monkeypatch, {"requirements": _ok(READY_CHECKLIST), "transition": _ok(done)})
+    assert agent_wrapper["transition"]("EXAMPLE-42", "Done") == done
+    assert [c[2] for c in calls] == ["requirements", "transition"]
+
+
+@pytest.mark.parametrize(
+    ("replies", "message", "commands"),
+    [
+        (
+            {"requirements": _err(3, "auth_missing", "Ask a human to run atl login.")},
+            "Ask a human to run atl login.",
+            ["requirements"],
+        ),
+        (
+            {"requirements": _ok(NOT_READY_CHECKLIST)},
+            "attachment:{key}_TestResults_*: Attach test results.",
+            ["requirements"],
+        ),
+        (
+            {
+                "requirements": _ok(READY_CHECKLIST),
+                "transition": _err(4, "requirements_unmet", "Resolve each failed check."),
+            },
+            "Resolve each failed check.",
+            ["requirements", "transition"],
+        ),
+        (
+            {
+                "requirements": _ok(READY_CHECKLIST),
+                "transition": _err(6, "outcome_unknown", "Inspect the issue."),
+            },
+            "Writes and retries",
+            ["requirements", "transition"],
+        ),
+        (
+            {
+                "requirements": _ok(READY_CHECKLIST),
+                "transition": _err(7, "partial_transition", "Do not roll back."),
+            },
+            "Writes and retries",
+            ["requirements", "transition"],
+        ),
+    ],
+    ids=["requirements-error", "not-ready", "transition-error", "exit-6", "exit-7"],
+)
+def test_agent_wrapper_stops_with_the_fix(
+    agent_wrapper: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    replies: dict[str, tuple[int, dict[str, Any]]],
+    message: str,
+    commands: list[str],
+) -> None:
+    calls = _fake_cli(monkeypatch, replies)
+    with pytest.raises(agent_wrapper["Stop"]) as raised:
+        agent_wrapper["transition"]("EXAMPLE-42", "Done")
+    assert message in str(raised.value)
+    if "transition" in replies and not replies["transition"][1]["ok"]:
+        assert replies["transition"][1]["error"]["fix"] in str(raised.value)
+    assert "source_status" not in str(raised.value)
+    assert [c[2] for c in calls] == commands
+
+
+def test_agent_wrapper_rejects_mismatched_exit_and_envelope(
+    agent_wrapper: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_cli(monkeypatch, {"requirements": (0, {"ok": False, "error": {}})})
+    with pytest.raises(agent_wrapper["Stop"], match="does not match"):
+        agent_wrapper["transition"]("EXAMPLE-42", "Done")
+
+
+# --------------------------------------------------------------------------- built site
+
+ALERT_RE = re.compile(r"^> \[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$")
+
+
+def _outside_fences(text: str) -> list[str]:
+    lines, in_fence = [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            in_fence = not in_fence
+        elif not in_fence:
+            lines.append(line)
+    return lines
+
+
+def _built_page(site: Path, page: Path) -> str:
+    rel = page.relative_to(DOCS).with_suffix("")
+    html = site / ("index.html" if rel.name == "index" else rel / "index.html")
+    return html.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def built_site(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Build the site once with the real config, hooks, and plugins into a temporary folder."""
+    import importlib.metadata
+    import importlib.util
+    import os
+    import subprocess
+    import sys
+
+    plugins = {ep.name for ep in importlib.metadata.entry_points(group="mkdocs.plugins")}
+    if importlib.util.find_spec("material") is None or "gh-admonitions" not in plugins:
+        if os.environ.get("ATL_REQUIRE_SITE_BUILD") == "1":
+            pytest.fail("ATL_REQUIRE_SITE_BUILD=1 but the docs extra is not installed")
+        pytest.skip("install the docs extra to build the site")
+    site = tmp_path_factory.mktemp("site")
+    proc = subprocess.run(  # noqa: S603 - fixed argv: this interpreter running MkDocs
+        [
+            sys.executable,
+            "-m",
+            "mkdocs",
+            "build",
+            "--strict",
+            "-f",
+            str(ROOT / "mkdocs.yml"),
+            "-d",
+            str(site),
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "NO_MKDOCS_2_WARNING": "1"},
+        timeout=120,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return site
+
+
+SITE_PAGES = sorted(DOCS.rglob("*.md"))
+
+
+@pytest.mark.parametrize("page", SITE_PAGES, ids=lambda p: p.relative_to(DOCS).as_posix())
+def test_built_site_styles_every_alert(built_site: Path, page: Path) -> None:
+    lines = _outside_fences(page.read_text(encoding="utf-8"))
+    alerts = [line for line in lines if ALERT_RE.match(line)]
+    html = _built_page(built_site, page)
+    assert html.count('class="admonition ') == len(alerts)
+    assert not re.search(r"<p>\s*\[!", html), "an unconverted GitHub alert reached the site"
+
+
+@pytest.mark.parametrize("page", SITE_PAGES, ids=lambda p: p.relative_to(DOCS).as_posix())
+def test_built_site_keeps_every_diagram(built_site: Path, page: Path) -> None:
+    source = page.read_text(encoding="utf-8")
+    html = _built_page(built_site, page)
+    diagrams = re.findall(r'<pre class="mermaid"><code>(.*?)</code></pre>', html, re.S)
+    assert len(diagrams) == source.count("```mermaid\n")
+    for diagram in diagrams:
+        assert re.match(r"\s*(flowchart|sequenceDiagram|stateDiagram)", diagram), diagram[:80]
+
+
+def test_built_site_renders_os_tabs(built_site: Path) -> None:
+    html = _built_page(built_site, DOCS / "getting-started.md")
+    assert html.count('class="tabbed-set tabbed-alternate"') == 2
+    labels = re.findall(r'<label for="__tabbed_\d+_\d+">([^<]+)</label>', html)
+    assert labels == ["Windows", "macOS", "Linux"] * 2
+    assert "os-tabs:" not in html
+
+
+def test_built_site_shows_one_banner_per_palette(built_site: Path) -> None:
+    html = _built_page(built_site, DOCS / "index.md")
+    assert 'src="assets/banner-light.svg#gh-light-mode-only"' in html
+    assert 'src="assets/banner-dark.svg#gh-dark-mode-only"' in html
+    assert 'href="stylesheets/extra.css"' in html
+    css = re.sub(r"\s+", " ", (built_site / "stylesheets" / "extra.css").read_text("utf-8"))
+    assert '[data-md-color-scheme="default"] img[src$="#gh-dark-mode-only"]' in css
+    assert '[data-md-color-scheme="slate"] img[src$="#gh-light-mode-only"]' in css
+    assert "display: none" in css
+
+
+def test_built_site_rewrites_links_outside_docs(built_site: Path) -> None:
+    html = _built_page(built_site, DOCS / "agents.md")
+    assert f'href="{REPO_URL}/blob/main/AGENTS.md"' in html

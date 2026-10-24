@@ -41,12 +41,26 @@ JSON
 
 `parent_id` is optional. The command succeeds only when Confluence confirms a page ID, type
 `page`, the submitted title and space, and version 1. Anything else after the request was sent is
-[`outcome_unknown`](../reference/errors.md#outcome_unknown) (exit 6): search for the title before
-any retry:
+[`outcome_unknown`](../reference/errors.md#outcome_unknown) (exit 6): the page may or may not
+exist. Do not run the create again until you have inspected the space:
 
-```bash
-atl confluence page search --cql 'space = "DOCS" AND title = "Release 1.4 notes"'
-```
+1. Search for the title. The search is only a starting point for finding candidates:
+
+   ```bash
+   atl confluence page search --cql 'space = "DOCS" AND title = "Release 1.4 notes"'
+   ```
+
+2. Collect every candidate. While `next_start` is not `null`, repeat the search with
+   `--start NEXT_START`.
+3. Read each candidate with `atl confluence page read ID` and compare its `title`, `space_key`,
+   `ancestors` (your `parent_id`), and `body_storage` with what you submitted.
+4. If a page matches what you submitted, the create was applied. Continue with that page ID and
+   do not create it again.
+5. Retry the create only when inspection establishes that the submitted page was not created. If
+   the outcome is still ambiguous (a search or read fails, a page has your title but different
+   content, or more than one page matches), stop and ask a human.
+
+The full rule for every write is in [Writes and retries](../commands.md#writes-and-retries).
 
 ## Update a page with a fresh `expected_version`
 

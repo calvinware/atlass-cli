@@ -11,7 +11,8 @@ and a native OS keyring.
 
 ## Install
 
-`atl` is installed from a checkout of this repository.
+`atl` is installed from a checkout of this repository into its own virtual environment. You
+need only Git and Python 3.11 or later; no `pipx` or other installer is required.
 
 <!-- os-tabs:start -->
 
@@ -22,22 +23,46 @@ Install Python 3.11+ from python.org or the Microsoft Store, then in PowerShell:
 ```powershell
 git clone https://github.com/calvinware/atlass-cli.git
 cd atlass-cli
-py -3.11 -m pip install --user .
-atl commands
+py -3 --version                     # must be 3.11 or later
+py -3 -m venv "$env:LOCALAPPDATA\atl\venv"
+& "$env:LOCALAPPDATA\atl\venv\Scripts\python.exe" -m pip install .
+& "$env:LOCALAPPDATA\atl\venv\Scripts\atl.exe" commands
 ```
 
-If `atl` is not found, add the user Scripts folder that pip prints to your `PATH`, or run
-`pipx install .` instead.
+`py -3` runs the newest Python 3 you have installed. If it is older than 3.11, name a newer one
+instead, for example `py -3.13`. If you have no `py` launcher (common with the Microsoft Store
+build), use `python` in its place.
+
+To run `atl` by name, append the environment's `Scripts` folder to your user `PATH`, then open a
+new terminal:
+
+```powershell
+$scripts = "$env:LOCALAPPDATA\atl\venv\Scripts"
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+[Environment]::SetEnvironmentVariable("Path", "$userPath;$scripts", "User")
+```
 
 ### macOS
 
-Install Python 3.11+ (for example `brew install python@3.11` or pyenv), then:
+Install Python 3.11+ (for example `brew install python@3.13`, pyenv, or python.org), then:
 
 ```bash
 git clone https://github.com/calvinware/atlass-cli.git
 cd atlass-cli
-pipx install .            # or: python3.11 -m pip install --user .
-atl commands
+python3 --version                   # must be 3.11 or later
+python3 -m venv ~/.local/share/atl/venv
+~/.local/share/atl/venv/bin/python -m pip install .
+~/.local/share/atl/venv/bin/atl commands
+```
+
+If `python3 --version` is older than 3.11, use the newer interpreter by name, for example
+`python3.13 -m venv ...`.
+
+To run `atl` by name, append the environment's `bin` folder to `PATH` in `~/.zshrc` (the default
+shell), then open a new terminal:
+
+```bash
+echo 'export PATH="$PATH:$HOME/.local/share/atl/venv/bin"' >> ~/.zshrc
 ```
 
 ### Linux
@@ -47,11 +72,27 @@ Install Python 3.11+ from your distribution or pyenv, then:
 ```bash
 git clone https://github.com/calvinware/atlass-cli.git
 cd atlass-cli
-pipx install .            # or: python3.11 -m pip install --user .
-atl commands
+python3 --version                   # must be 3.11 or later
+python3 -m venv ~/.local/share/atl/venv
+~/.local/share/atl/venv/bin/python -m pip install .
+~/.local/share/atl/venv/bin/atl commands
+```
+
+If `python3 --version` is older than 3.11, use the newer interpreter by name, for example
+`python3.11 -m venv ...`. On Debian and Ubuntu, if `venv` reports that `ensurepip` is not
+available, install the matching package first (for example `sudo apt install python3.11-venv`).
+
+To run `atl` by name, append the environment's `bin` folder to `PATH` in your shell profile
+(`~/.bashrc` for bash), then open a new terminal:
+
+```bash
+echo 'export PATH="$PATH:$HOME/.local/share/atl/venv/bin"' >> ~/.bashrc
 ```
 
 <!-- os-tabs:end -->
+
+The `PATH` entry goes last, so the environment's own `python` never shadows the one you already
+use. If you already use `pipx`, `pipx install .` from the checkout works as well.
 
 `atl commands` works offline with no config. It prints one JSON object that lists every command.
 If you see `{"ok": true, ...}`, the install works.
