@@ -177,7 +177,9 @@ limit. That shows up as `remote_limit_exceeded` (exit 5).
 - Each `allowed_issue_types` entry must be creatable in its project.
 - On the story create screen: `acceptance_criteria`, `feature_link`, and every field in
   `create.story.required`. On the feature create screen: every field in `create.feature.required`.
-  Each must resolve to exactly one field on that screen, with a compatible schema. Check IDs name
+  Each must resolve to exactly one field on that screen, allow the `set` operation (when Jira
+  lists operations), not share a Jira field ID with another listed name, and have a compatible
+  schema. Check IDs name
   the type, for example `EXAMPLE:Story:field:feature_link` or `EXAMPLE:Feature:field:team`.
 - Live required create fields that are not mapped are reported.
 - For each transition source status, `atl` needs a sample issue that Jira reports in that project

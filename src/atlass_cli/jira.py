@@ -241,9 +241,32 @@ def _create(
     if description is not None:
         fields["description"] = description
     created = client.request("POST", "/rest/api/2/issue", json_body={"fields": fields})
-    if not isinstance(created, dict) or not isinstance(created.get("key"), str):
-        raise client.unknown_outcome("create response did not include an issue key")
-    return created
+    reason = _create_mismatch(created, project.key)
+    if reason is not None:
+        raise client.unknown_outcome(
+            reason,
+            f"Search for the issue before retrying: `atl jira search --jql 'project = "
+            f"{project.key} AND created >= -1h ORDER BY created DESC'` (narrow the window to when "
+            f"you ran the command) and look for the summary {sanitize_text(summary, 120)!r}. Open "
+            "each candidate in the Jira issue view to confirm it is yours. atl does not retry "
+            "writes.",
+        )
+    return {"id": created["id"], "key": created["key"]}
+
+
+def _create_mismatch(created: Any, project_key: str) -> str | None:
+    """Return why a create response does not confirm a new issue in the project, or None."""
+    if not isinstance(created, dict):
+        return "create response was not a JSON object"
+    key = created.get("key")
+    if not isinstance(key, str) or not ISSUE_KEY_RE.match(key):
+        return "create response did not include a valid issue key"
+    if not key.startswith(f"{project_key}-"):
+        return f"create response key is not in project {project_key}"
+    issue_id = created.get("id")
+    if not isinstance(issue_id, str) or not issue_id.strip():
+        return "create response did not include an issue id"
+    return None
 
 
 def story_create(
@@ -270,7 +293,7 @@ def story_create(
 
     feature_key = doc.get("feature_key")
     if isinstance(feature_key, str) and ISSUE_KEY_RE.match(feature_key):
-        checks.append(_check_feature(client, jira, project, feature_key))
+        checks.append(_check_feature(client, jira, feature_key))
         values["feature_link"] = feature_key
     else:
         checks.append(
@@ -296,7 +319,7 @@ def story_create(
     created = _create(client, project, type_id, doc["summary"], description, payload)
     return {
         "key": created["key"],
-        "id": str(created.get("id", "")),
+        "id": created["id"],
         "url": browse_url(client, created["key"]),
         "project": project.key,
         "issue_type": project.story_type,
@@ -304,9 +327,7 @@ def story_create(
     }
 
 
-def _check_feature(
-    client: ServiceClient, jira: JiraConfig, project: ProjectConfig, key: str
-) -> Check:
+def _check_feature(client: ServiceClient, jira: JiraConfig, key: str) -> Check:
     try:
         feature = get_issue(client, key)
     except AtlError as exc:
@@ -318,7 +339,26 @@ def _check_feature(
             f"Feature {key} was not found or is not visible.",
             "Check the key, or find candidates with `atl jira feature find`.",
         )
-    expected = jira.projects.get(feature.project, project).feature_type
+    if feature.key != key:
+        return Check(
+            "feature_key",
+            "fail",
+            f"Jira returned {feature.key} when {key} was requested (moved or renamed issue).",
+            f"Pass the feature's current key ({feature.key}) as feature_key if it is the intended "
+            "feature, or find candidates with `atl jira feature find`.",
+            {"returned_key": feature.key},
+        )
+    feature_project = jira.projects.get(feature.project)
+    if feature_project is None:
+        return Check(
+            "feature_key",
+            "fail",
+            f"{key} is in project {feature.project}, which is not configured in atl.yaml.",
+            "Pass the key of a feature in a configured project (candidates: `atl jira feature "
+            "find`), or ask the team to add the feature's project to atl.yaml.",
+            {"project": feature.project},
+        )
+    expected = feature_project.feature_type
     if feature.issue_type != expected:
         return Check(
             "feature_key",
@@ -364,7 +404,7 @@ def feature_create(
         }
     return {
         "key": created["key"],
-        "id": str(created.get("id", "")),
+        "id": created["id"],
         "url": browse_url(client, created["key"]),
         "project": project.key,
         "issue_type": project.feature_type,
@@ -534,9 +574,14 @@ def comment_add(client: ServiceClient, key: str, body: str) -> dict[str, Any]:
     result = client.request(
         "POST", f"/rest/api/2/issue/{seg(key)}/comment", json_body={"body": body}
     )
-    if not isinstance(result, dict) or "id" not in result:
-        raise client.unknown_outcome("comment response did not include an id")
-    return {"key": key, "comment_id": str(result["id"])}
+    comment_id = result.get("id") if isinstance(result, dict) else None
+    if not isinstance(comment_id, str) or not comment_id.strip():
+        raise client.unknown_outcome(
+            "comment response did not include a comment id",
+            f"Open {key} in the Jira issue view and look for a comment whose body exactly matches "
+            "what you sent before retrying `atl jira comment add`. atl does not retry writes.",
+        )
+    return {"key": key, "comment_id": comment_id}
 
 
 def _name(value: Any, key: str = "name") -> str | None:
@@ -715,7 +760,7 @@ def _check_project_create(client: ServiceClient, project: ProjectConfig) -> list
                 Check(f"{prefix}:{type_name}:create_fields", "unverified", exc.message, exc.fix)
             )
             continue
-        resolved: set[str] = set()
+        owners: dict[str, str] = {}
         for friendly in friendly_names:
             ref = project.fields[friendly]
             check_id = f"{prefix}:{type_name}:field:{friendly}"
@@ -736,15 +781,30 @@ def _check_project_create(client: ServiceClient, project: ProjectConfig) -> list
                     )
                 )
                 continue
-            resolved.add(meta.id)
-            problem_check = _encoding_check(check_id, ref.encoding, meta)
-            checks.append(problem_check)
+            if meta.id in owners:
+                checks.append(_drift(field_collision(check_id, owners[meta.id], friendly, meta)))
+                continue
+            owners[meta.id] = friendly
+            if meta.operations is not None and "set" not in meta.operations:
+                checks.append(
+                    Check(
+                        check_id,
+                        "drift",
+                        f"{meta.name!r} ({meta.id}) cannot be set on the {type_name} create "
+                        "screen.",
+                        f"Ask a Jira admin to allow setting {meta.name!r} on the {type_name} "
+                        f"create screen, or map fields.{friendly} in atl.yaml to a settable field.",
+                        {"field_id": meta.id, "operations": meta.operations},
+                    )
+                )
+                continue
+            checks.append(_encoding_check(check_id, ref.encoding, meta))
         for field_id, meta in sorted(live.items()):
             if (
                 meta.required
                 and not meta.has_default
                 and field_id not in SYSTEM_CREATE_FIELDS
-                and field_id not in resolved
+                and field_id not in owners
                 and field_id != "description"
             ):
                 check = _missing_live_field(meta, type_name)

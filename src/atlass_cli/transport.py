@@ -62,7 +62,12 @@ def sanitize_remote_errors(body: Any, redact: tuple[str, ...] = ()) -> dict[str,
 
 
 def credential_redactions(credential: Credential | None) -> tuple[str, ...]:
-    """Every form of the active secret a server could echo back, longest first."""
+    """The echoed forms of the active secret that are redacted, longest first.
+
+    Covers the raw secret, the full Authorization header value, its credential part (the PAT or
+    base64 Basic token), and the raw ``username:secret`` pair. Other encodings a server might
+    echo (URL-encoded, JSON-escaped, or re-encoded variants) are not recognized.
+    """
     if credential is None or not credential.secret:
         return ()
     header = credential.authorization_header()
@@ -237,12 +242,13 @@ class ServiceClient:
             for chunk in response.iter_bytes():
                 total += len(chunk)
                 if total > MAX_RESPONSE_BYTES:
+                    if is_write:
+                        raise self.unknown_outcome(f"response exceeded {MAX_RESPONSE_BYTES} bytes")
                     raise AtlError(
                         "response_invalid",
                         f"The {self.service} response exceeded {MAX_RESPONSE_BYTES} bytes.",
                         "Narrow the request (smaller --limit or more specific query).",
                         {"service": self.service},
-                        write_outcome="unknown" if is_write else None,
                     )
                 chunks.append(chunk)
         except httpx.HTTPError as exc:

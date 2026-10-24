@@ -115,7 +115,9 @@ def test_story_create_missing_feature(harness: Harness) -> None:
 def test_story_create_feature_wrong_type(harness: Harness) -> None:
     setup_create(harness)
     harness.server.routes[("GET", FEATURE_ISSUE)] = []
-    harness.server.add("GET", FEATURE_ISSUE, fixture("issue_todo.json"))
+    story = fixture("issue_todo.json")
+    story["key"] = "EXAMPLE-10"
+    harness.server.add("GET", FEATURE_ISSUE, story)
     result = create_story(harness, STORY)
     assert "not a Feature" in checks(result.error)["feature_key"]["message"]
 
@@ -297,6 +299,76 @@ def test_story_create_remote_400_is_sanitized(harness: Harness) -> None:
     result = create_story(harness, STORY)
     assert result.code == 5
     assert result.error["details"]["fields"] == {"customfield_10200": "Parent invalid"}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"",
+        [],
+        {},
+        {"id": "30001"},
+        {"id": "30001", "key": ""},
+        {"id": "30001", "key": None},
+        {"id": "30001", "key": "not a key"},
+        {"id": "30001", "key": "OTHER-42"},
+        {"id": "30001", "key": "EXAMPLEX-42"},
+        {"key": "EXAMPLE-42"},
+        {"id": "", "key": "EXAMPLE-42"},
+        {"id": 30001, "key": "EXAMPLE-42"},
+    ],
+)
+@pytest.mark.parametrize("kind", ["story", "feature"])
+def test_create_unconfirmed_success_is_outcome_unknown(
+    harness: Harness, kind: str, body: Any
+) -> None:
+    setup_create(harness, policy="automatic")
+    harness.server.routes[("POST", CREATE)] = []
+    if isinstance(body, bytes):
+        harness.server.add("POST", CREATE, handler=lambda _: httpx.Response(201, content=body))
+    else:
+        harness.server.add("POST", CREATE, body, status=201)
+    if kind == "story":
+        result = create_story(harness, STORY)
+    else:
+        result = create_feature(harness, {"project": "EXAMPLE", "summary": "Add SSO button"})
+    assert result.code == 6, result.out
+    assert result.error["code"] == "outcome_unknown"
+    assert "data" not in result.out
+    if body != b"":
+        assert "atl jira search" in result.error["fix"]
+        assert "project = EXAMPLE" in result.error["fix"]
+        assert "'Add SSO button'" in result.error["fix"]
+    assert len(harness.server.writes()) == 1
+
+
+def test_story_create_feature_in_unconfigured_project(harness: Harness) -> None:
+    setup_create(harness)
+    feature = fixture("issue_feature.json")
+    feature["fields"]["project"]["key"] = "OTHER"
+    harness.server.routes[("GET", FEATURE_ISSUE)] = []
+    harness.server.add("GET", FEATURE_ISSUE, feature)
+    result = create_story(harness, STORY)
+    assert result.code == 4
+    check = checks(result.error)["feature_key"]
+    assert check["status"] == "fail"
+    assert "OTHER" in check["message"]
+    assert check["details"] == {"project": "OTHER"}
+    assert harness.server.writes() == []
+
+
+def test_story_create_feature_key_mismatch(harness: Harness) -> None:
+    setup_create(harness)
+    feature = fixture("issue_feature.json")
+    feature["key"] = "EXAMPLE-11"
+    harness.server.routes[("GET", FEATURE_ISSUE)] = []
+    harness.server.add("GET", FEATURE_ISSUE, feature)
+    result = create_story(harness, STORY)
+    assert result.code == 4
+    check = checks(result.error)["feature_key"]
+    assert check["status"] == "fail"
+    assert check["details"] == {"returned_key": "EXAMPLE-11"}
+    assert harness.server.writes() == []
 
 
 # --------------------------------------------------------------------------- feature create
@@ -770,6 +842,25 @@ def test_comment_from_stdin(harness: Harness) -> None:
     assert json.loads(harness.server.requests[0].content) == {"body": "Hé\n"}
 
 
+@pytest.mark.parametrize(
+    "body", [b"", [], {}, {"id": None}, {"id": ""}, {"id": " "}, {"id": 777}, {"body": "x"}]
+)
+def test_comment_unconfirmed_success_is_outcome_unknown(harness: Harness, body: Any) -> None:
+    harness.write_config()
+    harness.store()
+    path = jira_path("/rest/api/2/issue/EXAMPLE-1/comment")
+    if isinstance(body, bytes):
+        harness.server.add("POST", path, handler=lambda _: httpx.Response(201, content=body))
+    else:
+        harness.server.add("POST", path, body, status=201)
+    result = harness.run("jira", "comment", "add", "EXAMPLE-1", "--body-file", "-", stdin=b"hi")
+    assert result.code == 6, result.out
+    assert result.error["code"] == "outcome_unknown"
+    assert "issue view" in result.error["fix"]
+    assert "EXAMPLE-1" in result.error["fix"]
+    assert len(harness.server.writes()) == 1
+
+
 def test_comment_from_file_and_empty(harness: Harness, tmp_path: Path) -> None:
     harness.write_config()
     harness.store()
@@ -1140,3 +1231,43 @@ def test_config_check_explicit_issue_lookup_error_propagates(harness: Harness) -
     assert result.code == 5
     assert result.error["code"] == "not_found"
     assert harness.server.writes() == []
+
+
+def test_config_check_required_field_without_set_is_drift(harness: Harness) -> None:
+    setup_config_check(harness)
+    meta = fixture("createmeta_story_fields.json")
+    for value in meta["values"]:
+        if value["fieldId"] == "customfield_10100":
+            value["operations"] = []
+    harness.server.routes[("GET", STORY_FIELDS)] = []
+    harness.server.add("GET", STORY_FIELDS, meta)
+    result = harness.run("config", "check")
+    assert result.code == 4
+    assert result.error["code"] == "config_drift"
+    check = _config_check_ids(result)["EXAMPLE:Story:field:acceptance_criteria"]
+    assert check["status"] == "drift"
+    assert "cannot be set" in check["message"]
+    assert "fields.acceptance_criteria" in check["fix"]
+    assert check["details"] == {"field_id": "customfield_10100", "operations": []}
+    create = create_story(harness, STORY)
+    assert create.code == 4
+    assert checks(create.error)["field:acceptance_criteria"]["status"] == "fail"
+
+
+def test_config_check_required_fields_sharing_an_id_is_drift(harness: Harness) -> None:
+    setup_config_check(harness)
+    harness.write_config(
+        config_text().replace(
+            "{jira_name: Parent Link, encoding: issue_key_string}",
+            "{id: customfield_10100, encoding: issue_key_string}",
+        )
+    )
+    result = harness.run("config", "check")
+    assert result.code == 4
+    assert result.error["code"] == "config_drift"
+    check = _config_check_ids(result)["EXAMPLE:Story:field:feature_link"]
+    assert check["status"] == "drift"
+    assert check["details"] == {
+        "friendly": ["acceptance_criteria", "feature_link"],
+        "field_id": "customfield_10100",
+    }

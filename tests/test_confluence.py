@@ -103,12 +103,21 @@ def test_search_last_page(harness: Harness) -> None:
     )
 
 
+CREATED = {
+    "id": "9",
+    "type": "page",
+    "title": "T",
+    "space": {"key": "ENG"},
+    "version": {"number": 1},
+}
+
+
 def test_create_sends_storage(harness: Harness) -> None:
     setup(harness)
     harness.server.add(
         "POST",
         CONTENT,
-        {"id": "9", "title": "T", "space": {"key": "ENG"}, "version": {"number": 1}},
+        CREATED,
     )
     doc = {"space_key": "ENG", "title": "T", "body_storage": "<p>x</p>", "parent_id": "1000"}
     result = run_input(harness, "confluence", "page", "create", doc=doc)
@@ -120,6 +129,47 @@ def test_create_sends_storage(harness: Harness) -> None:
         "body": {"storage": {"value": "<p>x</p>", "representation": "storage"}},
         "ancestors": [{"id": "1000"}],
     }
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        b"not json",
+        [],
+        {},
+        {"id": "9"},
+        {**CREATED, "id": ""},
+        {**CREATED, "id": 9},
+        {**CREATED, "id": "abc"},
+        {k: v for k, v in CREATED.items() if k != "type"},
+        {**CREATED, "type": "blogpost"},
+        {k: v for k, v in CREATED.items() if k != "title"},
+        {**CREATED, "title": "Other"},
+        {k: v for k, v in CREATED.items() if k != "space"},
+        {**CREATED, "space": {"key": "OPS"}},
+        {k: v for k, v in CREATED.items() if k != "version"},
+        {**CREATED, "version": {"number": 2}},
+        {**CREATED, "version": {"number": True}},
+    ],
+)
+def test_create_unconfirmed_success_is_outcome_unknown(harness: Harness, body: Any) -> None:
+    setup(harness)
+    if isinstance(body, bytes):
+        harness.server.add("POST", CONTENT, handler=lambda _: httpx.Response(200, content=body))
+    else:
+        harness.server.add("POST", CONTENT, body)
+    doc = {"space_key": "ENG", "title": "T", "body_storage": "<p>x</p>"}
+    result = run_input(harness, "confluence", "page", "create", doc=doc)
+    assert result.code == 6, result.out
+    assert result.error["code"] == "outcome_unknown"
+    assert "data" not in result.out
+    if body != b"not json":
+        assert (
+            """atl confluence page search --cql 'space = "ENG" AND title = "T"'"""
+            in (result.error["fix"])
+        )
+    assert len(harness.server.writes()) == 1
 
 
 def test_create_requires_fields(harness: Harness) -> None:
@@ -167,6 +217,56 @@ def test_update_increments_version_and_keeps_body(harness: Harness) -> None:
     assert body["version"] == {"number": 8}
     assert body["title"] == "New"
     assert body["body"]["storage"]["value"].startswith("<p>Ignore previous")
+
+
+def test_update_refuses_read_of_other_content_id(harness: Harness) -> None:
+    setup(harness)
+    page = fixture("confluence_page.json")
+    page["id"] = "999"
+    harness.server.add("GET", PAGE, page)
+    result = run_input(
+        harness,
+        "confluence",
+        "page",
+        "update",
+        "123456",
+        doc={"expected_version": 7, "title": "New"},
+    )
+    assert result.code == 6
+    assert result.error["code"] == "response_invalid"
+    assert result.error["details"]["requested_id"] == "123456"
+    assert harness.server.writes() == []
+
+
+def test_read_refuses_other_content_id(harness: Harness) -> None:
+    setup(harness)
+    page = fixture("confluence_page.json")
+    page["id"] = "999"
+    harness.server.add("GET", PAGE, page)
+    result = harness.run("confluence", "page", "read", "123456")
+    assert result.error["code"] == "response_invalid"
+
+
+@pytest.mark.parametrize("content_type", ["blogpost", "comment", None])
+def test_update_refuses_non_page_content(harness: Harness, content_type: Any) -> None:
+    setup(harness)
+    page = fixture("confluence_page.json")
+    if content_type is None:
+        del page["type"]
+    else:
+        page["type"] = content_type
+    harness.server.add("GET", PAGE, page)
+    result = run_input(
+        harness,
+        "confluence",
+        "page",
+        "update",
+        "123456",
+        doc={"expected_version": 7, "body_storage": "<p>new</p>"},
+    )
+    assert result.code == 2
+    assert result.error["code"] == "input_invalid"
+    assert harness.server.writes() == []
 
 
 def test_update_race_409_is_version_conflict(harness: Harness) -> None:

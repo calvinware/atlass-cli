@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
+from atlass_cli import transport
 from tests.conftest import Harness, config_text, fixture, jira_path
 
 KEY = "EXAMPLE-1"
@@ -345,6 +346,50 @@ def test_unknown_when_put_times_out(harness: Harness) -> None:
         ("transition", "not_attempted"),
     ]
     assert [r.method for r in harness.server.writes()] == ["PUT"]
+
+
+def _oversized(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, content=b" " * (OVERSIZE_CAP + 1))
+
+
+OVERSIZE_CAP = 64 * 1024
+
+
+def test_unknown_when_put_response_is_oversized(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(transport, "MAX_RESPONSE_BYTES", OVERSIZE_CAP)
+    setup(harness, transitions="transitions_todo_no_screen.json", pre_edit="true")
+    harness.server.add("PUT", ISSUE, handler=_oversized)
+    result = harness.run("jira", "transition", KEY, "--to", "In Progress")
+    assert result.code == 6
+    assert result.error["code"] == "outcome_unknown"
+    assert [(o["op"], o["status"]) for o in result.error["details"]["operations"]] == [
+        ("edit", "unknown"),
+        ("transition", "not_attempted"),
+    ]
+    assert "Inspect" in result.error["fix"]
+    assert "Narrow" not in result.error["fix"]
+    assert [r.method for r in harness.server.writes()] == ["PUT"]
+
+
+def test_unknown_when_post_response_is_oversized_after_put(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(transport, "MAX_RESPONSE_BYTES", OVERSIZE_CAP)
+    setup(harness, transitions="transitions_todo_no_screen.json", pre_edit="true")
+    harness.server.add("PUT", ISSUE, status=204)
+    harness.server.add("POST", TRANSITIONS, handler=_oversized)
+    result = harness.run("jira", "transition", KEY, "--to", "In Progress")
+    assert result.code == 6
+    assert result.error["code"] == "outcome_unknown"
+    assert result.error["details"]["atomic"] is False
+    assert [(o["op"], o["status"]) for o in result.error["details"]["operations"]] == [
+        ("edit", "succeeded"),
+        ("transition", "unknown"),
+    ]
+    assert "Narrow" not in result.error["fix"]
+    assert [r.method for r in harness.server.writes()] == ["PUT", "POST"]
 
 
 def test_put_rejected_is_remote_validation(harness: Harness) -> None:

@@ -40,7 +40,34 @@ jobs:
       - name: Test
         run: python -m pytest -q
       - name: Build
-        run: python -m build
+        shell: bash
+        run: |
+          python -m build 2>&1 | tee build.log
+          test "${PIPESTATUS[0]}" -eq 0
+          if grep -Ei "license.*(TOML table|deprecated)|deprecated.*license" build.log; then
+            echo "::error::Build emitted a deprecated license metadata warning"
+            exit 1
+          fi
+      - name: Check license metadata
+        shell: bash
+        run: |
+          python - <<'PY'
+          import glob, tarfile, zipfile
+          expected = "License-Expression: LicenseRef-Proprietary"
+          (wheel,) = glob.glob("dist/*.whl")
+          (sdist,) = glob.glob("dist/*.tar.gz")
+          with zipfile.ZipFile(wheel) as zf:
+              (name,) = [n for n in zf.namelist() if n.endswith(".dist-info/METADATA")]
+              wheel_meta = zf.read(name).decode()
+          with tarfile.open(sdist) as tf:
+              (member,) = [m for m in tf.getmembers() if m.name.count("/") == 1 and m.name.endswith("/PKG-INFO")]
+              sdist_meta = tf.extractfile(member).read().decode()
+          for label, meta in (("wheel", wheel_meta), ("sdist", sdist_meta)):
+              lines = meta.split("\n\n", 1)[0].splitlines()
+              assert expected in lines, f"{label} metadata is missing {expected!r}"
+              assert not any(l.startswith("License: ") for l in lines), f"{label} has a legacy License field"
+          print("license metadata ok")
+          PY
       - name: Installed CLI smoke check
         shell: bash
         run: |

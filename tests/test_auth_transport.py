@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from atlass_cli import transport
 from atlass_cli.auth import (
     NATIVE_BACKENDS,
     Credential,
@@ -423,6 +424,33 @@ def test_non_json_response() -> None:
     with pytest.raises(AtlError) as info:
         _client(server).get("/rest/api/2/myself")
     assert info.value.code == "response_invalid"
+
+
+def _oversized(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, content=b" " * 2048)
+
+
+def test_oversized_write_response_is_outcome_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(transport, "MAX_RESPONSE_BYTES", 1024)
+    server = FakeServer().add("POST", jira_path("/rest/api/2/issue"), handler=_oversized)
+    with pytest.raises(AtlError) as info:
+        _client(server).request("POST", "/rest/api/2/issue", json_body={})
+    assert info.value.code == "outcome_unknown"
+    assert info.value.exit_code == 6
+    assert info.value.write_outcome == "unknown"
+    assert "before retrying" in info.value.fix
+    assert "Narrow" not in info.value.fix
+    assert len(server.requests) == 1
+
+
+def test_oversized_read_response_is_response_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(transport, "MAX_RESPONSE_BYTES", 1024)
+    server = FakeServer().add("GET", MYSELF, handler=_oversized)
+    with pytest.raises(AtlError) as info:
+        _client(server).get("/rest/api/2/myself")
+    assert info.value.code == "response_invalid"
+    assert info.value.write_outcome is None
+    assert "Narrow" in info.value.fix
 
 
 def test_ssl_context_is_verified() -> None:

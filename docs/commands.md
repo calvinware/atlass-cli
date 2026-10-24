@@ -60,8 +60,9 @@ Before the `POST /rest/api/2/issue`, `atl` checks all of the following. Any fail
 
 - Story create only: `acceptance_criteria` is present and not blank. The fix says to write it;
   atl never does.
-- Story create only: `feature_key` is present, exists, and is the project's `feature_type`. The
-  fix points to `feature find`; atl never chooses.
+- Story create only: `feature_key` is present, exists under that exact key, belongs to a project
+  configured in `atl.yaml`, and is that project's `feature_type`. The fix points to
+  `feature find`; atl never chooses.
 - Feature create only: the project's `feature_create_policy` is satisfied. Under
   `human_confirmed`, a missing `human_confirmation` is `approval_required` (exit 4) before any
   request is made.
@@ -88,7 +89,7 @@ can only happen after a request is dispatched:
 | While an attachment streams | The file still has the size checked before upload | `file_invalid` with `details.dispatched: "aborted"`. The body is never completed. |
 | After a `pre_edit` PUT | The issue and its transitions are re-read, and the full checklist runs again before the transition POST | `partial_transition` (exit 7). The edit has already been applied. |
 | When the server handles a write | Server-side workflow validators, permissions, field validation, and server limits that REST metadata does not expose | `remote_validation`, `remote_limit_exceeded`, or `conflict` (exit 5); `partial_transition` (exit 7) if a `pre_edit` edit already succeeded |
-| After a 2xx write response | The response confirms the write: an issue key for create, an id for comment, the uploaded attachment, or the updated page id, title, and version | `outcome_unknown` (exit 6). Inspect before any retry. |
+| After a 2xx write response | The response confirms the write: a non-empty issue id and a valid issue key in the target project for create; a non-empty comment id; the uploaded attachment name and size; for page create a valid page id, type `page`, the submitted title and space, and version 1; for page update the page id, title, and next version. A write response over the 32 MiB cap is never parsed. | `outcome_unknown` (exit 6) with a command-specific inspection fix. Inspect before any retry. |
 
 ### Requirements and transitions
 
@@ -143,8 +144,10 @@ All requests use Data Center `/rest/api/content` under the configured context pa
 `update` reads the page first. If the current version differs from `expected_version`, it fails
 with `version_conflict` (exit 5) and nothing is written. Otherwise it sends version
 `expected_version + 1`, keeping the current title or body for whichever field was not supplied. If
-the read does not include `body.storage.value` as a string, `read` and `update` fail with
-`response_invalid` (exit 6) and nothing is written. An empty body is kept only when Confluence
+the read does not include `body.storage.value` as a string, or returns a different content ID,
+`read` and `update` fail with `response_invalid` (exit 6) and nothing is written. `update` also
+refuses content whose type is not `page` (for example a blog post) with `input_invalid` (exit 2)
+before writing. An empty body is kept only when Confluence
 returns one explicitly. A
 409 from a concurrent edit is also reported as `version_conflict`, with a re-read-and-merge fix.
 
@@ -157,8 +160,8 @@ version.
 ## Writes and retries
 
 No write is ever retried. A write that was dispatched but whose result is unknown (timeout,
-disconnect, 5xx, redirect, unparseable success, or a success response that does not confirm the
-write) returns `outcome_unknown` (exit 6). Inspect
+disconnect, 5xx, redirect, unparseable or oversized success, or a success response that does not
+confirm the write) returns `outcome_unknown` (exit 6). Inspect
 remote state before running it again. `atl jira search` returns status and summary only. It
 cannot show comments, attachments, or custom field values, so use the method for each write:
 
@@ -171,8 +174,10 @@ cannot show comments, attachments, or custom field values, so use the method for
 | `confluence page create` | `atl confluence page search --cql 'space = "KEY" AND title = "<title>"'`. |
 | `confluence page update` | `atl confluence page read ID` and compare `version`, `title`, and `body_storage` with what you sent. |
 
-A human may also inspect with an approved read-only REST call (for example
-`GET /rest/api/2/issue/KEY/comment`) in place of the issue view.
+Agents inspect only through `atl` and, where the table says issue view, by asking a human to
+check it. Agents never call the REST APIs directly. As a human-only exception, a person may use an
+approved read-only REST call (for example `GET /rest/api/2/issue/KEY/comment`) in place of the
+issue view.
 
 Retry only when inspection shows the write was **not** applied. If it was applied, do not retry:
 continue from the existing item. If you cannot tell, or more than one candidate matches (for

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from atlass_cli.contracts import AtlError
-from atlass_cli.transport import ServiceClient, seg
+from atlass_cli.contracts import PAGE_ID_PATTERN, AtlError
+from atlass_cli.features import jql_quote
+from atlass_cli.transport import ServiceClient, sanitize_text, seg
+
+PAGE_ID_RE = re.compile(PAGE_ID_PATTERN)
 
 READ_EXPAND = "body.storage,version,space,ancestors"
 
@@ -46,6 +50,15 @@ def _get_page(client: ServiceClient, page_id: str) -> dict[str, Any]:
     page = client.get(f"/rest/api/content/{seg(page_id)}", {"expand": READ_EXPAND})
     if not isinstance(page, dict) or not isinstance(page.get("id"), str):
         raise _invalid("page")
+    if page["id"] != page_id:
+        raise AtlError(
+            "response_invalid",
+            f"Confluence returned content {sanitize_text(page['id'], 40)} when page {page_id} "
+            "was requested.",
+            f"Confirm {page_id} is the intended page ID with `atl confluence page search`, and "
+            "check that confluence.base_url is not routed through a rewriting proxy.",
+            {"what": "page id", "requested_id": page_id},
+        )
     return page
 
 
@@ -109,15 +122,42 @@ def create(client: ServiceClient, doc: dict[str, Any]) -> dict[str, Any]:
     if "parent_id" in doc:
         body["ancestors"] = [{"id": doc["parent_id"]}]
     created = client.request("POST", "/rest/api/content", json_body=body)
-    if not isinstance(created, dict) or not isinstance(created.get("id"), str):
-        raise client.unknown_outcome("create response did not include a page id")
-    number = (created.get("version") or {}).get("number")
+    reason = _create_mismatch(created, doc["title"], doc["space_key"])
+    if reason is not None:
+        raise client.unknown_outcome(
+            reason,
+            "Search for the page before retrying: `atl confluence page search --cql "
+            f"'space = {jql_quote(doc['space_key'])} AND title = {jql_quote(doc['title'])}'`. "
+            "Read any match with `atl confluence page read ID` to confirm it is yours. atl does "
+            "not retry writes.",
+        )
+    assert isinstance(created, dict)
     return {
         "id": created["id"],
-        "title": str(created.get("title", doc["title"])),
-        "space_key": _space_key(created) or doc["space_key"],
-        "version": number if type(number) is int else 1,
+        "title": created["title"],
+        "space_key": doc["space_key"],
+        "version": 1,
     }
+
+
+def _create_mismatch(created: Any, title: str, space_key: str) -> str | None:
+    """Return why a create response does not confirm the submitted page, or None if it does."""
+    if not isinstance(created, dict):
+        return "create response was not a JSON object"
+    page_id = created.get("id")
+    if not isinstance(page_id, str) or not PAGE_ID_RE.match(page_id):
+        return "create response did not include a valid page id"
+    if created.get("type") != "page":
+        return "create response did not confirm the content type page"
+    if created.get("title") != title:
+        return "create response did not confirm the submitted title"
+    if _space_key(created) != space_key:
+        return "create response did not confirm the submitted space"
+    raw_version = created.get("version")
+    number = raw_version.get("number") if isinstance(raw_version, dict) else None
+    if type(number) is not int or number != 1:
+        return "create response did not confirm version 1"
+    return None
 
 
 def _stale(page_id: str, expected: int, current: int) -> AtlError:
@@ -133,6 +173,15 @@ def _stale(page_id: str, expected: int, current: int) -> AtlError:
 def update(client: ServiceClient, page_id: str, doc: dict[str, Any]) -> dict[str, Any]:
     expected = doc["expected_version"]
     current = _get_page(client, page_id)
+    if current.get("type") != "page":
+        raise AtlError(
+            "input_invalid",
+            f"Content {page_id} is not a page (type {sanitize_text(current.get('type'), 40)}); "
+            "nothing was written.",
+            "Pass the ID of a Confluence page; `atl confluence page update` does not edit blog "
+            "posts or other content types.",
+            {"id": page_id, "type": sanitize_text(current.get("type"), 40)},
+        )
     current_version = _version(current)
     if current_version != expected:
         raise _stale(page_id, expected, current_version)
@@ -140,7 +189,7 @@ def update(client: ServiceClient, page_id: str, doc: dict[str, Any]) -> dict[str
     storage = doc["body_storage"] if "body_storage" in doc else _storage(current)
     body = {
         "id": page_id,
-        "type": str(current.get("type") or "page"),
+        "type": "page",
         "title": title,
         "version": {"number": expected + 1},
         "body": {"storage": {"value": storage, "representation": "storage"}},
