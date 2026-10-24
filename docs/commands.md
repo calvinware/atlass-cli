@@ -1,8 +1,13 @@
-# Command reference
+# Command behavior
 
-The JSON Schemas from `atl schema '<command>'` are the source of truth. This page summarizes them.
-All commands accept `--config PATH`. Every command writes one JSON object to stdout and exits with
-one of the codes in the [agent guide](../AGENTS.md#contract).
+This page explains how commands behave: preflight, when checks run, transitions, attachments,
+Confluence updates, and how to inspect writes before a retry. For every command's arguments,
+input and output schemas, examples, and error codes, see the generated
+[command reference](reference/commands.md) and [error catalog](reference/errors.md).
+
+The JSON Schemas from `atl schema '<command>'` are the source of truth. All commands accept
+`--config PATH`. Every command writes one JSON object to stdout and exits with one of the codes in
+the [agent contract](../AGENTS.md#contract).
 
 ## Discovery
 

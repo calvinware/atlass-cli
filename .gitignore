@@ -27,3 +27,6 @@ atl.local.yaml
 Thumbs.db
 .idea/
 .vscode/
+
+# Documentation site build output
+site/

@@ -3,6 +3,10 @@
 `atl.yaml` holds the team's fixed rules. Keep it in a repository so changes are reviewed.
 Start from [`atl.example.yaml`](../atl.example.yaml). Every value in it is a placeholder.
 
+This page is the exact reference for every key. For annotated, ready-to-adapt examples, see the
+[cookbook](admin-cookbook.md). For fixing `config check` results, see
+[Troubleshooting](troubleshooting.md#config-drift).
+
 ## Discovery
 
 `atl` looks for `atl.yaml` in the current directory, then in each parent directory up to the

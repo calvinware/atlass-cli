@@ -1,0 +1,20 @@
+# Link check for README.md, AGENTS.md, and docs/**/*.md. The CI docs job runs:
+#   lychee --config lychee.toml README.md AGENTS.md 'docs/**/*.md'
+# Local links (files and #fragments) and external URLs are both checked.
+
+include_fragments = "anchor-only"
+max_retries = 2
+retry_wait_time = 2
+timeout = 20
+max_concurrency = 8
+no_progress = true
+
+# Only 2xx counts as success. Rate limits (429) and other 4xx fail the check.
+accept = ["200..=299"]
+
+exclude = [
+  # calvinware/atlass-cli is a private repository: its Actions page and CI badge return 404 to
+  # unauthenticated requests, so lychee cannot check them. Repository files are linked with
+  # relative paths, which are checked locally.
+  '^https://github\.com/calvinware/atlass-cli/actions/',
+]

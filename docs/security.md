@@ -1,6 +1,6 @@
 # Security model and OWASP ASVS 5.0 Level 2 applicability
 
-**Document version:** 1 (atl 1.0.0). **Target:** OWASP ASVS 5.0.0, Level 2.
+**Document version:** 2 (atl 1.0.0). **Target:** OWASP ASVS 5.0.0, Level 2.
 
 `atl` is a local command-line client, not a web application or service. It runs with the user's
 own permissions and talks to the team's Jira and Confluence Data Center servers. ASVS is written
@@ -8,9 +8,12 @@ for applications that serve users, so many controls belong to the Atlassian serv
 maps each ASVS 5.0 chapter to `atl`. It records how each applicable control is met, and why the
 others do not apply.
 
-This is a design and evidence mapping. Automated tests do not certify ASVS compliance. Live
-behavior against a real Data Center instance is recorded separately in the README compatibility
-checklist.
+> [!IMPORTANT]
+> This is a design and evidence mapping. Automated tests do not certify ASVS compliance, and the
+> fixture-based tests model documented Data Center responses rather than proving live behavior.
+> Live behavior against a real Data Center instance is recorded separately in the
+> [README compatibility checklist](../README.md#live-compatibility-checklist), where every row is
+> currently unverified.
 
 ## Threat model (summary)
 
@@ -39,7 +42,7 @@ checklist.
 | V10 OAuth and OIDC | No | OAuth/SSO is out of scope for V1. | — |
 | V11 Cryptography | Partially | No custom cryptography. TLS comes from the Python `ssl` module and the OS trust store. Credential encryption at rest comes from the OS keyring. Boundary values come from `secrets.token_hex`. | `transport.build_ssl_context`, `auth.NATIVE_BACKENDS` |
 | V12 Secure Communication | Yes | `https://` only. Certificate and host name verification are always on. Minimum TLS 1.2. The OS trust store or a configured CA bundle (which must exist) is used. Redirects are refused. Verification cannot be disabled. | `config._Validator.url`, `transport.build_ssl_context`; `tests/test_auth_transport.py::test_ssl_context_is_verified`, `test_redirects_are_refused`, `test_tls_failure_maps_to_tls_error` |
-| V13 Configuration | Yes | No secrets in config. Strict, versioned schema; unknown keys are errors. Dependencies are pinned to compatible ranges and audited in CI with `pip-audit`. `.gitignore` excludes local secret files. | `config.validate_config`, `.github/workflows/ci.yml` (audit job) |
+| V13 Configuration | Yes | No secrets in config. Strict, versioned schema; unknown keys are errors. Runtime dependencies are pinned to compatible ranges and audited in CI with `pip-audit`. Documentation tooling is pinned to exact versions in a separate `docs` extra and is never a runtime dependency. `.gitignore` excludes local secret files. | `config.validate_config`, `pyproject.toml`, `.github/workflows/ci.yml` (audit job) |
 | V14 Data Protection | Yes | Credentials live only in the native OS keyring: macOS Keychain, Windows Credential Manager, or Secret Service/KWallet. Null, fail, `keyrings.alt` file, and unknown backends are refused, with no plaintext fallback. There are no caches and no log files. Remote content is never persisted. | `auth.ensure_native_backend`; `tests/test_auth_transport.py::test_non_native_backends_fail_closed` |
 | V15 Secure Coding and Architecture | Yes | Strictly typed Python (`mypy --strict`) and lint rules including bandit (`ruff S`). No `eval`/`exec`/`pickle`/`shell=True`. Small runtime dependency set (httpx, PyYAML, keyring, truststore, jsonschema). Writes are explicitly non-atomic where they must be, and the code never rolls back or retries. | `pyproject.toml`, `workflow.transition` |
 | V16 Security Logging and Error Handling | Yes (CLI form) | There is no log file. All errors are structured JSON with a generic message, a concrete `fix`, and sanitized `details`: control characters stripped, length and count bounded, and the active credential redacted in the raw, Authorization header, header credential, and `username:password` forms (other re-encodings are a residual limitation). There are no tracebacks; unexpected exceptions become `internal_error` with only the exception type. Exception text from keyring and transport, which can contain paths or URLs, is never echoed. | `cli.main`, `transport.sanitize_remote_errors`; `tests/test_cli.py::test_internal_error_is_sanitized`, `tests/test_auth_transport.py::test_field_errors_are_sanitized`, `test_reflected_credentials_are_redacted`, `test_keyring_exceptions_are_redacted` |
@@ -62,6 +65,22 @@ checklist.
 See [configuration › pre_edit](configuration.md#pre_edit-non-atomic). Every transition result or
 error carries ordered `operations` with statuses `succeeded`, `rejected`, `unknown`, `skipped`, or
 `not_attempted`. When an edit was applied, it also carries `atomic: false`.
+
+No write is retried. After `outcome_unknown` (exit 6) or `partial_transition` (exit 7), the caller
+inspects remote state before any retry, following
+[Writes and retries](commands.md#writes-and-retries). The pre_edit sequence is drawn in
+[Jira workflows](guides/jira-workflows.md#when-the-plan-has-an-edit-pre_edit).
+
+## Documentation and examples
+
+- Documentation examples use synthetic data only (`EXAMPLE-*` keys, `*.example.test` hosts). The
+  reference generator rejects examples with other hosts or credential headers.
+- The reference generator runs `atl commands` and `atl schema` offline. It needs no config,
+  network, keyring, or credentials.
+- Guides tell people and agents that only a human runs `atl login`, and never show a secret in an
+  argument or a file.
+- The built documentation site loads the Mermaid renderer from a public CDN at view time. The site
+  is not hosted yet; review this before publishing it.
 
 ## Reporting
 

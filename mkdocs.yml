@@ -1,0 +1,93 @@
+site_name: atl documentation
+site_description: Agent-first JSON CLI for Jira and Confluence Data Center with team-defined workflow rules.
+repo_url: https://github.com/calvinware/atlass-cli
+repo_name: calvinware/atlass-cli
+edit_uri: edit/main/docs/
+docs_dir: docs
+strict: true
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - content.code.copy
+    - content.tabs.link
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - search.suggest
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+  # Converts GitHub alerts (> [!NOTE]) to Material admonitions; must run before the hooks below.
+  - gh-admonitions
+
+hooks:
+  - scripts/mkdocs_hooks.py
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Developers:
+      - Getting started: getting-started.md
+      - Jira workflows: guides/jira-workflows.md
+      - Confluence pages: guides/confluence.md
+      - Troubleshooting: troubleshooting.md
+  - AI agents:
+      - Agent guide: agents.md
+  - Admins:
+      - atl.yaml cookbook: admin-cookbook.md
+      - Configuration reference: configuration.md
+  - Contributors:
+      - Contributing: contributing.md
+  - Reference:
+      - Commands: reference/commands.md
+      - Errors: reference/errors.md
+      - Command behavior: commands.md
+      - Security: security.md
+      - FAQ: faq.md
+      - Glossary: glossary.md
