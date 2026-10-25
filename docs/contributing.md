@@ -154,13 +154,15 @@ workflow. Its `verify` job runs [`scripts/release_gate.py`](../scripts/release_g
 unless all of these hold:
 
 - the tag is exactly `v` plus `project.version` from `pyproject.toml`;
-- the tagged commit is on the first-parent history of `main`, so it is a reviewed merge commit;
+- the tagged commit is on the first-parent history of `main`;
 - the `CI` workflow's push run on `main` for that exact commit concluded `success`.
 
 Only then does the `build` job run the tests, build the wheel and sdist, and run
 `twine check --strict` and `scripts/check_package.py`. Its `publish` job uploads those files. PR
 CI runs `actionlint` and `tests/test_release.py`, which check these release workflow invariants
 and the gate's failure cases.
+First-parent membership does not prove the commit was reviewed; enforce pull-request reviews on
+`main` in the repository settings before creating a release tag.
 
 > [!WARNING]
 > A pushed tag is a public, irreversible release. PyPI never accepts the same version twice, even
@@ -172,11 +174,13 @@ One-time setup, done by a repository owner before the first release:
    private-repository exclusions from `lychee.toml`. Merge that pull request only after its link
    check passes, then confirm the `docs` job also passes on the resulting `main` commit. Do not
    push a release tag while the exclusions are still on `main`.
-2. In the repository settings, create a GitHub Actions environment named `pypi` and add required
+2. Protect `main` with required pull-request reviews and the `CI` check. Confirm those rules are
+   active before tagging; the release script cannot attest a human review from Git history alone.
+3. In the repository settings, create a GitHub Actions environment named `pypi` and add required
    reviewers to it, so each publish waits for a human approval.
-3. Add a tag ruleset that targets `v*` and restricts creation, update, and deletion to release
+4. Add a tag ruleset that targets `v*` and restricts creation, update, and deletion to release
    owners, so nobody else can start or move a release.
-4. On PyPI, add a pending publisher (*Your account > Publishing > Add a new pending publisher >
+5. On PyPI, add a pending publisher (*Your account > Publishing > Add a new pending publisher >
    GitHub*) with these exact values:
 
    | Field | Value |

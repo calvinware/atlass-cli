@@ -3,7 +3,7 @@
 A release tag is accepted only when all of these hold:
 
 - the ref is exactly `refs/tags/v<project.version>` from pyproject.toml;
-- the tagged commit is on the first-parent history of `main`, so it is a reviewed merge commit;
+- the tagged commit is on the first-parent history of `main`;
 - a `push` run of the CI workflow on `main` for that exact commit concluded `success`.
 
 The workflow collects the inputs (no network access happens here):
