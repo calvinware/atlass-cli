@@ -397,6 +397,29 @@ def test_shared_markdown_has_no_site_only_syntax(path: Path) -> None:
     assert not re.search(r'^\s*===\s+"', text, re.M), "use os-tabs markers, not raw tabs"
 
 
+README_BLOB_URL = f"{REPO_URL}/blob/main/"
+README_RAW_URL = "https://raw.githubusercontent.com/calvinware/atlass-cli/main/"
+README_TARGET_RE = re.compile(r'\]\(([^)\s]+)\)|\b(?:src|srcset|href)="([^"]+)"')
+
+
+def test_readme_links_resolve_on_pypi() -> None:
+    """PyPI renders README.md without the repository, so file links must be absolute."""
+    text = "\n".join(_outside_fences((ROOT / "README.md").read_text(encoding="utf-8")))
+    targets = [link or attr for link, attr in README_TARGET_RE.findall(text)]
+    assert len(targets) > 10
+    for target in targets:
+        if target.startswith("#"):
+            continue
+        assert target.startswith("https://"), f"{target!r} is relative; PyPI cannot resolve it"
+        prefix = next((p for p in (README_BLOB_URL, README_RAW_URL) if target.startswith(p)), None)
+        if prefix is None:
+            continue
+        path = (ROOT / target.removeprefix(prefix).split("#", 1)[0]).resolve()
+        assert path.is_relative_to(ROOT) and path.is_file(), f"{target!r} has no file in the repo"
+    for variant in ("dark", "light"):
+        assert f'="{README_RAW_URL}docs/assets/banner-{variant}.svg"' in text
+
+
 @pytest.mark.parametrize(
     ("page", "count"),
     [

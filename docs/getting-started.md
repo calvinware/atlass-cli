@@ -12,8 +12,22 @@ is not a CI matrix entry.
 
 ## Install
 
-`atl` is installed from a checkout of this repository into its own virtual environment. You
-need only Git and Python 3.11 or later; no `pipx` or other installer is required.
+`atl` is published on PyPI as `atlass-cli`. Install it with either one of these commands. Each
+gives `atl` an isolated environment, links the command into a user `bin` folder, and works the
+same on Windows, macOS, and Linux:
+
+```bash
+pipx install atlass-cli
+# or
+uv tool install atlass-cli
+```
+
+[`pipx`](https://pipx.pypa.io/) and [`uv`](https://docs.astral.sh/uv/) must already be installed
+to use them. If `atl` is not found afterwards, that folder is not on your `PATH` yet: run
+`pipx ensurepath` or `uv tool update-shell`, then open a new terminal and run `atl commands`.
+
+Without `pipx` or `uv`, install into a virtual environment with `pip`. You need only Python 3.11
+or later:
 
 <!-- os-tabs:start -->
 
@@ -22,11 +36,9 @@ need only Git and Python 3.11 or later; no `pipx` or other installer is required
 Install Python 3.11+ from python.org or the Microsoft Store, then in PowerShell:
 
 ```powershell
-git clone https://github.com/calvinware/atlass-cli.git
-cd atlass-cli
 py -3 --version                     # must be 3.11 or later
 py -3 -m venv "$env:LOCALAPPDATA\atl\venv"
-& "$env:LOCALAPPDATA\atl\venv\Scripts\python.exe" -m pip install .
+& "$env:LOCALAPPDATA\atl\venv\Scripts\python.exe" -m pip install atlass-cli
 & "$env:LOCALAPPDATA\atl\venv\Scripts\atl.exe" commands
 ```
 
@@ -48,11 +60,9 @@ $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 Install Python 3.11+ (for example `brew install python@3.13`, pyenv, or python.org), then:
 
 ```bash
-git clone https://github.com/calvinware/atlass-cli.git
-cd atlass-cli
 python3 --version                   # must be 3.11 or later
 python3 -m venv ~/.local/share/atl/venv
-~/.local/share/atl/venv/bin/python -m pip install .
+~/.local/share/atl/venv/bin/python -m pip install atlass-cli
 ~/.local/share/atl/venv/bin/atl commands
 ```
 
@@ -71,11 +81,9 @@ echo 'export PATH="$PATH:$HOME/.local/share/atl/venv/bin"' >> ~/.zshrc
 Install Python 3.11+ from your distribution or pyenv, then:
 
 ```bash
-git clone https://github.com/calvinware/atlass-cli.git
-cd atlass-cli
 python3 --version                   # must be 3.11 or later
 python3 -m venv ~/.local/share/atl/venv
-~/.local/share/atl/venv/bin/python -m pip install .
+~/.local/share/atl/venv/bin/python -m pip install atlass-cli
 ~/.local/share/atl/venv/bin/atl commands
 ```
 
@@ -93,10 +101,24 @@ echo 'export PATH="$PATH:$HOME/.local/share/atl/venv/bin"' >> ~/.bashrc
 <!-- os-tabs:end -->
 
 The `PATH` entry goes last, so the environment's own `python` never shadows the one you already
-use. If you already use `pipx`, `pipx install .` from the checkout works as well.
+use.
 
 `atl commands` works offline with no config. It prints one JSON object that lists every command.
 If you see `{"ok": true, ...}`, the install works.
+
+### From source (contributors)
+
+To run unreleased changes, install from a checkout instead of PyPI. Clone the repository and
+replace `atlass-cli` with `.` in any of the commands above, for example:
+
+```bash
+git clone https://github.com/calvinware/atlass-cli.git
+cd atlass-cli
+pipx install .
+```
+
+For an editable development environment with the test and docs tools, see
+[Contributing](contributing.md#development-setup).
 
 ## Keyring prerequisites
 

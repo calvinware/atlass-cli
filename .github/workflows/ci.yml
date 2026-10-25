@@ -49,13 +49,17 @@ jobs:
             echo "::error::Build emitted a deprecated license metadata warning"
             exit 1
           fi
+      - name: Check distributions
+        shell: bash
+        run: python -m twine check --strict dist/*
       - name: Check package metadata
         shell: bash
         run: |
           python - <<'PY'
           import glob, tarfile, zipfile
           expected = (
-              "License-Expression: LicenseRef-Proprietary",
+              "License-Expression: MIT",
+              "License-File: LICENSE",
               "Requires-Python: >=3.11",
               "Classifier: Programming Language :: Python :: 3.14",
               "Classifier: Programming Language :: Python :: 3.15",
@@ -65,9 +69,13 @@ jobs:
           with zipfile.ZipFile(wheel) as zf:
               (name,) = [n for n in zf.namelist() if n.endswith(".dist-info/METADATA")]
               wheel_meta = zf.read(name).decode()
+              (lic,) = [n for n in zf.namelist() if n.endswith(".dist-info/licenses/LICENSE")]
+              assert "MIT License" in zf.read(lic).decode(), "wheel LICENSE is not the MIT text"
           with tarfile.open(sdist) as tf:
               (member,) = [m for m in tf.getmembers() if m.name.count("/") == 1 and m.name.endswith("/PKG-INFO")]
               sdist_meta = tf.extractfile(member).read().decode()
+              (lic,) = [m for m in tf.getmembers() if m.name.count("/") == 1 and m.name.endswith("/LICENSE")]
+              assert "MIT License" in tf.extractfile(lic).read().decode(), "sdist LICENSE is not the MIT text"
           for label, meta in (("wheel", wheel_meta), ("sdist", sdist_meta)):
               lines = meta.split("\n\n", 1)[0].splitlines()
               for field in expected:

@@ -11,6 +11,8 @@ python3.11 -m venv .venv
 .venv/bin/python -m ruff check .
 .venv/bin/python -m mypy
 .venv/bin/python -m pytest -q
+.venv/bin/python -m build
+.venv/bin/python -m twine check --strict dist/*
 .venv/bin/python scripts/generate_command_reference.py --check
 .venv/bin/python -m mkdocs build --strict
 ```
@@ -141,3 +143,56 @@ python scripts/generate_command_reference.py --check
 python -m mkdocs build --strict
 lychee --config lychee.toml README.md AGENTS.md 'docs/**/*.md'
 ```
+
+## Release
+
+Releases go to [PyPI](https://pypi.org/project/atlass-cli/) through
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) with
+[Trusted Publishing](https://docs.pypi.org/trusted-publishers/): GitHub Actions proves its
+identity to PyPI over OIDC, so there is no API token anywhere. Pushing a `v*` tag starts the
+workflow. Its `build` job fails unless the tag is exactly `v` plus `project.version` from
+`pyproject.toml`, then runs the tests, builds the wheel and sdist, and runs
+`twine check --strict`. Its `publish` job uploads those files.
+
+> [!WARNING]
+> A pushed tag is a public, irreversible release. PyPI never accepts the same version twice, even
+> after a delete. Push a tag only after every step before it is done.
+
+One-time setup, done by a repository owner before the first release:
+
+1. Make the GitHub repository public. Then, in a pull request, delete the two temporary
+   private-repository exclusions from `lychee.toml` and confirm the link check passes.
+2. In the repository settings, create a GitHub Actions environment named `pypi`. Adding required
+   reviewers to it makes each publish wait for an approval.
+3. On PyPI, add a pending publisher (*Your account > Publishing > Add a new pending publisher >
+   GitHub*) with these exact values:
+
+   | Field | Value |
+   |-------|-------|
+   | PyPI project name | `atlass-cli` |
+   | Owner | `calvinware` |
+   | Repository name | `atlass-cli` |
+   | Workflow name | `release.yml` |
+   | Environment name | `pypi` |
+
+   The first successful publish creates the project and turns the pending publisher into a normal
+   one.
+
+Each release:
+
+1. Set `version` in `pyproject.toml` to the new `X.Y.Z` in a pull request. Wait for CI to pass,
+   get it reviewed, and merge it.
+2. Tag the merged commit on `main` and push only that tag:
+
+   ```bash
+   git switch main
+   git pull --ff-only
+   git tag -a vX.Y.Z -m "atlass-cli X.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+3. Watch the `Release` workflow in GitHub Actions. Approve the `pypi` environment if it asks.
+4. On PyPI, check that the release has one wheel and one sdist and that the project page shows the
+   README, the MIT license, and the project links.
+5. In a clean shell, run `pipx install atlass-cli` (or `uv tool install atlass-cli`), then
+   `atl commands` and `atl schema 'jira story create'`.
