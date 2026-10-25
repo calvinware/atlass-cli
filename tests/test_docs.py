@@ -397,6 +397,80 @@ def test_shared_markdown_has_no_site_only_syntax(path: Path) -> None:
     assert not re.search(r'^\s*===\s+"', text, re.M), "use os-tabs markers, not raw tabs"
 
 
+README_BLOB_URL = f"{REPO_URL}/blob/main/"
+README_RAW_URL = "https://raw.githubusercontent.com/calvinware/atlass-cli/main/"
+# Inline links (with optional <...> and title), reference definitions, and HTML attributes.
+README_TARGET_RE = re.compile(
+    r"\]\(\s*<?([^)\s<>]+)>?(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)"
+    r"|^ {0,3}\[[^\]]+\]:[ \t]*<?([^\s<>]+)>?"
+    r"|\b(?:src|srcset|href)=\"([^\"]+)\"",
+    re.M,
+)
+
+
+def _readme_link_targets(text: str) -> list[str]:
+    lines = "\n".join(_outside_fences(text))
+    return [next(group for group in m if group) for m in README_TARGET_RE.findall(lines)]
+
+
+def _readme_link_problems(text: str) -> list[str]:
+    problems = []
+    for target in _readme_link_targets(text):
+        if target.startswith("#"):
+            continue
+        if not target.startswith("https://"):
+            problems.append(f"{target!r} is relative; PyPI cannot resolve it")
+            continue
+        prefix = next((p for p in (README_BLOB_URL, README_RAW_URL) if target.startswith(p)), None)
+        if prefix is None:
+            continue
+        path = (ROOT / target.removeprefix(prefix).split("#", 1)[0]).resolve()
+        if not (path.is_relative_to(ROOT) and path.is_file()):
+            problems.append(f"{target!r} has no file in the repo")
+    return problems
+
+
+def test_readme_link_targets_are_absolute_repository_files() -> None:
+    """PyPI renders README.md without the repository, so file links must be absolute.
+
+    This checks link shapes and local file mappings only; it fetches no URL.
+    """
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert len(_readme_link_targets(text)) > 10
+    assert _readme_link_problems(text) == []
+    for variant in ("dark", "light"):
+        assert f'="{README_RAW_URL}docs/assets/banner-{variant}.svg"' in text
+
+
+@pytest.mark.parametrize(
+    "markdown",
+    [
+        "[guide](docs/getting-started.md)",
+        '[guide](docs/getting-started.md "Guide")',
+        "[guide](docs/getting-started.md 'Guide')",
+        "[guide](<docs/getting-started.md>)",
+        "[guide][ref]\n\n[ref]: docs/getting-started.md",
+        '[ref]: docs/getting-started.md "Guide"',
+        "   [ref]: <docs/getting-started.md>",
+        '<img src="docs/assets/banner-dark.svg">',
+        f'[gone]({README_BLOB_URL}docs/missing.md "Missing")',
+        f"[up]: {README_BLOB_URL}../outside.md",
+    ],
+)
+def test_readme_link_check_rejects_relative_or_missing_targets(markdown: str) -> None:
+    assert _readme_link_problems(markdown)
+
+
+def test_readme_link_check_accepts_titled_absolute_targets() -> None:
+    markdown = (
+        f'[guide]({README_BLOB_URL}docs/getting-started.md "Guide")\n'
+        f"[ref]: {README_BLOB_URL}LICENSE 'License'\n"
+        "```\n[fenced](docs/getting-started.md)\n```"
+    )
+    assert len(_readme_link_targets(markdown)) == 2
+    assert _readme_link_problems(markdown) == []
+
+
 @pytest.mark.parametrize(
     ("page", "count"),
     [

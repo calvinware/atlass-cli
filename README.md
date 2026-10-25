@@ -1,13 +1,13 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
-  <img src="docs/assets/banner-light.svg" width="800" alt="atl: agent-first JSON CLI for Jira and Confluence Data Center. Team rules in atl.yaml; judgment stays with you.">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/calvinware/atlass-cli/main/docs/assets/banner-dark.svg">
+  <img src="https://raw.githubusercontent.com/calvinware/atlass-cli/main/docs/assets/banner-light.svg" width="800" alt="atl: agent-first JSON CLI for Jira and Confluence Data Center. Team rules in atl.yaml; judgment stays with you.">
 </picture>
 
 [![CI](https://github.com/calvinware/atlass-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/calvinware/atlass-cli/actions/workflows/ci.yml)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
-[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-555)](docs/getting-started.md)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://github.com/calvinware/atlass-cli/blob/main/pyproject.toml)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-555)](https://github.com/calvinware/atlass-cli/blob/main/docs/getting-started.md)
 [![Data Center](https://img.shields.io/badge/Jira%209%2B%20%7C%20Confluence%207.9%2B-Data%20Center-0052CC?logo=atlassian&logoColor=white)](#compatibility)
 
 </div>
@@ -50,12 +50,22 @@ and the test-results attachment rule are example values from `atl.example.yaml`;
 
 ## 60-second quickstart
 
-1. **Install** from a checkout into its own environment (Python 3.11+; macOS/Linux shown, Windows
-   in [Getting started](docs/getting-started.md)):
+1. **Install** from PyPI (Python 3.11+) with [pipx](https://pipx.pypa.io/) or
+   [uv](https://docs.astral.sh/uv/):
+
+   ```bash
+   pipx install atlass-cli
+   # or
+   uv tool install atlass-cli
+   ```
+
+   With only Python and pip, install into a virtual environment instead (macOS/Linux shown;
+   Windows and from-source installs are in
+   [Getting started](https://github.com/calvinware/atlass-cli/blob/main/docs/getting-started.md)):
 
    ```bash
    python3 -m venv ~/.local/share/atl/venv
-   ~/.local/share/atl/venv/bin/python -m pip install .
+   ~/.local/share/atl/venv/bin/python -m pip install atlass-cli
    export PATH="$PATH:$HOME/.local/share/atl/venv/bin"   # add to your shell profile to keep it
    ```
 
@@ -66,8 +76,9 @@ and the test-results attachment rule are example values from `atl.example.yaml`;
    atl schema 'jira story create'
    ```
 
-3. **Configure and log in**. An admin copies [`atl.example.yaml`](atl.example.yaml) to `atl.yaml`
-   with your team's values. Then a person (never an agent) runs:
+3. **Configure and log in**. An admin copies
+   [`atl.example.yaml`](https://github.com/calvinware/atlass-cli/blob/main/atl.example.yaml) to
+   `atl.yaml` with your team's values. Then a person (never an agent) runs:
 
    ```bash
    atl login --service jira          # hidden prompt; the token goes to the OS keyring
@@ -99,7 +110,7 @@ Every command prints one object: `{"ok": true, "data": ...}` or
 | 6 | transport/TLS/service failure, or unknown write outcome |
 | 7 | confirmed partial write |
 
-Every error code and its fix: [docs/reference/errors.md](docs/reference/errors.md).
+Every error code and its fix: [docs/reference/errors.md](https://github.com/calvinware/atlass-cli/blob/main/docs/reference/errors.md).
 
 </details>
 
@@ -122,7 +133,7 @@ atl jira comment add EXAMPLE-42 --body-file notes.txt
 atl confluence page read 123456
 ```
 
-Walkthrough: [docs/guides/jira-workflows.md](docs/guides/jira-workflows.md).
+Walkthrough: [docs/guides/jira-workflows.md](https://github.com/calvinware/atlass-cli/blob/main/docs/guides/jira-workflows.md).
 
 </details>
 
@@ -142,11 +153,11 @@ Walkthrough: [docs/guides/jira-workflows.md](docs/guides/jira-workflows.md).
 
 | Audience | Start here |
 |----------|-----------|
-| Developers | [Getting started](docs/getting-started.md) (Windows, macOS, Linux), [Jira workflows](docs/guides/jira-workflows.md), [Confluence pages](docs/guides/confluence.md), [Troubleshooting](docs/troubleshooting.md) |
-| AI agents | [AGENTS.md](AGENTS.md) (the contract), [Agent guide](docs/agents.md) |
-| Team admins | [`atl.yaml` cookbook](docs/admin-cookbook.md), [Configuration reference](docs/configuration.md) |
-| Contributors | [Contributing](docs/contributing.md): architecture, test harness, adding commands and encodings |
-| Everyone | [Command reference](docs/reference/commands.md), [Error catalog](docs/reference/errors.md), [Command behavior](docs/commands.md), [Security](docs/security.md), [FAQ](docs/faq.md), [Glossary](docs/glossary.md) |
+| Developers | [Getting started](https://github.com/calvinware/atlass-cli/blob/main/docs/getting-started.md) (Windows, macOS, Linux), [Jira workflows](https://github.com/calvinware/atlass-cli/blob/main/docs/guides/jira-workflows.md), [Confluence pages](https://github.com/calvinware/atlass-cli/blob/main/docs/guides/confluence.md), [Troubleshooting](https://github.com/calvinware/atlass-cli/blob/main/docs/troubleshooting.md) |
+| AI agents | [AGENTS.md](https://github.com/calvinware/atlass-cli/blob/main/AGENTS.md) (the contract), [Agent guide](https://github.com/calvinware/atlass-cli/blob/main/docs/agents.md) |
+| Team admins | [`atl.yaml` cookbook](https://github.com/calvinware/atlass-cli/blob/main/docs/admin-cookbook.md), [Configuration reference](https://github.com/calvinware/atlass-cli/blob/main/docs/configuration.md) |
+| Contributors | [Contributing](https://github.com/calvinware/atlass-cli/blob/main/docs/contributing.md): architecture, test harness, adding commands and encodings |
+| Everyone | [Command reference](https://github.com/calvinware/atlass-cli/blob/main/docs/reference/commands.md), [Error catalog](https://github.com/calvinware/atlass-cli/blob/main/docs/reference/errors.md), [Command behavior](https://github.com/calvinware/atlass-cli/blob/main/docs/commands.md), [Security](https://github.com/calvinware/atlass-cli/blob/main/docs/security.md), [FAQ](https://github.com/calvinware/atlass-cli/blob/main/docs/faq.md), [Glossary](https://github.com/calvinware/atlass-cli/blob/main/docs/glossary.md) |
 
 The same Markdown builds a [MkDocs Material](https://squidfunk.github.io/mkdocs-material/) site:
 `python -m pip install -e '.[docs]'` then `python -m mkdocs serve`.
@@ -199,6 +210,7 @@ python3.11 -m venv .venv
 .venv/bin/python -m mypy
 .venv/bin/python -m ruff check .
 .venv/bin/python -m build
+.venv/bin/python -m twine check --strict dist/*
 .venv/bin/python -m pip_audit --skip-editable
 .venv/bin/python scripts/generate_command_reference.py --check
 .venv/bin/python -m mkdocs build --strict
@@ -207,4 +219,4 @@ python3.11 -m venv .venv
 On Windows, use `.venv\Scripts\python.exe`. CI runs lint, type checks, tests, and the build on
 Ubuntu, Windows, and macOS with Python 3.11, 3.13, 3.14, and 3.15, plus a dependency audit and a
 docs job (reference freshness, strict site build, and link check) on Ubuntu with Python 3.11,
-3.14, and 3.15. See [Contributing](docs/contributing.md).
+3.14, and 3.15. See [Contributing](https://github.com/calvinware/atlass-cli/blob/main/docs/contributing.md).
