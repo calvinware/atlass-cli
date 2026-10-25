@@ -52,37 +52,8 @@ jobs:
       - name: Check distributions
         shell: bash
         run: python -m twine check --strict dist/*
-      - name: Check package metadata
-        shell: bash
-        run: |
-          python - <<'PY'
-          import glob, tarfile, zipfile
-          expected = (
-              "License-Expression: MIT",
-              "License-File: LICENSE",
-              "Requires-Python: >=3.11",
-              "Classifier: Programming Language :: Python :: 3.14",
-              "Classifier: Programming Language :: Python :: 3.15",
-          )
-          (wheel,) = glob.glob("dist/*.whl")
-          (sdist,) = glob.glob("dist/*.tar.gz")
-          with zipfile.ZipFile(wheel) as zf:
-              (name,) = [n for n in zf.namelist() if n.endswith(".dist-info/METADATA")]
-              wheel_meta = zf.read(name).decode()
-              (lic,) = [n for n in zf.namelist() if n.endswith(".dist-info/licenses/LICENSE")]
-              assert "MIT License" in zf.read(lic).decode(), "wheel LICENSE is not the MIT text"
-          with tarfile.open(sdist) as tf:
-              (member,) = [m for m in tf.getmembers() if m.name.count("/") == 1 and m.name.endswith("/PKG-INFO")]
-              sdist_meta = tf.extractfile(member).read().decode()
-              (lic,) = [m for m in tf.getmembers() if m.name.count("/") == 1 and m.name.endswith("/LICENSE")]
-              assert "MIT License" in tf.extractfile(lic).read().decode(), "sdist LICENSE is not the MIT text"
-          for label, meta in (("wheel", wheel_meta), ("sdist", sdist_meta)):
-              lines = meta.split("\n\n", 1)[0].splitlines()
-              for field in expected:
-                  assert field in lines, f"{label} metadata is missing {field!r}"
-              assert not any(l.startswith("License: ") for l in lines), f"{label} has a legacy License field"
-          print("package metadata ok")
-          PY
+      - name: Check package metadata and license
+        run: python scripts/check_package.py dist
       - name: Installed CLI smoke check
         shell: bash
         run: |
@@ -140,6 +111,37 @@ jobs:
           fail: true
           failIfEmpty: true
           output: ${{ runner.temp }}/lychee/out.md
+
+  workflows:
+    name: workflows (actionlint, release invariants)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ACTIONLINT_VERSION: "1.7.12"
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install actionlint (checksum verified)
+        shell: bash
+        run: |
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$archive"
+          echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
+      - name: actionlint
+        run: '"$RUNNER_TEMP/actionlint" -color'
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip setuptools
+          python -m pip install -e ".[dev]"
+      - name: Release workflow invariants and gate cases
+        run: python -m pytest -q tests/test_release.py
 
   audit:
     name: dependency audit (py${{ matrix.python }})

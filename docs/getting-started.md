@@ -12,9 +12,11 @@ is not a CI matrix entry.
 
 ## Install
 
-`atl` is published on PyPI as `atlass-cli`. Install it with either one of these commands. Each
-gives `atl` an isolated environment, links the command into a user `bin` folder, and works the
-same on Windows, macOS, and Linux:
+`atl` is being prepared for its first PyPI release as `atlass-cli`. Until that release is on
+[PyPI](https://pypi.org/project/atlass-cli/), the commands below cannot find the package; install
+[from source](#from-source-contributors) instead. Once it is published, install it with either one
+of these commands. Each gives `atl` an isolated environment, links the command into a user `bin`
+folder, and works the same on Windows, macOS, and Linux:
 
 ```bash
 pipx install atlass-cli

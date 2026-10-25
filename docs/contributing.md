@@ -150,9 +150,17 @@ Releases go to [PyPI](https://pypi.org/project/atlass-cli/) through
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) with
 [Trusted Publishing](https://docs.pypi.org/trusted-publishers/): GitHub Actions proves its
 identity to PyPI over OIDC, so there is no API token anywhere. Pushing a `v*` tag starts the
-workflow. Its `build` job fails unless the tag is exactly `v` plus `project.version` from
-`pyproject.toml`, then runs the tests, builds the wheel and sdist, and runs
-`twine check --strict`. Its `publish` job uploads those files.
+workflow. Its `verify` job runs [`scripts/release_gate.py`](../scripts/release_gate.py) and fails
+unless all of these hold:
+
+- the tag is exactly `v` plus `project.version` from `pyproject.toml`;
+- the tagged commit is on the first-parent history of `main`, so it is a reviewed merge commit;
+- the `CI` workflow's push run on `main` for that exact commit concluded `success`.
+
+Only then does the `build` job run the tests, build the wheel and sdist, and run
+`twine check --strict` and `scripts/check_package.py`. Its `publish` job uploads those files. PR
+CI runs `actionlint` and `tests/test_release.py`, which check these release workflow invariants
+and the gate's failure cases.
 
 > [!WARNING]
 > A pushed tag is a public, irreversible release. PyPI never accepts the same version twice, even
@@ -161,10 +169,14 @@ workflow. Its `build` job fails unless the tag is exactly `v` plus `project.vers
 One-time setup, done by a repository owner before the first release:
 
 1. Make the GitHub repository public. Then, in a pull request, delete the two temporary
-   private-repository exclusions from `lychee.toml` and confirm the link check passes.
-2. In the repository settings, create a GitHub Actions environment named `pypi`. Adding required
-   reviewers to it makes each publish wait for an approval.
-3. On PyPI, add a pending publisher (*Your account > Publishing > Add a new pending publisher >
+   private-repository exclusions from `lychee.toml`. Merge that pull request only after its link
+   check passes, then confirm the `docs` job also passes on the resulting `main` commit. Do not
+   push a release tag while the exclusions are still on `main`.
+2. In the repository settings, create a GitHub Actions environment named `pypi` and add required
+   reviewers to it, so each publish waits for a human approval.
+3. Add a tag ruleset that targets `v*` and restricts creation, update, and deletion to release
+   owners, so nobody else can start or move a release.
+4. On PyPI, add a pending publisher (*Your account > Publishing > Add a new pending publisher >
    GitHub*) with these exact values:
 
    | Field | Value |
@@ -181,18 +193,24 @@ One-time setup, done by a repository owner before the first release:
 Each release:
 
 1. Set `version` in `pyproject.toml` to the new `X.Y.Z` in a pull request. Wait for CI to pass,
-   get it reviewed, and merge it.
-2. Tag the merged commit on `main` and push only that tag:
+   get it reviewed, and merge it. The first release needs no bump: `pyproject.toml` already says
+   `1.0.0`, so tag `v1.0.0` on the reviewed merge commit that contains it.
+2. Find that exact merge commit on `main`, confirm the `CI` workflow passed for it, and tag that
+   commit explicitly rather than whatever `main` points to now:
 
    ```bash
-   git switch main
-   git pull --ff-only
-   git tag -a vX.Y.Z -m "atlass-cli X.Y.Z"
+   git fetch origin main
+   git log --first-parent --oneline origin/main   # pick the reviewed merge commit's SHA
+   git tag -a vX.Y.Z -m "atlass-cli X.Y.Z" <merge-commit-sha>
    git push origin vX.Y.Z
    ```
 
-3. Watch the `Release` workflow in GitHub Actions. Approve the `pypi` environment if it asks.
+3. Watch the `Release` workflow in GitHub Actions. If `verify` fails, read its errors; do not move
+   or re-push the tag. Approve the `pypi` environment when it asks.
 4. On PyPI, check that the release has one wheel and one sdist and that the project page shows the
    README, the MIT license, and the project links.
 5. In a clean shell, run `pipx install atlass-cli` (or `uv tool install atlass-cli`), then
    `atl commands` and `atl schema 'jira story create'`.
+6. After the first release only, once step 5 works: in a pull request, change the install section
+   of `docs/getting-started.md` to say the package is available on PyPI, and recheck that the
+   README's package-first install steps work as written.
