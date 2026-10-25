@@ -170,10 +170,8 @@ First-parent membership does not prove the commit was reviewed; enforce pull-req
 
 One-time setup, done by a repository owner before the first release:
 
-1. Make the GitHub repository public. Then, in a pull request, delete the two temporary
-   private-repository exclusions from `lychee.toml`. Merge that pull request only after its link
-   check passes, then confirm the `docs` job also passes on the resulting `main` commit. Do not
-   push a release tag while the exclusions are still on `main`.
+1. Make the GitHub repository public, so the README's absolute file and banner URLs resolve on
+   PyPI and pass the `docs` job's link check. Confirm that job passes on `main` before tagging.
 2. Protect `main` with required pull-request reviews and the `CI` check. Confirm those rules are
    active before tagging; the release script cannot attest a human review from Git history alone.
 3. In the repository settings, create a GitHub Actions environment named `pypi` and add required

@@ -12,15 +12,3 @@ no_progress = true
 # Only 2xx counts as success. Rate limits (429) and other 4xx fail the check.
 accept = ["200..=299"]
 
-exclude = [
-  # calvinware/atlass-cli is a private repository: its Actions page and CI badge return 404 to
-  # unauthenticated requests, so lychee cannot check them. Pages under docs/ and AGENTS.md link
-  # repository files with relative paths, which are checked locally.
-  '^https://github\.com/calvinware/atlass-cli/actions/',
-  # TEMPORARY, until the repository is public: README.md uses absolute file and banner URLs so it
-  # renders on PyPI, and those also return 404 while the repository is private. tests/test_docs.py
-  # checks that each one maps to a tracked file. Remove these two lines once the repository is
-  # public, then rerun lychee (see docs/contributing.md#release).
-  '^https://github\.com/calvinware/atlass-cli/blob/main/',
-  '^https://raw\.githubusercontent\.com/calvinware/atlass-cli/main/',
-]
