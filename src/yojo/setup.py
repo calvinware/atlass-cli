@@ -1415,6 +1415,7 @@ class ReviewStep(StepView):
             "save",
             lambda: self.setup.services.save(candidate),
             lambda action, error: self._saved(candidate, action, error),
+            writes=True,
         )
 
     def _saved(
@@ -1477,11 +1478,16 @@ class AgentStep(StepView):
         argv = [retry.PROGRAM, "--json", "agent", "install"]
         for name in targets:
             argv += ["--target", name]
+        started = self.setup.background(
+            "agents",
+            lambda: self.setup.services.install_agents(targets),
+            self._installed,
+            writes=True,
+        )
+        if not started:
+            return
         self.query_one("#agent-command", Static).update(plain(f"Same as: {retry.posix(argv)}", 500))
         self.say("agent-status", "Writing instructions...", "busy")
-        self.setup.background(
-            "agents", lambda: self.setup.services.install_agents(targets), self._installed
-        )
 
     def _installed(self, result: dict[str, Any] | None, error: YojoError | None) -> None:
         if result is None:
@@ -1626,6 +1632,7 @@ class SetupApp(App[dict[str, Any]]):
         self.draft = draft or Draft()
         self.step = 1
         self.result_status = "cancelled"
+        self.writing: set[str] = set()
         if theme is not None:
             self.theme = theme
 
@@ -1677,18 +1684,35 @@ class SetupApp(App[dict[str, Any]]):
         if step == 1:
             self.query_one("#url-jira", Input).focus()
 
+    def write_pending(self) -> str | None:
+        """Why setup cannot move on: a local file write has not reported its result yet."""
+        if "save" in self.writing:
+            return "yojo.yaml is still being saved. Wait for the result before moving on."
+        if "agents" in self.writing:
+            return "Agent instructions are still being written. Wait for the result first."
+        return None
+
+    def _hold(self, reason: str) -> None:
+        self.query_one("#nav-hint", Static).update(plain(reason))
+        self.notify(reason, severity="warning", markup=False)
+
     def action_next_step(self) -> None:
+        if (pending := self.write_pending()) is not None:
+            self._hold(pending)
+            return
         if self.step == len(STEPS):
             self.finish("completed")
             return
         reason = self.current().blocker()
         if reason is not None:
-            self.query_one("#nav-hint", Static).update(plain(reason))
-            self.notify(reason, severity="warning", markup=False)
+            self._hold(reason)
             return
         self._show(self.step + 1)
 
     def action_previous_step(self) -> None:
+        if (pending := self.write_pending()) is not None:
+            self._hold(pending)
+            return
         if self.step > 1:
             self._show(self.step - 1)
 
@@ -1713,6 +1737,9 @@ class SetupApp(App[dict[str, Any]]):
                 severity="warning",
                 markup=False,
             )
+            return
+        if (pending := self.write_pending()) is not None:
+            self._hold(pending)
             return
         self.push_screen(LeaveScreen(self.leave_message()), self._left)
 
@@ -1775,6 +1802,9 @@ class SetupApp(App[dict[str, Any]]):
         }
 
     def finish(self, status: str) -> None:
+        if (pending := self.write_pending()) is not None:
+            self._hold(pending)
+            return
         self.result_status = status
         self.exit(self.summary())
 
@@ -1785,8 +1815,22 @@ class SetupApp(App[dict[str, Any]]):
         group: str,
         job: Callable[[], T],
         done: Callable[[T | None, YojoError | None], None],
-    ) -> None:
-        """Run blocking network or file work off the UI thread, then report on it."""
+        *,
+        writes: bool = False,
+    ) -> bool:
+        """Run blocking network or file work off the UI thread, then report on it.
+
+        A ``writes`` job changes local files: setup holds navigation and exit until its result
+        is shown, and refuses to start a second one in the same group meanwhile.
+        """
+        if writes:
+            if group in self.writing:
+                return False
+            self.writing.add(group)
+
+        def report(result: T | None, error: YojoError | None) -> None:
+            self.writing.discard(group)
+            done(result, error)
 
         def runner() -> None:
             result: T | None = None
@@ -1804,9 +1848,10 @@ class SetupApp(App[dict[str, Any]]):
                 )
             # The app may already be closing; then there is no one left to tell.
             with contextlib.suppress(RuntimeError):
-                self.call_from_thread(done, result, error)
+                self.call_from_thread(report, result, error)
 
         self.run_worker(runner, group=group, exclusive=True, thread=True, exit_on_error=False)
+        return True
 
 
 def run_app(rt: Runtime) -> dict[str, Any]:

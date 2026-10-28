@@ -796,6 +796,107 @@ def test_agent_install_reports_a_partial_write(tmp_path: Path) -> None:
     assert app.draft.agent_files == [{"target": "agents", "path": "AGENTS.md", "action": "created"}]
 
 
+async def _departures_are_held(pilot: Pilot[Any], step: int, hint: str) -> None:
+    """Next, Back, Leave, and Finish all wait while a local write has not reported back."""
+    app = app_of(pilot)
+    for key in ("ctrl+n", "ctrl+b", "ctrl+q", "escape"):
+        await pilot.press(key)
+        await pilot.pause()
+        assert app.step == step
+        assert not isinstance(app.screen, setup.LeaveScreen)
+        assert hint in text(pilot, "#nav-hint")
+    app.finish("completed")
+    await pilot.pause()
+    assert app.is_running
+    assert app.return_value is None
+
+
+def test_held_save_keeps_setup_open_until_its_result_is_shown(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+    started = threading.Event()
+    release = threading.Event()
+    save = app.services.save
+
+    def slow_save(candidate: Any) -> str:
+        started.set()
+        assert release.wait(5)
+        return save(candidate)
+
+    app.services.save = slow_save  # type: ignore[method-assign]
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await _to_review(pilot)
+        app.query_one("#save", Button).press()
+        await pilot.pause()
+        assert await asyncio.to_thread(started.wait, 5)
+        await _departures_are_held(pilot, 5, "still being saved")
+        release.set()
+        await settle(pilot)
+        assert "Created ./yojo.yaml" in text(pilot, "#review-status")
+        await pilot.press("ctrl+q", "tab", "enter")
+        await pilot.pause()
+
+    try:
+        world.drive(scenario, app)
+    finally:
+        release.set()
+    assert app.return_value is not None
+    assert app.return_value["status"] == "cancelled"
+    assert app.return_value["config"] == {
+        "path": str(tmp_path / "yojo.yaml"),
+        "action": "created",
+    }
+    assert (tmp_path / "yojo.yaml").is_file()
+
+
+def test_held_agent_install_is_reported_before_setup_finishes(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+    started = threading.Event()
+    release = threading.Event()
+    install = app.services.install_agents
+    calls: list[list[str]] = []
+
+    def slow_install(targets: list[str]) -> dict[str, Any]:
+        calls.append(targets)
+        started.set()
+        assert release.wait(5)
+        return install(targets)
+
+    app.services.install_agents = slow_install  # type: ignore[method-assign]
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        for _ in range(5):
+            await next_step(pilot)
+        assert app.step == 6
+        app.query_one("#agent-targets", SelectionList).select("agents")
+        app.query_one("#install", Button).press()
+        await pilot.pause()
+        assert await asyncio.to_thread(started.wait, 5)
+        app.query_one("#install", Button).press()
+        await pilot.pause()
+        assert calls == [["agents"]]
+        await _departures_are_held(pilot, 6, "still being written")
+        release.set()
+        await settle(pilot)
+        assert "AGENTS.md: created" in text(pilot, "#agent-status")
+        await next_step(pilot)
+        app.finish("completed")
+        await pilot.pause()
+
+    try:
+        world.drive(scenario, app)
+    finally:
+        release.set()
+    assert app.return_value is not None
+    assert app.return_value["status"] == "completed"
+    assert app.return_value["agent_files"] == [
+        {"target": "agents", "path": "AGENTS.md", "action": "created"}
+    ]
+    assert (tmp_path / "AGENTS.md").is_file()
+
+
 def test_try_shows_a_failed_read_with_its_fix_and_writes_nothing(tmp_path: Path) -> None:
     server = add_routes(FakeServer())
     server.routes[("GET", jira_path("/rest/api/2/search"))] = []
