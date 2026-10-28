@@ -155,8 +155,15 @@ def test_login_uses_explicit_ca_bundle_before_config_exists(
 
     monkeypatch.setattr(cli, "ServiceClient", recording_client)
     result = harness.run(
-        "login", "--service", "jira", "--base-url", JIRA, "--ca-bundle", "team-ca.pem",
-        "--token-stdin", stdin=(JIRA_TOKEN + "\n").encode(),
+        "login",
+        "--service",
+        "jira",
+        "--base-url",
+        JIRA,
+        "--ca-bundle",
+        "team-ca.pem",
+        "--token-stdin",
+        stdin=(JIRA_TOKEN + "\n").encode(),
     )
     assert result.code == 0, result.out
     assert observed == [bundle]
@@ -165,8 +172,15 @@ def test_login_uses_explicit_ca_bundle_before_config_exists(
 
 def test_login_refuses_missing_ca_bundle_before_reading_secret(harness: Harness) -> None:
     result = harness.run(
-        "login", "--service", "jira", "--base-url", JIRA, "--ca-bundle", "missing.pem",
-        "--token-stdin", stdin=(JIRA_TOKEN + "\n").encode(),
+        "login",
+        "--service",
+        "jira",
+        "--base-url",
+        JIRA,
+        "--ca-bundle",
+        "missing.pem",
+        "--token-stdin",
+        stdin=(JIRA_TOKEN + "\n").encode(),
     )
     assert result.error["code"] == "usage_error"
     assert "--ca-bundle" in result.error["fix"]

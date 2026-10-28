@@ -431,8 +431,16 @@ def test_oversized_draft_is_refused_before_create_or_replace(harness: Harness) -
     original = f"version: 1\njira:\n  base_url: {JIRA}\n".encode()
     path.write_bytes(original)
     replace = harness.run(
-        "init", "--jira-url", JIRA, "--input", "-", "--save", "--replace",
-        "--expected-sha256", files.sha256(original), stdin=input_bytes,
+        "init",
+        "--jira-url",
+        JIRA,
+        "--input",
+        "-",
+        "--save",
+        "--replace",
+        "--expected-sha256",
+        files.sha256(original),
+        stdin=input_bytes,
     )
     assert replace.error["code"] == "input_invalid"
     assert path.read_bytes() == original
