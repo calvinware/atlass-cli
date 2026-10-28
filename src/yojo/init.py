@@ -20,6 +20,7 @@ from yojo import bitbucket, files, jira, retry
 from yojo.config import (
     CONFIG_FILENAME,
     LEGACY_FILENAME,
+    MAX_CONFIG_BYTES,
     ServiceConfig,
     StrictSafeLoader,
     legacy_config,
@@ -218,6 +219,13 @@ def render_yaml(doc: dict[str, Any], dest: Path) -> str:
             "input_invalid",
             "A value in the --input policy cannot be written to YAML exactly; nothing was written.",
             "Use plain strings, lists, and true/false in the policy.",
+        )
+    if len(text.encode("utf-8")) > MAX_CONFIG_BYTES:
+        raise YojoError(
+            "input_invalid",
+            f"The draft exceeds the {MAX_CONFIG_BYTES}-byte config limit; nothing was written.",
+            "Reduce the --input policy so the generated yojo.yaml fits the config limit.",
+            {"max_bytes": MAX_CONFIG_BYTES},
         )
     return text
 

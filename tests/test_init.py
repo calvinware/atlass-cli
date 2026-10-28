@@ -382,6 +382,26 @@ def test_bad_policy_documents_are_refused_offline(
     assert harness.server.requests == []
 
 
+def test_oversized_draft_is_refused_before_create_or_replace(harness: Harness) -> None:
+    policy = {"jira": {"fields": {f"field_{i:05d}": {"id": "summary"} for i in range(8000)}}}
+    input_bytes = json.dumps(policy).encode()
+    path = harness.tmp_path / "yojo.yaml"
+    create = harness.run("init", "--jira-url", JIRA, "--input", "-", "--save", stdin=input_bytes)
+    assert create.error["code"] == "input_invalid"
+    assert "config limit" in create.error["message"]
+    assert not path.exists()
+
+    original = f"version: 1\njira:\n  base_url: {JIRA}\n".encode()
+    path.write_bytes(original)
+    replace = harness.run(
+        "init", "--jira-url", JIRA, "--input", "-", "--save", "--replace",
+        "--expected-sha256", files.sha256(original), stdin=input_bytes,
+    )
+    assert replace.error["code"] == "input_invalid"
+    assert path.read_bytes() == original
+    assert harness.server.requests == []
+
+
 # --------------------------------------------------------------------------- save
 
 
