@@ -11,6 +11,7 @@ shown as plain text, never as markup.
 from __future__ import annotations
 
 import contextlib
+import copy
 import difflib
 import io
 import re
@@ -27,6 +28,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Content
 from textual.screen import ModalScreen
+from textual.theme import Theme
 from textual.widgets import (
     Button,
     Checkbox,
@@ -107,7 +109,20 @@ def plain(value: Any, limit: int = 300) -> Content:
 
 
 def _error_text(error: YojoError) -> str:
-    return f"{sanitize_text(error.message, 600)}\nNext: {sanitize_text(error.fix, 900)}"
+    # Service and library errors can echo a submitted token, including in a suggested fix.
+    # Only stable code-specific guidance is safe to render in the terminal.
+    advice = {
+        "usage_error": "Use an HTTPS address without embedded credentials.",
+        "response_invalid": "Check the service URL and Retry.",
+        "network_error": "Check the service address, network, and CA bundle; then Retry.",
+        "metadata_incomplete": "Jira metadata is incomplete. Retry the request.",
+        "auth_failed": "Check the token with the service, then Retry.",
+        "keyring_unavailable": "Set up a native OS keyring, then Retry.",
+        "file_invalid": "Choose a regular file path and Refresh the preview.",
+        "file_conflict": "The file changed after review. Refresh the preview.",
+        "conflict": "Live metadata changed. Refresh the preview.",
+    }
+    return f"{error.code}: {advice.get(error.code, 'Check the connection and Retry.')}"
 
 
 # --------------------------------------------------------------------------- draft
@@ -122,12 +137,13 @@ class Probe:
     @property
     def summary(self) -> str:
         name = LABELS[self.service]
+        from urllib.parse import urlsplit
+
+        address = urlsplit(self.base_url)
+        place = f"{address.netloc}{address.path}"
         if self.version:
-            return f"Connected: {name} {self.version} answers at {self.base_url}."
-        return (
-            f"Reachable: {self.base_url} answered, but did not report a {name} version. "
-            "Logging in next confirms it."
-        )
+            return f"✓ {name} {self.version} at {place}"
+        return f"✓ {name} at {place}; version unavailable. Log in to confirm."
 
 
 @dataclass(frozen=True)
@@ -204,11 +220,31 @@ class Draft:
     output: str = CONFIG_FILENAME
     revision: int = 0
     saved: tuple[str, str] | None = None
+    saved_data: bytes | None = None
+    saved_revision: int | None = None
+    try_revision: int | None = None
     agent_files: list[dict[str, Any]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     def touch(self) -> None:
         self.revision += 1
+        self.try_revision = None
+
+    def connection(self, service: str) -> tuple[str | None, str | None]:
+        return self.urls.get(service), self.ca_bundle
+
+    def forget_connection(self, service: str) -> None:
+        self.probes.pop(service, None)
+        self.logins.pop(service, None)
+        if service == "jira":
+            self.projects.clear()
+            self.rules.clear()
+        if service == "bitbucket":
+            self.repos.clear()
+        self.saved = None
+        self.saved_data = None
+        self.saved_revision = None
+        self.touch()
 
     def policy(self) -> dict[str, Any] | None:
         """The rules as the ``yojo init --input`` policy object, or None when there are none."""
@@ -328,7 +364,11 @@ class Services:
         credential = Credential(auth="pat", secret=validate_secret(secret, "token"))
         cfg = self.config(draft, service)
         confirmed = verify_and_store(self.rt, self.store(), service, cfg, credential)
-        return self._who(service, confirmed.get("user"), confirmed.get("version"))
+        who = self._who(service, confirmed.get("user"), confirmed.get("version"))
+        if secret in who:
+            # The verifier already saved the credential; report success without echoing it.
+            return f"Logged in to {LABELS[service]}."
+        return who
 
     def stored_login(self, draft: Draft, service: str) -> str:
         """Who the stored login belongs to; raises when there is none or it no longer works."""
@@ -359,6 +399,14 @@ class Services:
     def fields(self, draft: Draft) -> list[FieldChoice]:
         with self._open("jira", self.config(draft, "jira")) as client:
             known = metadata.all_fields(client)
+        if not known or any(
+            not fid.strip() or not meta.name.strip() for fid, meta in known.items()
+        ):
+            raise YojoError(
+                "response_invalid",
+                "Jira field metadata is incomplete.",
+                "Retry loading Jira fields after checking the Jira connection.",
+            )
         counts: dict[str, int] = {}
         for meta in known.values():
             counts[meta.name.casefold()] = counts.get(meta.name.casefold(), 0) + 1
@@ -369,7 +417,6 @@ class Services:
                 ref=meta.name if counts[meta.name.casefold()] == 1 else fid,
             )
             for fid, meta in known.items()
-            if meta.name.strip()
         ]
         return sorted(choices, key=lambda c: (c.name.casefold(), c.id))
 
@@ -558,6 +605,11 @@ class StepView(VerticalScroll):
 class ConnectStep(StepView):
     number = 1
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.requests: dict[str, object] = {}
+        self.requested: dict[str, tuple[str, str | None]] = {}
+
     def compose(self) -> ComposeResult:
         yield self.lead(
             "Where do your Atlassian tools live? Enter the address you open in a browser, "
@@ -596,10 +648,30 @@ class ConnectStep(StepView):
     def _changed(self, event: Input.Changed) -> None:
         if event.input.id and event.input.id.startswith("url-"):
             service = event.input.id.removeprefix("url-")
-            probe = self.draft.probes.get(service)
-            if probe is not None and url_problem(event.value)[0] != probe.base_url:
-                self.draft.probes.pop(service, None)
-                self.draft.logins.pop(service, None)
+            if self.requested.get(service) == (
+                event.value.strip(),
+                self.query_one("#ca-bundle", Input).value.strip() or None,
+            ):
+                return
+            if url_problem(event.value.strip())[0] != self.draft.urls.get(service):
+                self.requests.pop(service, None)
+                self.requested.pop(service, None)
+                self.draft.forget_connection(service)
+                self.setup.discard_discovery(service)
+                self.say(f"probe-{service}", "")
+        elif (
+            event.input.id == "ca-bundle" and (event.value.strip() or None) != self.draft.ca_bundle
+        ):
+            for service in SERVICES:
+                if self.requested.get(service) == (
+                    self.query_one(f"#url-{service}", Input).value.strip(),
+                    event.value.strip() or None,
+                ):
+                    continue
+                self.requests.pop(service, None)
+                self.requested.pop(service, None)
+                self.draft.forget_connection(service)
+                self.setup.discard_discovery(service)
                 self.say(f"probe-{service}", "")
 
     @on(Input.Submitted)
@@ -612,25 +684,28 @@ class ConnectStep(StepView):
         ca = self.query_one("#ca-bundle", Input).value.strip() or None
         if ca != self.draft.ca_bundle:
             self.draft.ca_bundle = ca
-            self.draft.probes.clear()
-            self.draft.logins.clear()
-            self.draft.touch()
+            for service in SERVICES:
+                self.draft.forget_connection(service)
         for service in SERVICES:
             if service not in filled:
                 if self.draft.urls.pop(service, None) is not None:
-                    self.draft.touch()
-                self.draft.probes.pop(service, None)
-                self.draft.logins.pop(service, None)
+                    self.draft.forget_connection(service)
                 self.say(f"probe-{service}", "")
         for service, raw in filled.items():
             self._probe(service, raw, ca)
 
     def _probe(self, service: str, raw: str, ca: str | None) -> None:
+        request = self.requests[service] = object()
+        self.requested[service] = (raw, ca)
         self.say(f"probe-{service}", f"Checking {LABELS[service]}...", "busy")
         self.setup.background(
             f"probe-{service}",
             lambda: self.setup.services.probe(service, raw, ca),
-            lambda result, error: self._probed(service, raw, ca, result, error),
+            lambda result, error: (
+                self._probed(service, raw, ca, result, error)
+                if self.requests.get(service) is request
+                else None
+            ),
         )
 
     def _probed(
@@ -667,8 +742,7 @@ class ConnectStep(StepView):
         missing = [
             LABELS[s]
             for s, raw in filled.items()
-            if (probe := self.draft.probes.get(s)) is None
-            or url_problem(raw)[0] != probe.base_url
+            if (probe := self.draft.probes.get(s)) is None or url_problem(raw)[0] != probe.base_url
         ]
         if missing:
             return f"Check the connection for {', '.join(missing)} first."
@@ -835,7 +909,9 @@ class ChooseStep(StepView):
         self.all_projects: list[dict[str, str]] = []
         self.all_repos: list[dict[str, Any]] = []
         self.next_repo: int | None = None
-        self.loaded_for: tuple[str | None, str | None] | None = None
+        self.loaded_for: tuple[tuple[str | None, str | None], ...] | None = None
+        self.project_request: object | None = None
+        self.repo_request: object | None = None
 
     def compose(self) -> ComposeResult:
         yield self.lead(
@@ -872,20 +948,31 @@ class ChooseStep(StepView):
         self.query_one("#jira-choice").display = has_jira
         self.query_one("#bitbucket-choice").display = has_bitbucket
         self.query_one("#nothing-to-choose").display = not (has_jira or has_bitbucket)
-        key = (self.draft.urls.get("jira"), self.draft.urls.get("bitbucket"))
+        key = (self.draft.connection("jira"), self.draft.connection("bitbucket"))
         if key == self.loaded_for:
             return
         self.loaded_for = key
+        self.project_request = self.repo_request = None
+        self.all_projects, self.all_repos, self.next_repo = [], [], None
+        self.query_one("#project-list", SelectionList).clear_options()
+        self.query_one("#repo-list", SelectionList).clear_options()
         if has_jira:
+            request = self.project_request = object()
+            snapshot = copy.deepcopy(self.draft)
             self.say("project-status", "Loading projects...", "busy")
             self.setup.background(
                 "projects",
-                lambda: self.setup.services.projects(self.draft),
-                self._projects,
+                lambda: self.setup.services.projects(snapshot),
+                lambda rows, error: (
+                    self._projects(rows, error)
+                    if request is self.project_request
+                    and key == (self.draft.connection("jira"), self.draft.connection("bitbucket"))
+                    else None
+                ),
             )
             self.query_one("#project-search", Input).focus()
         if has_bitbucket:
-            self.all_repos, self.next_repo = [], 0
+            self.next_repo = 0
             self._load_repos()
 
     def _projects(self, rows: list[dict[str, str]] | None, error: YojoError | None) -> None:
@@ -930,10 +1017,19 @@ class ChooseStep(StepView):
 
     def _load_repos(self) -> None:
         start = self.next_repo or 0
+        request = self.repo_request = object()
+        snapshot = copy.deepcopy(self.draft)
+        key = self.draft.connection("bitbucket")
         self.say("repo-status", "Loading repositories...", "busy")
         self.query_one("#more-repos", Button).disabled = True
         self.setup.background(
-            "repos", lambda: self.setup.services.repos(self.draft, start), self._repos
+            "repos",
+            lambda: self.setup.services.repos(snapshot, start),
+            lambda page, error: (
+                self._repos(page, error)
+                if request is self.repo_request and key == self.draft.connection("bitbucket")
+                else None
+            ),
         )
 
     def _repos(self, page: dict[str, Any] | None, error: YojoError | None) -> None:
@@ -1028,7 +1124,9 @@ class RulesStep(StepView):
         super().__init__(*args, **kwargs)
         self.fields: list[FieldChoice] = []
         self.meta: dict[str, ProjectMeta] = {}
-        self.loaded_for: str | None = None
+        self.loaded_for: tuple[str | None, str | None] | None = None
+        self.field_request: object | None = None
+        self.meta_request: object | None = None
 
     def compose(self) -> ComposeResult:
         yield self.lead(
@@ -1036,6 +1134,7 @@ class RulesStep(StepView):
             "Names come from your Jira. Press Next to skip."
         )
         yield Static("", id="rules-status", classes="status", markup=False)
+        yield Button("Retry loading fields", id="retry-fields", classes="retry")
         with Vertical(id="rules-editor"):
             with Horizontal(classes="row"):
                 yield Label("Project", classes="field-label")
@@ -1072,8 +1171,9 @@ class RulesStep(StepView):
                         id="move-pre-edit",
                     )
                     yield Button("Add transition rule", id="add-transition")
-        yield Static("Your rules", classes="card-title", markup=False)
-        yield ListView(id="rule-list")
+        with Vertical(classes="card", id="rules-summary"):
+            yield Static("Your rules", classes="card-title", markup=False)
+            yield ListView(id="rule-list")
         yield Button("Remove selected rule", id="remove-rule")
 
     def enter(self) -> None:
@@ -1091,11 +1191,12 @@ class RulesStep(StepView):
             current = picker.value
             picker.set_options((k, k) for k in self.draft.projects)
             picker.value = current if current in self.draft.projects else self.draft.projects[0]
-            if self.loaded_for != self.draft.urls["jira"]:
-                self.say("rules-status", "Loading Jira fields...", "busy")
-                self.setup.background(
-                    "fields", lambda: self.setup.services.fields(self.draft), self._fields
-                )
+            if self.loaded_for != self.draft.connection("jira"):
+                self.fields, self.meta = [], {}
+                self.loaded_for = None
+                for target in ("#alias-field", "#create-field", "#move-field", "#move-set-field"):
+                    self.query_one(target, Select).set_options([])
+                self._load_fields()
             else:
                 self.say("rules-status", "", "info")
         dropped = [
@@ -1110,13 +1211,31 @@ class RulesStep(StepView):
             )
         self._list_rules()
 
+    @on(Button.Pressed, "#retry-fields")
+    def _load_fields(self) -> None:
+        self.query_one("#retry-fields", Button).display = False
+        request = self.field_request = object()
+        key = self.draft.connection("jira")
+        snapshot = copy.deepcopy(self.draft)
+        self.say("rules-status", "Loading Jira fields...", "busy")
+        self.setup.background(
+            "fields",
+            lambda: self.setup.services.fields(snapshot),
+            lambda fields, error: (
+                self._fields(fields, error)
+                if request is self.field_request and key == self.draft.connection("jira")
+                else None
+            ),
+        )
+
     def _fields(self, fields: list[FieldChoice] | None, error: YojoError | None) -> None:
         if fields is None:
             assert error is not None
-            self.say("rules-status", f"Could not load Jira fields. {_error_text(error)}", "error")
+            self.query_one("#retry-fields", Button).display = True
+            self.say("rules-status", f"✗ Could not load Jira fields. {_error_text(error)}", "error")
             return
         self.fields = fields
-        self.loaded_for = self.draft.urls["jira"]
+        self.loaded_for = self.draft.connection("jira")
         options = [(plain(f"{f.name}  ({f.id})"), f.ref) for f in fields]
         for target in ("#alias-field", "#create-field", "#move-field", "#move-set-field"):
             self.query_one(target, Select).set_options(options)
@@ -1127,14 +1246,26 @@ class RulesStep(StepView):
         if event.value is Select.NULL:
             return
         key = str(event.value)
+        if key not in self.draft.projects:
+            return
         if key in self.meta:
             self._apply_meta(self.meta[key])
             return
+        request = self.meta_request = object()
+        connection = self.draft.connection("jira")
+        snapshot = copy.deepcopy(self.draft)
         self.say("rules-status", f"Loading issue types and statuses for {key}...", "busy")
         self.setup.background(
             f"meta-{key}",
-            lambda: self.setup.services.project_meta(self.draft, key),
-            self._meta,
+            lambda: self.setup.services.project_meta(snapshot, key),
+            lambda meta, error: (
+                self._meta(meta, error)
+                if request is self.meta_request
+                and connection == self.draft.connection("jira")
+                and key in self.draft.projects
+                and self._project_key() == key
+                else None
+            ),
         )
 
     def _meta(self, meta: ProjectMeta | None, error: YojoError | None) -> None:
@@ -1307,25 +1438,24 @@ class ReviewStep(StepView):
         self.candidate: init.Candidate | None = None
         self.reviewed_revision: int | None = None
         self.stale = False
+        self.request: object | None = None
 
     def compose(self) -> ComposeResult:
-        yield self.lead(
-            "Here is the yojo.yaml that setup would write, checked against your live services. "
-            "Nothing is written until you press Save."
-        )
+        yield self.lead("Review the exact yojo.yaml and its changes against the current file.")
         with Horizontal(classes="row"):
             yield Label("Save to", classes="field-label")
             yield Input(value=CONFIG_FILENAME, id="output")
         yield Static("", id="review-status", classes="status", markup=False)
         with TabbedContent(id="review-tabs"):
-            with TabPane("Changes", id="tab-diff"):
+            with TabPane("Changes", id="tab-diff"), VerticalScroll(id="diff-panel"):
                 yield Static("", id="diff", markup=False)
             with TabPane("Full file", id="tab-yaml"):
                 yield Static("", id="yaml", markup=False)
+        yield Static("Nothing is written until you press Save.", id="save-note", markup=False)
         yield Static("", id="review-notes", classes="hint", markup=False)
         with Horizontal(classes="row"):
             yield Button("Refresh preview", id="preview")
-            yield Button("Save yojo.yaml", id="save", variant="success", disabled=True)
+            yield Button("Save yojo.yaml", id="save", variant="primary", disabled=True)
 
     def enter(self) -> None:
         if self.reviewed_revision != self.draft.revision or self.candidate is None:
@@ -1342,45 +1472,46 @@ class ReviewStep(StepView):
     def _invalidate(self, why: str) -> None:
         self.candidate = None
         self.query_one("#save", Button).disabled = True
+        self.request = object()
         self.say("review-status", why, "warn")
 
     @on(Input.Submitted, "#output")
     @on(Button.Pressed, "#preview")
     def build(self) -> None:
         self.query_one("#save", Button).disabled = True
+        self.request = object()
+        request = self.request
         self.say(
             "review-status", "Building the preview and checking it against live data...", "busy"
         )
         revision = self.draft.revision
+        snapshot = copy.deepcopy(self.draft)
         self.setup.background(
             "candidate",
-            lambda: self.setup.services.candidate(self.draft),
-            lambda result, error: self._built(revision, result, error),
+            lambda: self.setup.services.candidate(snapshot),
+            lambda result, error: (
+                self._built(revision, result, error) if request is self.request else None
+            ),
         )
 
     def _built(
         self, revision: int, candidate: init.Candidate | None, error: YojoError | None
     ) -> None:
+        if revision != self.draft.revision:
+            self._invalidate("Your choices changed while the preview was built. Refresh it.")
+            return
         if candidate is None:
             assert error is not None
             self.candidate = None
-            problems = error.details.get("problems") or []
-            extra = "".join(
-                f"\n- {sanitize_text(p.get('message'), 300)} {sanitize_text(p.get('fix'), 300)}"
-                for p in problems[:10]
-                if isinstance(p, dict)
-            )
-            self.say("review-status", f"Cannot save yet. {_error_text(error)}{extra}", "error")
-            return
-        if revision != self.draft.revision:
-            self._invalidate("Your choices changed while the preview was built. Refresh it.")
+            self.say("review-status", f"Cannot save yet. {_error_text(error)}", "error")
             return
         self.candidate, self.reviewed_revision, self.stale = candidate, revision, False
         where = show_path(candidate.dest, self.setup.services.cwd)
         diff = unified_diff(candidate.current, candidate.text, where)
         text = Text()
-        for line in diff or ["No changes: the file already matches."]:
+        for number, line in enumerate(diff or ["No changes: the file already matches."], 1):
             style = "green" if line.startswith("+") else "red" if line.startswith("-") else ""
+            text.append(f"{number:>3}  ", style="dim")
             text.append(sanitize_text(line, 1000) + "\n", style=style)
         self.query_one("#diff", Static).update(text)
         self.query_one("#yaml", Static).update(Text(candidate.text))
@@ -1411,15 +1542,16 @@ class ReviewStep(StepView):
             return
         self.query_one("#save", Button).disabled = True
         self.say("review-status", "Saving...", "busy")
+        revision = self.draft.revision
         self.setup.background(
             "save",
             lambda: self.setup.services.save(candidate),
-            lambda action, error: self._saved(candidate, action, error),
+            lambda action, error: self._saved(candidate, revision, action, error),
             writes=True,
         )
 
     def _saved(
-        self, candidate: init.Candidate, action: str | None, error: YojoError | None
+        self, candidate: init.Candidate, revision: int, action: str | None, error: YojoError | None
     ) -> None:
         if action is None:
             assert error is not None
@@ -1432,12 +1564,22 @@ class ReviewStep(StepView):
             )
             return
         self.draft.saved = (str(candidate.dest), action)
+        self.draft.saved_data = candidate.data
+        self.draft.saved_revision = revision
+        self.draft.try_revision = None
+        if revision != self.draft.revision:
+            self._invalidate("Saved the earlier preview. Your choices changed; Refresh preview.")
+        elif self.setup.step == self.number:
+            self.setup.query_one("#next", Button).label = "Next"
         where = show_path(candidate.dest, self.setup.services.cwd)
         verb = {"created": "Created", "replaced": "Saved", "unchanged": "Already up to date:"}
-        self.say("review-status", f"{verb[action]} {where}. Next, connect your agent.", "ok")
+        if revision == self.draft.revision:
+            self.say("review-status", f"{verb[action]} {where}. Next, connect your agent.", "ok")
         self.setup.notify(f"{verb[action]} {where}", title="yojo.yaml", markup=False)
 
     def blocker(self) -> str | None:
+        if not self.setup.saved_snapshot_current():
+            return "Review the current preview and press Save before continuing."
         return None
 
 
@@ -1507,29 +1649,50 @@ class AgentStep(StepView):
 class TryStep(StepView):
     number = 7
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.request: object | None = None
+
     def compose(self) -> ComposeResult:
         yield self.lead(
             "Run one real, read-only command to see yojo work. Nothing is changed on the server."
         )
+        yield Static("", id="finish-message", classes="card", markup=False)
         yield Static("", id="try-command", classes="command", markup=False)
         yield Button("Run it", id="run-try", variant="primary")
         yield Static("", id="try-status", classes="status", markup=False)
         yield DataTable(id="try-table", show_cursor=False)
         yield Static("", id="try-next", classes="hint", markup=False)
-        yield Button("Finish", id="finish", variant="success")
 
     def enter(self) -> None:
         argv = self.setup.services.try_argv(self.draft)
         self.query_one("#try-command", Static).update(plain(retry.posix(argv), 1000))
         self.query_one("#try-table", DataTable).display = False
         self.query_one("#try-next", Static).update(plain("\n".join(self.setup.next_steps()), 2000))
+        self.query_one("#finish-message", Static).update(
+            plain("yojo.yaml is saved. One last sounding: run the read-only check.")
+        )
         self.query_one("#run-try", Button).focus()
 
     @on(Button.Pressed, "#run-try")
     def run_try(self) -> None:
+        if not self.setup.saved_snapshot_current():
+            self.say("try-status", "Save the current yojo.yaml before trying it.", "warn")
+            return
         argv = self.setup.services.try_argv(self.draft)
+        revision = self.draft.revision
+        request = self.request = object()
+        self.draft.try_revision = None
         self.say("try-status", "Running...", "busy")
-        self.setup.background("try", lambda: self.setup.services.run_read(argv), self._ran)
+        self.setup.background(
+            "try",
+            lambda: self.setup.services.run_read(argv),
+            lambda result, error: (
+                self._ran(result, error)
+                if request is self.request and revision == self.draft.revision
+                else None
+            ),
+        )
 
     def _ran(self, result: tuple[dict[str, Any], int] | None, error: YojoError | None) -> None:
         if result is None:
@@ -1538,14 +1701,19 @@ class TryStep(StepView):
             return
         envelope, code = result
         if not envelope.get("ok"):
-            problem = envelope.get("error") or {}
             self.say(
                 "try-status",
-                f"It did not work (exit {code}). {sanitize_text(problem.get('message'), 600)}\n"
-                f"Next: {sanitize_text(problem.get('fix'), 900)}",
+                f"✗ Read failed (exit {code}). Check the connection and Retry the read-only check.",
                 "error",
             )
             return
+        if code != 0:
+            self.say("try-status", f"✗ Read returned exit {code}. Retry it.", "error")
+            return
+        if not self.setup.saved_snapshot_current():
+            self.say("try-status", "The saved file changed. Review and Save it again.", "error")
+            return
+        self.draft.try_revision = self.draft.revision
         data = envelope.get("data") or {}
         rows: list[dict[str, Any]] = []
         columns: list[str] = []
@@ -1576,10 +1744,22 @@ class TryStep(StepView):
             else "It works (exit 0), and there is nothing to show yet.",
             "ok",
         )
+        where = self.draft.saved[0] if self.draft.saved else "yojo.yaml"
+        saved_line = f"✓ {show_path(Path(where), self.setup.services.cwd)} saved"
+        self.query_one("#finish-message", Static).update(
+            plain(
+                f"{saved_line}; read-only Try passed.\n"
+                f"Next: {self.setup.next_steps()[0]}\n"
+                "Fair winds for the next command."
+            )
+        )
 
-    @on(Button.Pressed, "#finish")
-    def finish(self) -> None:
-        self.setup.finish("completed")
+    def blocker(self) -> str | None:
+        if not self.setup.saved_snapshot_current():
+            return "Save the current yojo.yaml before finishing."
+        if self.draft.try_revision != self.draft.revision:
+            return "Run the read-only command successfully before finishing."
+        return None
 
 
 class LeaveScreen(ModalScreen[bool]):
@@ -1628,20 +1808,19 @@ class SetupApp(App[dict[str, Any]]):
 
     def __init__(self, services: Services, draft: Draft | None = None, theme: str | None = None):
         super().__init__()
+        self.register_theme(Theme(name="yojo-dark", primary="#33b6a7", dark=True))
+        self.register_theme(Theme(name="yojo-light", primary="#087e73", dark=False))
         self.services = services
         self.draft = draft or Draft()
         self.step = 1
         self.result_status = "cancelled"
         self.writing: set[str] = set()
-        if theme is not None:
-            self.theme = theme
+        self.theme = "yojo-light" if theme in ("textual-light", "yojo-light") else "yojo-dark"
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="top"):
-            yield Static("yojo setup", id="brand", markup=False)
-            with Horizontal(id="progress"):
-                for n, name in enumerate(CRUMBS, 1):
-                    yield Static(f"{n} {name}", id=f"crumb-{n}", classes="crumb", markup=False)
+        with Vertical(id="top"), Horizontal(id="progress"):
+            for n, name in enumerate(CRUMBS, 1):
+                yield Static(f"{n} {name}", id=f"crumb-{n}", classes="crumb", markup=False)
             yield Static("", id="step-title", markup=False)
         with ContentSwitcher(initial="step-1", id="steps"):
             yield ConnectStep(id="step-1")
@@ -1669,16 +1848,26 @@ class SetupApp(App[dict[str, Any]]):
     def _show(self, step: int) -> None:
         self.step = step
         self.query_one("#steps", ContentSwitcher).current = f"step-{step}"
+        compact = self.screen.size.width < 100
         for n in range(1, len(STEPS) + 1):
             crumb = self.query_one(f"#crumb-{n}", Static)
+            number = "✓" if n < step else str(n)
+            crumb.update(plain(number if compact else f"{number} {CRUMBS[n - 1]}"))
             crumb.set_classes(
                 "crumb" + (" -current" if n == step else " -done" if n < step else "")
             )
         self.query_one("#step-title", Static).update(
-            plain(f"Step {step} of {len(STEPS)}: {STEPS[step - 1]}")
+            plain(f"Step {step} of {len(STEPS)}" + (f" · {STEPS[step - 1]}" if compact else ""))
         )
-        self.query_one("#back", Button).disabled = step == 1
-        self.query_one("#next", Button).label = "Finish" if step == len(STEPS) else "Next"
+        self.query_one("#back", Button).display = step > 1
+        self.query_one("#next", Button).label = (
+            "Finish"
+            if step == len(STEPS)
+            else "Save"
+            if step == 5 and self.current().blocker() is not None
+            else "Next"
+        )
+        self.query_one("#next", Button).variant = "primary"
         self.query_one("#nav-hint", Static).update("")
         self.current().enter()
         if step == 1:
@@ -1692,6 +1881,38 @@ class SetupApp(App[dict[str, Any]]):
             return "Agent instructions are still being written. Wait for the result first."
         return None
 
+    def saved_snapshot_current(self) -> bool:
+        saved = self.draft.saved
+        if (
+            saved is None
+            or self.draft.saved_data is None
+            or self.draft.saved_revision != self.draft.revision
+        ):
+            return False
+        try:
+            return files.read_current(Path(saved[0])) == self.draft.saved_data
+        except (YojoError, OSError):
+            return False
+
+    def discard_discovery(self, service: str) -> None:
+        """Clear visible choices as soon as their connection changes, including while off-step."""
+        choices = self.query_one("#step-3", ChooseStep)
+        choices.loaded_for = None
+        if service == "jira":
+            choices.project_request = None
+            choices.all_projects = []
+            choices.query_one("#project-list", SelectionList).clear_options()
+            rules = self.query_one("#step-4", RulesStep)
+            rules.field_request = rules.meta_request = None
+            rules.loaded_for = None
+            rules.fields, rules.meta = [], {}
+            for target in ("#alias-field", "#create-field", "#move-field", "#move-set-field"):
+                rules.query_one(target, Select).set_options([])
+        elif service == "bitbucket":
+            choices.repo_request = None
+            choices.all_repos, choices.next_repo = [], None
+            choices.query_one("#repo-list", SelectionList).clear_options()
+
     def _hold(self, reason: str) -> None:
         self.query_one("#nav-hint", Static).update(plain(reason))
         self.notify(reason, severity="warning", markup=False)
@@ -1700,8 +1921,15 @@ class SetupApp(App[dict[str, Any]]):
         if (pending := self.write_pending()) is not None:
             self._hold(pending)
             return
+        if self.step == 5 and (reason := self.current().blocker()) is not None:
+            self.query_one("#step-5", ReviewStep).save()
+            return
         if self.step == len(STEPS):
-            self.finish("completed")
+            reason = self.current().blocker()
+            if reason is not None:
+                self._hold(reason)
+            else:
+                self.finish("completed")
             return
         reason = self.current().blocker()
         if reason is not None:
@@ -1725,7 +1953,7 @@ class SetupApp(App[dict[str, Any]]):
         self.action_previous_step()
 
     def action_theme(self) -> None:
-        self.theme = "textual-light" if self.current_theme.dark else "textual-dark"
+        self.theme = "yojo-light" if self.current_theme.dark else "yojo-dark"
 
     def action_leave(self) -> None:
         if isinstance(self.screen, LeaveScreen):
@@ -1804,6 +2032,9 @@ class SetupApp(App[dict[str, Any]]):
     def finish(self, status: str) -> None:
         if (pending := self.write_pending()) is not None:
             self._hold(pending)
+            return
+        if status == "completed" and (reason := self.query_one("#step-7", TryStep).blocker()):
+            self._hold(reason)
             return
         self.result_status = status
         self.exit(self.summary())

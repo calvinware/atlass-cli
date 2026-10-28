@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from tests.conftest import Harness
+from tests.conftest import JIRA_TOKEN, Harness
 from yojo.cli import Runtime, main
 from yojo.contracts import ExitCode
 
@@ -251,7 +251,12 @@ def test_unusable_terminal_prints_one_json_line_and_never_imports_textual(
 
 
 def _pty_session(
-    tmp_path: Path, argv: list[str], keys: list[bytes], wait_for: bytes
+    tmp_path: Path,
+    argv: list[str],
+    keys: list[bytes],
+    wait_for: bytes,
+    *,
+    python_script: str | None = None,
 ) -> tuple[int, bytes]:
     """Run `python -m yojo ARGV` with stdin and stdout on a pseudo-terminal, typing ``keys``."""
     # POSIX-only modules, loaded so that type checks on Windows see no platform-specific names.
@@ -263,13 +268,23 @@ def _pty_session(
 
     fd, child_end = pty.openpty()
     fcntl.ioctl(child_end, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+    script_path = tmp_path / "pty_setup_fixture.py" if python_script else None
+    if script_path is not None:
+        assert python_script is not None
+        script_path.write_text(python_script, encoding="utf-8")
+    command = (
+        [sys.executable, str(script_path)] if script_path else [sys.executable, "-m", "yojo", *argv]
+    )
+    env = _env(tmp_path)
+    if python_script:
+        env["PYTHONPATH"] += os.pathsep + str(Path(SRC).parent)
     proc = subprocess.Popen(  # noqa: S603 - fixed interpreter and arguments
-        [sys.executable, "-m", "yojo", *argv],
+        command,
         stdin=child_end,
         stdout=child_end,
         stderr=child_end,
         cwd=tmp_path,
-        env=_env(tmp_path),
+        env=env,
         start_new_session=True,
     )
     os.close(child_end)
@@ -305,6 +320,8 @@ def _pty_session(
             proc.kill()
             proc.wait()
         os.close(fd)
+        if script_path is not None:
+            script_path.unlink(missing_ok=True)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="needs a POSIX pseudo-terminal")
@@ -324,3 +341,50 @@ def test_terminal_bare_yojo_with_config_does_not_open_the_app(tmp_path: Path) ->
     assert code == 2
     assert b"No command given." in output
     assert b"Step 1 of 7" not in output
+
+
+@pytest.mark.skipif(os.name == "nt", reason="needs a POSIX pseudo-terminal")
+def test_pty_keyboard_finishes_steps_six_and_seven_after_retry(tmp_path: Path) -> None:
+    script = """
+import json
+from pathlib import Path
+import httpx
+from tests.conftest import FakeKeyring, FakeServer, JIRA_TOKEN, jira_path
+from tests.setup_support import URLS, add_routes, runtime
+from yojo import setup
+from yojo.auth import Credential, CredentialStore
+from yojo.setup import Draft, Services, SetupApp
+
+cwd = Path.cwd()
+config = cwd / 'yojo.yaml'
+data = b'version: 1\\njira:\\n  base_url: https://jira.example.test/jira\\n'
+config.write_bytes(data)
+server = add_routes(FakeServer())
+key = ('GET', jira_path('/rest/api/2/search'))
+good = server.routes[key][0]
+server.routes[key] = [lambda request: httpx.Response(500, json={'errorMessages': ['retry']}), good]
+keyring = FakeKeyring()
+CredentialStore(keyring).save('jira', URLS['jira'], Credential('pat', JIRA_TOKEN))
+rt = runtime(cwd, server, keyring)
+draft = Draft(urls={'jira': URLS['jira']}, projects=['PROJ'],
+              saved=(str(config), 'created'), saved_data=data, saved_revision=0)
+class LastSteps(SetupApp):
+    CSS_PATH = str(Path(setup.__file__).with_name('setup.tcss'))
+    def on_mount(self):
+        self.call_after_refresh(self._show, 6)
+result = LastSteps(Services(rt), draft).run()
+print('PTY_RESULT:' + json.dumps(result))
+print('TRY_CALLS:' + str(server.paths('GET').count(jira_path('/rest/api/2/search'))))
+"""
+    code, output = _pty_session(
+        tmp_path,
+        [],
+        [b"\x0e", b"\r", b"\r", b"\x0e"],
+        b"Step 6 of 7",
+        python_script=script,
+    )
+    assert code == 0, output[-2000:]
+    assert b"PTY_RESULT:" in output
+    assert b'"status": "completed"' in output
+    assert b"TRY_CALLS:2" in output
+    assert JIRA_TOKEN.encode() not in output

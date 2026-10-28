@@ -51,8 +51,11 @@ yojo --json bitbucket pr create --repo PROJ/web --source feature/login --target 
   --title "Fix login on Safari" --base-url https://bitbucket.example.test/bitbucket
 ```
 
-`yojo init` drafts a `yojo.yaml` from live metadata and saves it only with `--save`;
-`yojo agent install --target agents` writes these instructions for your AI coding tool. See
+In a terminal, `yojo setup` (or bare `yojo` on first run) guides you through connection,
+keyring login, live choices, rules, reviewed Save, agent installation, and a read-only Try.
+`yojo --json setup` returns the command-by-command fallback for scripts instead of opening
+the app. `yojo --json init` previews a `yojo.yaml` from live metadata and saves it only with
+`--save`; `yojo --json agent install --target agents` writes instructions for your AI coding tool. See
 [Getting started](https://github.com/calvinware/yojo/blob/main/docs/getting-started.md).
 
 Offline discovery works without config or credentials:

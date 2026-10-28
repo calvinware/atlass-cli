@@ -248,8 +248,16 @@ def all_fields(client: ServiceClient) -> dict[str, FieldMeta]:
         raise _invalid("field list")
     fields: dict[str, FieldMeta] = {}
     for item in raw:
-        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("id"), str)
+            or not item["id"].strip()
+            or not isinstance(item.get("name"), str)
+            or not item["name"].strip()
+        ):
             raise incomplete("field list", {"reason": "malformed entry"})
+        if item["id"] in fields:
+            raise incomplete("field list", {"reason": "duplicate field ID"})
         fields[item["id"]] = FieldMeta.parse(item["id"], {**item, "required": False})
     return fields
 

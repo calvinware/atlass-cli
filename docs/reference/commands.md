@@ -776,7 +776,7 @@ Success `data` fields:
 yojo setup
 ```
 
-Run by a person in a terminal. The success object is what the terminal view summarizes after the app closes; piped or with --json, setup starts nothing and returns the error below. `config` is null and `status` is `cancelled` when the app was left before Save.
+Run by a person in a terminal. Completion means the reviewed config was saved and a read-only Try succeeded on that saved file. Piped or --json setup returns the error below. Cancelling may leave a previously saved config in place.
 
 Success (exit 0):
 
@@ -808,7 +808,7 @@ Success (exit 0):
 }
 ```
 
-Error: stdout is piped or --json is given, so no terminal app can open ([`usage_error`](errors.md#usage_error), exit 2):
+Error: stdout is piped, --json is given, stdin is not a terminal, or TERM=dumb, so no terminal app can open ([`usage_error`](errors.md#usage_error), exit 2):
 
 ```json
 {
@@ -816,13 +816,15 @@ Error: stdout is piped or --json is given, so no terminal app can open ([`usage_
   "error": {
     "code": "usage_error",
     "message": "yojo setup needs an interactive terminal; nothing was started or changed.",
-    "fix": "Run `yojo setup` in a terminal without --json, or set up step by step: `yojo login --service jira --base-url URL`; then `yojo --json init --jira-url URL --project KEY --save`; then `yojo --json agent install --target agents`. Each step's output names the next one.",
+    "fix": "Run `yojo setup` in a terminal without --json, or set up step by step: `yojo login --service jira --base-url https://jira.example.test/jira`; then `yojo --json init --jira-url https://jira.example.test/jira --project PROJ`; then `yojo --json init --jira-url https://jira.example.test/jira --project PROJ --save`; then `yojo --json agent install --target agents`; then `yojo --json jira search --jql 'project = PROJ' --limit 5`. Each step's output names the next one.",
     "details": {
       "usage": "yojo setup",
       "steps": [
-        "yojo login --service jira --base-url URL",
-        "yojo --json init --jira-url URL --project KEY --save",
-        "yojo --json agent install --target agents"
+        "yojo login --service jira --base-url https://jira.example.test/jira",
+        "yojo --json init --jira-url https://jira.example.test/jira --project PROJ",
+        "yojo --json init --jira-url https://jira.example.test/jira --project PROJ --save",
+        "yojo --json agent install --target agents",
+        "yojo --json jira search --jql 'project = PROJ' --limit 5"
       ]
     }
   }

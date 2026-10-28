@@ -22,8 +22,9 @@ app cannot run there: one `usage_error` envelope (exit 2) listing the step-by-st
 
 The exit code is the same in both modes. `NO_COLOR` (any value) or `TERM=dumb` turns color off. In
 a terminal, a write first prints `Sending: ...` to stderr, naming what will change, just before the
-request goes out. A refused write says plainly that nothing was sent. Running `yojo` with no
-command returns a `usage_error` envelope (exit 2) that points at `yojo commands`.
+request goes out. A refused write says plainly that nothing was sent. On first run with no
+`yojo.yaml`, bare `yojo` opens setup in a usable terminal; with JSON or piped output it returns
+a `usage_error` envelope (exit 2). With a config already present, bare `yojo` returns usage.
 
 ## Global options
 

@@ -175,7 +175,8 @@ plain `yojo` the first time (no `yojo.yaml` found) opens it too. It has seven st
 5. **Review and save**: the exact `yojo.yaml` and its diff against any existing file. Only
    **Save** writes it, and it refuses if the file or Jira changed after you reviewed it.
 6. **Connect your agent**: pick the tools you use; this runs `yojo agent install`.
-7. **Try it**: run one read-only command and see the result.
+7. **Try it**: run one read-only command and see the result. Setup completes only after Save and
+   a successful Try on the saved configuration.
 
 Use the keyboard throughout: Tab moves between fields, Enter presses a button, Space selects a
 list item, Ctrl+N and Ctrl+B go to the next and previous step, Ctrl+T switches light and dark,

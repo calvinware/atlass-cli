@@ -61,7 +61,8 @@ def test_every_command_appears_once_with_signature_and_json_example() -> None:
     assert signatures == [spec.usage for spec in COMMANDS]
     for spec in COMMANDS:
         assert text.count(f"- `{spec.usage}`\n") == 1, spec.path
-        assert text.count(f"e.g. `{spec.example}`") == 1, spec.path
+        example = "yojo --json setup" if spec.path == "setup" else spec.example
+        assert text.count(f"e.g. `{example}`") == 1, spec.path
         if spec.input is not None:
             assert f"Input: `{agents.shape(spec.input)}`" in text
 
@@ -80,7 +81,10 @@ def test_signature_names_every_parser_flag_and_example_parses(path: str) -> None
     positionals = [a for a in leaf._actions if not a.option_strings]
     assert len(spec.usage.split()) > len(path.split()) + len(positionals) - 1
     argv = shlex.split(spec.example)
-    assert argv[:2] == ["yojo", "--json"], path
+    if path == "setup":
+        assert argv == ["yojo", "setup"]
+    else:
+        assert argv[:2] == ["yojo", "--json"], path
     parsed: argparse.Namespace = build_parser().parse_args(argv[1:])
     assert parsed.command == path
 

@@ -146,7 +146,8 @@ def shape(schema: dict[str, Any]) -> str:
 
 
 def _entry(spec: CommandSpec) -> list[str]:
-    lines = [f"- `{spec.usage}`", f"  {_first_sentence(spec.summary)} e.g. `{spec.example}`"]
+    example = "yojo --json setup" if spec.path == "setup" else spec.example
+    lines = [f"- `{spec.usage}`", f"  {_first_sentence(spec.summary)} e.g. `{example}`"]
     if spec.input is not None:
         lines.append(f"  Input: `{shape(spec.input)}`")
     return lines

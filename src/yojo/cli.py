@@ -981,9 +981,11 @@ def cmd_init(args: argparse.Namespace, rt: Runtime) -> Any:
 
 
 SETUP_STEPS = (
-    "yojo login --service jira --base-url URL",
-    "yojo --json init --jira-url URL --project KEY --save",
+    "yojo login --service jira --base-url https://jira.example.test/jira",
+    "yojo --json init --jira-url https://jira.example.test/jira --project PROJ",
+    "yojo --json init --jira-url https://jira.example.test/jira --project PROJ --save",
     "yojo --json agent install --target agents",
+    "yojo --json jira search --jql 'project = PROJ' --limit 5",
 )
 
 

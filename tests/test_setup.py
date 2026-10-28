@@ -24,7 +24,7 @@ from tests.conftest import (
     jira_path,
 )
 from tests.setup_support import URLS, add_routes, bitbucket_page, repo, runtime
-from yojo import setup
+from yojo import metadata, setup
 from yojo.auth import Credential, CredentialStore
 from yojo.contracts import COMMANDS_BY_PATH, YojoError, command_schema
 from yojo.setup import Draft, Rule, Services, SetupApp
@@ -167,7 +167,7 @@ def test_seven_steps_end_to_end_write_only_the_reviewed_file(tmp_path: Path) -> 
 
     async def scenario(pilot: Pilot[Any]) -> None:
         app = app_of(pilot)
-        assert "Step 1 of 7: Connect" in text(pilot, "#step-title")
+        assert "Step 1 of 7" in text(pilot, "#step-title")
         await connect(pilot, "jira", "confluence", "bitbucket")
         assert "Jira 9.12.4" in text(pilot, "#probe-jira")
         assert "Confluence 8.5.4" in text(pilot, "#probe-confluence")
@@ -275,7 +275,7 @@ def test_connect_refuses_bad_addresses_and_blocks_next(
     async def scenario(pilot: Pilot[Any]) -> None:
         await connect(pilot, "jira", jira=url)
         status = text(pilot, "#probe-jira")
-        assert "Not connected" in status and expected.split()[0] in status
+        assert "Not connected" in status and ("usage_error" in status or expected in status)
         await next_step(pilot)
         assert app_of(pilot).step == 1
         assert "Check the connection" in text(pilot, "#nav-hint")
@@ -302,7 +302,7 @@ def test_connect_reports_unreachable_and_recovers_on_retry(tmp_path: Path) -> No
         assert "Not connected" in text(pilot, "#probe-jira")
         assert app_of(pilot).draft.probes == {}
         await press_button(pilot, "#check")
-        assert "Connected: Jira 9.12.4" in text(pilot, "#probe-jira")
+        assert "✓ Jira 9.12.4" in text(pilot, "#probe-jira")
         await next_step(pilot)
         assert app_of(pilot).step == 2
 
@@ -319,7 +319,7 @@ def test_unreported_version_is_reachable_not_verified(tmp_path: Path) -> None:
         await connect(pilot, "jira", "confluence")
         for service in ("jira", "confluence"):
             status = text(pilot, f"#probe-{service}")
-            assert status.startswith("Reachable") and "did not report" in status
+            assert status.startswith("✓") and "version unavailable" in status
         assert all(p.version is None for p in app_of(pilot).draft.probes.values())
         await next_step(pilot)
         assert app_of(pilot).step == 2
@@ -335,7 +335,7 @@ def test_a_server_that_is_not_bitbucket_is_refused(tmp_path: Path) -> None:
 
     async def scenario(pilot: Pilot[Any]) -> None:
         await connect(pilot, "bitbucket")
-        assert "did not identify itself as Bitbucket" in text(pilot, "#probe-bitbucket")
+        assert "response_invalid" in text(pilot, "#probe-bitbucket")
         await next_step(pilot)
         assert app_of(pilot).step == 1
 
@@ -612,7 +612,7 @@ def test_live_rule_problems_are_listed_before_save(tmp_path: Path) -> None:
             await next_step(pilot)
         assert app.step == 5
         status = text(pilot, "#review-status")
-        assert status.startswith("Cannot save yet.") and "No Such Field" in status
+        assert status.startswith("Cannot save yet.") and "Retry" in status
         assert pilot.app.query_one("#save", Button).disabled
 
     world.drive(scenario, world.app(draft))
@@ -634,6 +634,14 @@ async def _to_review(pilot: Pilot[Any]) -> None:
     for _ in range(4):
         await next_step(pilot)
     assert app_of(pilot).step == 5
+
+
+async def _save_and_continue(pilot: Pilot[Any]) -> None:
+    await _to_review(pilot)
+    await press_button(pilot, "#save")
+    assert app_of(pilot).draft.saved is not None
+    await next_step(pilot)
+    assert app_of(pilot).step == 6
 
 
 def test_existing_file_shows_a_diff_and_is_replaced_only_on_save(tmp_path: Path) -> None:
@@ -670,7 +678,7 @@ def test_file_changed_after_review_is_not_overwritten(tmp_path: Path) -> None:
         await press_button(pilot, "#save")
         status = text(pilot, "#review-status")
         assert status.startswith("Not saved; nothing was written.")
-        assert "changed after you reviewed" in status
+        assert "file changed after review" in status.lower()
         assert pilot.app.query_one("#save", Button).disabled
         await press_button(pilot, "#preview")
         assert "Save replaces ./yojo.yaml" in text(pilot, "#review-status")
@@ -725,7 +733,7 @@ def test_symlinked_destination_is_refused(tmp_path: Path) -> None:
         await _to_review(pilot)
         pilot.app.query_one("#output", Input).value = "linked.yaml"
         await press_button(pilot, "#preview")
-        assert "symbolic link" in text(pilot, "#review-status")
+        assert "file_invalid" in text(pilot, "#review-status")
         assert pilot.app.query_one("#save", Button).disabled
 
     world.drive(scenario, _ready(world))
@@ -775,10 +783,7 @@ def test_agent_install_reports_a_partial_write(tmp_path: Path) -> None:
     (tmp_path / ".GEMINI.md.yojo-lock").write_text("")
 
     async def scenario(pilot: Pilot[Any]) -> None:
-        app = app_of(pilot)
-        for _ in range(5):
-            await next_step(pilot)
-        assert app.step == 6
+        await _save_and_continue(pilot)
         targets = pilot.app.query_one("#agent-targets", SelectionList)
         await press_button(pilot, "#install")
         assert "Select at least one tool" in text(pilot, "#agent-status")
@@ -867,9 +872,7 @@ def test_held_agent_install_is_reported_before_setup_finishes(tmp_path: Path) ->
     app.services.install_agents = slow_install  # type: ignore[method-assign]
 
     async def scenario(pilot: Pilot[Any]) -> None:
-        for _ in range(5):
-            await next_step(pilot)
-        assert app.step == 6
+        await _save_and_continue(pilot)
         app.query_one("#agent-targets", SelectionList).select("agents")
         app.query_one("#install", Button).press()
         await pilot.pause()
@@ -882,6 +885,7 @@ def test_held_agent_install_is_reported_before_setup_finishes(tmp_path: Path) ->
         await settle(pilot)
         assert "AGENTS.md: created" in text(pilot, "#agent-status")
         await next_step(pilot)
+        await press_button(pilot, "#run-try")
         app.finish("completed")
         await pilot.pause()
 
@@ -904,13 +908,13 @@ def test_try_shows_a_failed_read_with_its_fix_and_writes_nothing(tmp_path: Path)
     world = World(tmp_path, server)
 
     async def scenario(pilot: Pilot[Any]) -> None:
-        for _ in range(6):
-            await next_step(pilot)
+        await _save_and_continue(pilot)
+        await next_step(pilot)
         command = text(pilot, "#try-command")
-        assert command.startswith("yojo --json jira search") and "--base-url" in command
+        assert command.startswith("yojo --json jira search") and "--base-url" not in command
         await press_button(pilot, "#run-try")
         status = text(pilot, "#try-status")
-        assert status.startswith("It did not work (exit 5).") and "Next:" in status
+        assert status.startswith("✗ Read failed (exit 5).") and "Retry" in status
 
     world.drive(scenario, _ready(world))
     assert world.server.writes() == []
@@ -1016,14 +1020,13 @@ def test_keyboard_only_reaches_save(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- terminals
 
 
-def test_narrow_terminal_hides_breadcrumb_but_keeps_step_title(tmp_path: Path) -> None:
+def test_narrow_terminal_keeps_compact_progress_and_title(tmp_path: Path) -> None:
     world = World(tmp_path)
 
     async def scenario(pilot: Pilot[Any]) -> None:
-        assert not pilot.app.query_one("#progress").display or pilot.app.screen.has_class("-narrow")
+        assert pilot.app.query_one("#progress").display
         assert "Step 1 of 7" in text(pilot, "#step-title")
-        svg = pilot.app.export_screenshot()
-        assert "Step&#160;1&#160;of&#160;7" in svg
+        assert "Connect" in pilot.app.export_screenshot()
 
     world.drive(scenario, size=(60, 24))
 
@@ -1061,10 +1064,248 @@ CAPTURES = Path(__file__).resolve().parents[1] / "docs" / "assets" / "setup"
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
 def test_committed_captures_cover_seven_steps_without_secrets(theme: str) -> None:
-    for number, name in enumerate(setup.STEPS, 1):
+    for number, _name in enumerate(setup.STEPS, 1):
         svg = (CAPTURES / f"step-{number}-{theme}.svg").read_text(encoding="utf-8")
         assert svg.startswith("<svg")
-        title = f"Step {number} of 7: {name}".replace(" ", "&#160;")
+        title = f"Step {number} of 7".replace(" ", "&#160;")
         assert title in svg
         for token in TOKENS:
             assert token not in svg
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [{"id": "customfield_10001", "name": ""}],
+        [
+            {"id": "customfield_10001", "name": "Points"},
+            {"id": "customfield_10001", "name": "Other"},
+        ],
+    ],
+)
+def test_incomplete_or_duplicate_field_metadata_is_refused(rows: list[dict[str, str]]) -> None:
+    class Client:
+        def get(self, path: str) -> list[dict[str, str]]:
+            assert path == "/rest/api/2/field"
+            return rows
+
+    with pytest.raises(YojoError) as error:
+        metadata.all_fields(Client())  # type: ignore[arg-type]
+    assert error.value.code == "metadata_incomplete"
+
+
+def test_failed_fields_have_a_keyboard_retry(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+    original = app.services.fields
+    calls = 0
+
+    def flaky(draft: Draft) -> list[setup.FieldChoice]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise YojoError("response_invalid", "secret-token-123", "secret-token-123")
+        return original(draft)
+
+    app.services.fields = flaky  # type: ignore[method-assign]
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        for _ in range(3):
+            await pilot.press("ctrl+n")
+            await settle(pilot)
+        assert app.step == 4
+        assert app.query_one("#retry-fields", Button).display
+        assert "secret-token-123" not in app.export_screenshot()
+        app.query_one("#retry-fields", Button).focus()
+        await pilot.press("enter")
+        await settle(pilot)
+        assert calls == 2
+        assert not app.query_one("#retry-fields", Button).display
+        assert app.query_one("#step-4", setup.RulesStep).fields
+
+    world.drive(scenario, app)
+
+
+def test_keyboard_finish_waits_for_saved_config_and_successful_try(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await _to_review(pilot)
+        await pilot.press("ctrl+n")
+        assert app.step == 5
+        app.finish("completed")
+        assert app.is_running
+        await press_button(pilot, "#save")
+        await pilot.press("ctrl+n", "ctrl+n")
+        await settle(pilot)
+        assert app.step == 7
+        await pilot.press("ctrl+n")
+        assert app.is_running
+        assert "read-only" in text(pilot, "#nav-hint")
+        app.query_one("#run-try", Button).focus()
+        await pilot.press("enter")
+        await settle(pilot)
+        assert app.draft.try_revision == app.draft.saved_revision
+        await pilot.press("ctrl+n")
+
+    world.drive(scenario, app)
+    assert app.return_value is not None
+    assert app.return_value["status"] == "completed"
+
+
+def test_try_error_does_not_echo_secret_bearing_server_text(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await _save_and_continue(pilot)
+        await next_step(pilot)
+        step = app.query_one("#step-7", setup.TryStep)
+        step._ran(
+            (
+                {
+                    "ok": False,
+                    "error": {"code": "server_rejected", "message": TOKENS[0], "fix": TOKENS[0]},
+                },
+                5,
+            ),
+            None,
+        )
+        assert TOKENS[0] not in app.export_screenshot()
+        assert app.draft.try_revision is None
+
+    world.drive(scenario, app)
+
+
+def test_late_project_discovery_cannot_restore_old_connection_choices(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+    started = threading.Event()
+    release = threading.Event()
+    original = app.services.projects
+
+    def slow(draft: Draft) -> list[dict[str, str]]:
+        started.set()
+        assert release.wait(5)
+        return original(draft)
+
+    app.services.projects = slow  # type: ignore[method-assign]
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await pilot.press("ctrl+n", "ctrl+n")
+        await pilot.pause()
+        assert await asyncio.to_thread(started.wait, 5)
+        await pilot.press("ctrl+b", "ctrl+b")
+        app.query_one("#url-jira", Input).value = "https://new.example.test/jira"
+        await pilot.pause()
+        assert app.draft.projects == []
+        release.set()
+        await settle(pilot)
+        choices = app.query_one("#step-3", setup.ChooseStep)
+        assert choices.all_projects == []
+        assert app.draft.saved is None
+
+    try:
+        world.drive(scenario, app)
+    finally:
+        release.set()
+
+
+def test_real_project_picker_change_invalidates_saved_preview_and_try(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await _save_and_continue(pilot)
+        assert app.saved_snapshot_current()
+        await pilot.press("ctrl+b", "ctrl+b", "ctrl+b")
+        await settle(pilot)
+        assert app.step == 3
+        search = app.query_one("#project-search", Input)
+        search.value = "example proj"
+        search.focus()
+        await pilot.press("enter", "space")
+        await pilot.pause()
+        assert app.draft.projects == []
+        assert not app.saved_snapshot_current()
+        await pilot.press("ctrl+n", "ctrl+n")
+        await settle(pilot)
+        assert app.step == 5
+        assert str(app.query_one("#next", Button).label) == "Save"
+        assert app.query_one("#step-5", setup.ReviewStep).blocker() is not None
+
+    world.drive(scenario, app)
+
+
+def test_edit_during_save_keeps_earlier_file_from_completing_setup(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+    started = threading.Event()
+    release = threading.Event()
+    original = app.services.save
+
+    def slow(candidate: Any) -> str:
+        started.set()
+        assert release.wait(5)
+        return original(candidate)
+
+    app.services.save = slow  # type: ignore[method-assign]
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await _to_review(pilot)
+        app.query_one("#save", Button).press()
+        await pilot.pause()
+        assert await asyncio.to_thread(started.wait, 5)
+        app.query_one("#output", Input).value = "new.yaml"
+        await pilot.pause()
+        release.set()
+        await settle(pilot)
+        assert (tmp_path / "yojo.yaml").is_file()
+        assert app.draft.saved_revision != app.draft.revision
+        assert not app.saved_snapshot_current()
+        await pilot.press("ctrl+n")
+        assert app.step == 5
+
+    try:
+        world.drive(scenario, app)
+    finally:
+        release.set()
+
+
+def test_late_try_success_cannot_replace_a_newer_failed_retry(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+    started = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    def reads(_argv: list[str]) -> tuple[dict[str, Any], int]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            assert release.wait(5)
+            return {"ok": True, "data": {}}, 0
+        return {"ok": False, "error": {"code": "server_error"}}, 5
+
+    app.services.run_read = reads  # type: ignore[assignment]
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await _save_and_continue(pilot)
+        await next_step(pilot)
+        app.query_one("#run-try", Button).press()
+        await pilot.pause()
+        assert await asyncio.to_thread(started.wait, 5)
+        app.query_one("#run-try", Button).press()
+        await pilot.pause()
+        release.set()
+        await settle(pilot)
+        assert calls == 2
+        assert app.draft.try_revision is None
+        assert app.query_one("#step-7", setup.TryStep).blocker() is not None
+
+    try:
+        world.drive(scenario, app)
+    finally:
+        release.set()

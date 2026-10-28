@@ -657,7 +657,10 @@ def test_golden_tasks_cover_every_registered_command() -> None:
 def test_every_example_succeeds_in_one_call(harness: Harness, path: str) -> None:
     spec = COMMANDS_BY_PATH[path]
     argv = shlex.split(spec.example)
-    assert argv[:2] == ["yojo", "--json"]
+    if path == "setup":
+        assert argv == ["yojo", "setup"]  # the registry shows the human launch path
+    else:
+        assert argv[:2] == ["yojo", "--json"]
     harness.write_config(GOLDEN_CONFIG)
     for service, token in (
         ("jira", JIRA_TOKEN),

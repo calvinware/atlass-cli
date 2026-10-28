@@ -684,7 +684,7 @@ COMMANDS: list[CommandSpec] = [
             "read-only command. Bare `yojo` opens it on first run in a terminal."
         ),
         usage="yojo setup",
-        example="yojo --json setup",
+        example="yojo setup",
         arguments=_obj({}),
         success=_obj(
             {
