@@ -15,6 +15,7 @@ import copy
 import difflib
 import io
 import re
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -97,6 +98,15 @@ PROJECT_KEY_RE = re.compile(PROJECT_KEY_PATTERN)
 KEPT_JIRA_KEYS = {"base_url", "ca_bundle", "fields", "projects"}
 
 
+def check_mark() -> str:
+    """Use the check glyph when the terminal encoding can represent it."""
+    try:
+        "✓".encode(getattr(sys.stdout, "encoding", None) or "utf-8")
+    except (LookupError, UnicodeEncodeError):
+        return "[x]"
+    return "✓"
+
+
 def clean_lines(value: Any, limit: int = 300) -> str:
     """Text without control characters or terminal escapes, keeping its line breaks."""
     text = value if isinstance(value, str) else str(value)
@@ -142,8 +152,8 @@ class Probe:
         address = urlsplit(self.base_url)
         place = f"{address.netloc}{address.path}"
         if self.version:
-            return f"✓ {name} {self.version} at {place}"
-        return f"✓ {name} at {place}; version unavailable. Log in to confirm."
+            return f"{check_mark()} {name} {self.version} at {place}"
+        return f"{check_mark()} {name} at {place}; version unavailable. Log in to confirm."
 
 
 @dataclass(frozen=True)
@@ -1736,25 +1746,26 @@ class TryStep(StepView):
         yield self.lead(
             "Run one real, read-only command to see yojo work. Nothing is changed on the server."
         )
-        yield Static("", id="finish-message", classes="card", markup=False)
         yield Static("", id="try-command", classes="command", markup=False)
         yield Button("Run it", id="run-try", variant="primary")
         yield Static("", id="try-status", classes="status", markup=False)
         yield DataTable(id="try-table", show_cursor=False)
+        yield Static("", id="finish-message", classes="card", markup=False)
         yield Static("", id="try-next", classes="hint", markup=False)
 
     def enter(self) -> None:
         argv = self.setup.services.try_argv(self.draft)
         self.query_one("#try-command", Static).update(plain(retry.posix(argv), 1000))
         self.query_one("#try-table", DataTable).display = False
-        self.query_one("#try-next", Static).update(plain("\n".join(self.setup.next_steps()), 2000))
-        self.query_one("#finish-message", Static).update(
-            plain("yojo.yaml is saved. One last sounding: run the read-only check.")
-        )
+        self.query_one("#try-next", Static).display = False
+        self.query_one("#finish-message", Static).display = False
         self.query_one("#run-try", Button).focus()
 
     @on(Button.Pressed, "#run-try")
     def run_try(self) -> None:
+        self.query_one("#finish-message", Static).display = False
+        self.query_one("#try-next", Static).display = False
+        self.query_one("#try-table", DataTable).display = False
         if not self.setup.saved_snapshot_current():
             self.say("try-status", "Save the current yojo.yaml before trying it.", "warn")
             return
@@ -1824,14 +1835,17 @@ class TryStep(StepView):
             "ok",
         )
         where = self.draft.saved[0] if self.draft.saved else "yojo.yaml"
-        saved_line = f"✓ {show_path(Path(where), self.setup.services.cwd)} saved"
-        self.query_one("#finish-message", Static).update(
-            plain(
-                f"{saved_line}; read-only Try passed.\n"
-                f"Next: {self.setup.next_steps()[0]}\n"
-                "Fair winds for the next command."
-            )
+        saved_line = f"{check_mark()} {show_path(Path(where), self.setup.services.cwd)} saved"
+        finish = self.query_one("#finish-message", Static)
+        finish.update(
+            plain(f"{saved_line}; read-only Try passed.\nFair winds for the next command.")
         )
+        finish.display = True
+        next_steps = self.query_one("#try-next", Static)
+        next_steps.update(
+            plain("Next steps:\n" + "\n".join(self.setup.next_steps(json=False)), 2000)
+        )
+        next_steps.display = True
 
     def blocker(self) -> str | None:
         if not self.setup.saved_snapshot_current():
@@ -1930,7 +1944,7 @@ class SetupApp(App[dict[str, Any]]):
         compact = self.screen.size.width < 100
         for n in range(1, len(STEPS) + 1):
             crumb = self.query_one(f"#crumb-{n}", Static)
-            number = "✓" if n < step else str(n)
+            number = check_mark() if n < step else str(n)
             crumb.update(plain(number if compact else f"{number} {CRUMBS[n - 1]}"))
             crumb.set_classes(
                 "crumb" + (" -current" if n == step else " -done" if n < step else "")
@@ -2088,20 +2102,22 @@ class SetupApp(App[dict[str, Any]]):
                 r for r in self.draft.agent_files if r.get("target") != entry.get("target")
             ] + [entry]
 
-    def next_steps(self) -> list[str]:
+    def next_steps(self, *, json: bool = True) -> list[str]:
         steps: list[str] = []
         if self.draft.saved is not None:
             path = Path(self.draft.saved[0])
             config = [] if path == self.services.cwd / CONFIG_FILENAME else ["--config", str(path)]
-            steps.append(retry.posix([retry.PROGRAM, "--json", "config", "check", *config]))
+            argv = [retry.PROGRAM, *(["--json"] if json else []), "config", "check", *config]
+            steps.append(retry.posix(argv))
         else:
             steps.append("yojo setup  (to save yojo.yaml later)")
         if self.draft.saved is not None and not self.saved_snapshot_current():
             steps.append("yojo setup  (review and save later choices)")
         else:
-            steps.append(retry.posix(self.services.try_argv(self.draft)))
+            argv = self.services.try_argv(self.draft)
+            steps.append(retry.posix(argv if json else [arg for arg in argv if arg != "--json"]))
         if not self.draft.agent_files:
-            steps.append("yojo --json agent install --target agents")
+            steps.append(f"yojo {'--json ' if json else ''}agent install --target agents")
         steps.append("yojo commands")
         return steps
 

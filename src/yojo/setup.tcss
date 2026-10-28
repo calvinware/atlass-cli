@@ -3,6 +3,9 @@
 
 Screen {
     background: $background;
+}
+
+Screen, VerticalScroll, DataTable, SelectionList, ListView, #diff-panel {
     scrollbar-size-vertical: 1;
     scrollbar-size-horizontal: 1;
     scrollbar-color: $primary 35%;
@@ -80,6 +83,10 @@ Screen {
 
 .row Button {
     margin-right: 2;
+}
+
+#check {
+    padding: 0 1;
 }
 
 .field-label {
@@ -224,6 +231,10 @@ DataTable {
 /* Focus must be visible without color. */
 Button:focus {
     text-style: bold reverse;
+}
+
+#run-try:focus {
+    text-style: bold;
 }
 
 #nav {

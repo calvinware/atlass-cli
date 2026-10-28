@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import threading
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
 from textual.pilot import Pilot
-from textual.widgets import Button, Checkbox, Input, Select, SelectionList, Static
+from textual.widgets import Button, Checkbox, DataTable, Input, Select, SelectionList, Static
 
 from tests.conftest import (
     BITBUCKET_TOKEN,
@@ -31,6 +33,13 @@ from yojo.setup import Draft, Rule, Services, SetupApp
 
 TOKENS = (JIRA_TOKEN, BITBUCKET_TOKEN, "confluence-secret-token-456")
 Scenario = Callable[[Pilot[Any]], Awaitable[None]]
+
+
+def test_check_mark_has_an_ascii_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, "stdout", SimpleNamespace(encoding="ascii"))
+        assert setup.check_mark() == "[x]"
+    assert setup.check_mark() == "✓"
 
 
 class World:
@@ -260,8 +269,25 @@ def test_seven_steps_end_to_end_write_only_the_reviewed_file(tmp_path: Path) -> 
         await next_step(pilot)
         assert app.step == 7
         assert "project = PROJ" in text(pilot, "#try-command")
+        step = app.query_one("#step-7", setup.TryStep)
+        assert [widget.id for widget in step.children if widget.id] == [
+            "try-command",
+            "run-try",
+            "try-status",
+            "try-table",
+            "finish-message",
+            "try-next",
+        ]
+        assert not app.query_one("#finish-message", Static).display
         await press_button(pilot, "#run-try")
         assert "It works: 2 result(s)" in text(pilot, "#try-status")
+        assert app.query_one("#finish-message", Static).display
+        assert "Fair winds" in text(pilot, "#finish-message")
+        assert "Next:" not in text(pilot, "#finish-message")
+        next_steps = text(pilot, "#try-next")
+        assert next_steps.count("yojo config check") == 1
+        assert "yojo jira search" in next_steps
+        assert "--json" not in next_steps
         shoot(world, pilot)
         await pilot.press("ctrl+n")
 
@@ -1173,6 +1199,28 @@ def test_try_shows_a_failed_read_with_its_fix_and_writes_nothing(tmp_path: Path)
 
     world.drive(scenario, _ready(world))
     assert world.server.writes() == []
+
+
+def test_failed_try_retry_hides_earlier_success(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await _save_and_continue(pilot)
+        await next_step(pilot)
+        await press_button(pilot, "#run-try")
+        assert app.query_one("#finish-message", Static).display
+        assert app.query_one("#try-next", Static).display
+
+        app.services.run_read = lambda _argv: ({"ok": False, "error": {}}, 5)  # type: ignore[assignment]
+        await press_button(pilot, "#run-try")
+        assert "Read failed" in text(pilot, "#try-status")
+        assert not app.query_one("#finish-message", Static).display
+        assert not app.query_one("#try-next", Static).display
+        assert not app.query_one("#try-table", DataTable).display
+        assert app.query_one("#step-7", setup.TryStep).blocker() is not None
+
+    world.drive(scenario, app)
 
 
 @pytest.mark.parametrize(

@@ -43,6 +43,7 @@ TOKENS = {"jira": JIRA_TOKEN, "confluence": CONFLUENCE_TOKEN, "bitbucket": BITBU
 
 async def _capture(theme: str, cwd: Path) -> list[str]:
     app = SetupApp(Services(runtime(cwd, add_routes(FakeServer()), FakeKeyring())), theme=theme)
+    app.animation_level = "none"
     shots: list[str] = []
     async with app.run_test(size=SIZE) as pilot:
         # Keep the cursor in a fixed state while exporting SVGs.
@@ -73,18 +74,23 @@ async def _capture(theme: str, cwd: Path) -> list[str]:
             await pilot.press("ctrl+n")
             await settle()
 
+        async def capture() -> None:
+            # Let Textual's brief pressed state end before exporting a stable frame.
+            await pilot.pause(0.3)
+            shots.append(app.export_screenshot())
+
         for service in TOKENS:
             app.query_one(f"#url-{service}", Input).value = URLS[service]
         await press("#check")
         await wait_until(lambda: len(app.draft.probes) == 3)
-        shots.append(app.export_screenshot())
+        await capture()
 
         await advance()
         for service, token in TOKENS.items():
             app.query_one(f"#token-{service}", Input).value = token
             await press(f"#login-button-{service}")
             await wait_until(partial(has_login, service))
-        shots.append(app.export_screenshot())
+        await capture()
 
         await advance()
         await wait_until(lambda: app.query_one("#project-list", SelectionList).option_count > 0)
@@ -97,7 +103,7 @@ async def _capture(theme: str, cwd: Path) -> list[str]:
         app.draft.repos.append("PROJ/web")
         search.focus()
         await settle()
-        shots.append(app.export_screenshot())
+        await capture()
 
         await advance()
         app.query_one("#alias-field", Select).value = "Story Points"
@@ -109,11 +115,11 @@ async def _capture(theme: str, cwd: Path) -> list[str]:
         await press("#add-transition")
         app.clear_notifications()
         await settle()
-        shots.append(app.export_screenshot())
+        await capture()
 
         await advance()
         await wait_until(lambda: app.query_one("#step-5", ReviewStep).candidate is not None)
-        shots.append(app.export_screenshot())
+        await capture()
         await press("#save")
         await wait_until(lambda: app.draft.saved is not None)
         app.clear_notifications()
@@ -122,12 +128,20 @@ async def _capture(theme: str, cwd: Path) -> list[str]:
         app.query_one("#agent-targets", SelectionList).select("agents")
         await press("#install")
         await wait_until(lambda: bool(app.draft.agent_files))
-        shots.append(app.export_screenshot())
+        app.set_focus(None)
+        await settle()
+        await capture()
 
         await advance()
         await press("#run-try")
-        await wait_until(lambda: "It works" in str(app.query_one("#try-status").render()))
-        shots.append(app.export_screenshot())
+        await wait_until(
+            lambda: (
+                "It works" in str(app.query_one("#try-status").render())
+                and app.query_one("#finish-message").display
+                and app.query_one("#try-next").display
+            )
+        )
+        await capture()
     return shots
 
 
