@@ -3,6 +3,22 @@
 This page expands on [`AGENTS.md`](../AGENTS.md), the operational contract for any AI coding
 agent or automation that drives `yojo`. If the two ever disagree, `AGENTS.md` wins.
 
+## Install the instructions
+
+`yojo agent install --target agents|claude|cursor|copilot|gemini` writes compact instructions
+where the tool looks for them: an `AGENTS.md` section, a Claude skill
+(`.claude/skills/yojo/SKILL.md`), a Cursor rule (`.cursor/rules/yojo.mdc`),
+`.github/copilot-instructions.md`, or `GEMINI.md`. `yojo agent print` returns the same text for
+pasting into any chat. The text is generated from the command registry: every command's
+signature, the shape of its `--input` document, and one `--json` example, plus the rules on this
+page. It stays under 12 KiB (about 2,600 tokens at four characters per token), and an agent can
+act from it without calling `commands`, `schema`, or `--help`.
+
+Only the lines between `<!-- yojo:begin ... -->` and `<!-- yojo:end -->` belong to `yojo`. A new
+install adds that section, a later one replaces it, and the rest of the file is kept byte for
+byte. An unchanged file is not rewritten. Missing or repeated markers, a symbolic link, or a file
+that changes during the write are refused with nothing written.
+
 ## The loop
 
 ```mermaid

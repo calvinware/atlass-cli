@@ -13,6 +13,9 @@ SCHEMA_VERSION = 1
 _END = r"(?![\s\S])"
 ISSUE_KEY_PATTERN = r"^[A-Z][A-Z0-9_]*-[1-9][0-9]*" + _END
 PROJECT_KEY_PATTERN = r"^[A-Z][A-Z0-9_]*" + _END
+FRIENDLY_NAME_PATTERN = r"^[a-z][a-z0-9_]{0,63}" + _END
+FIELD_ID_PATTERN = r"^(customfield_[0-9]{1,10}|[a-z][A-Za-z]{0,63})" + _END
+SHA256_PATTERN = r"^[0-9a-f]{64}" + _END
 PAGE_ID_PATTERN = r"^[1-9][0-9]{0,19}" + _END
 SPACE_KEY_PATTERN = r"^~?[A-Za-z0-9_.@-]{1,255}" + _END
 BITBUCKET_PROJECT_PATTERN = r"^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}" + _END
@@ -45,6 +48,7 @@ ERROR_CODES: dict[str, ExitCode] = {
     "service_not_configured": ExitCode.INPUT,
     "issue_key_mismatch": ExitCode.INPUT,
     "file_invalid": ExitCode.INPUT,
+    "file_conflict": ExitCode.INPUT,
     "attachment_too_large": ExitCode.INPUT,
     "auth_missing": ExitCode.AUTH,
     "auth_failed": ExitCode.AUTH,
@@ -365,6 +369,86 @@ ISSUE_WRITE_SUCCESS = {
     "changed": _arr(CHANGED_FIELD),
 }
 
+# The `yojo init --input` policy: the version 1 yojo.yaml `jira.fields` and `jira.projects` shapes.
+NAME: dict[str, Any] = {"type": "string", "minLength": 1, "maxLength": 255}
+NAMES: dict[str, Any] = {"type": "array", "items": NAME, "minItems": 1}
+FIELD_REF: dict[str, Any] = _obj(
+    {"jira_name": NAME, "id": {"type": "string", "pattern": FIELD_ID_PATTERN}}
+) | {"oneOf": [{"required": ["jira_name"]}, {"required": ["id"]}]}
+ALIASES: dict[str, Any] = {
+    "type": "object",
+    "description": "Alias (lowercase snake_case) to {jira_name: NAME} or {id: FIELD_ID}.",
+    "propertyNames": {"pattern": FRIENDLY_NAME_PATTERN},
+    "additionalProperties": FIELD_REF,
+}
+TRANSITION_RULE: dict[str, Any] = _obj(
+    {
+        "from": NAMES,
+        "to": NAME,
+        "pre_edit": BOOL,
+        "auto_set": {
+            "type": "object",
+            "additionalProperties": {"oneOf": [NAME, NAMES]},
+        },
+        "require": _arr(
+            {
+                "oneOf": [
+                    _obj(
+                        {"kind": {"const": "attachment_filename"}, "pattern": NAME},
+                        ["kind", "pattern"],
+                    ),
+                    _obj({"kind": {"const": "field_set"}, "field": NAME}, ["kind", "field"]),
+                ]
+            }
+        ),
+    },
+    ["from", "to"],
+)
+POLICY_PROJECT: dict[str, Any] = _obj(
+    {
+        "key": {"type": "string", "pattern": PROJECT_KEY_PATTERN},
+        "fields": ALIASES,
+        "create": {
+            "type": "object",
+            "description": "Issue type name to {required: [FIELD, ...]}.",
+            "additionalProperties": _obj({"required": _arr(NAME)}, ["required"]),
+        },
+        "transitions": {
+            "type": "object",
+            "description": "Rule name (lowercase snake_case) to a transition rule.",
+            "propertyNames": {"pattern": FRIENDLY_NAME_PATTERN},
+            "additionalProperties": TRANSITION_RULE,
+        },
+    },
+    ["key"],
+)
+POLICY_INPUT: dict[str, Any] = _obj(
+    {"jira": _obj({"fields": ALIASES, "projects": _arr(POLICY_PROJECT)})}, ["jira"]
+)
+SERVICE_NAMES = ["jira", "confluence", "bitbucket"]
+AGENT_TARGETS = ["agents", "claude", "cursor", "copilot", "gemini"]
+SHA256: dict[str, Any] = {"type": "string", "pattern": SHA256_PATTERN}
+FILE_ERRORS = ["file_invalid", "file_conflict"]
+INIT_ERRORS = [
+    "usage_error",
+    "input_invalid",
+    "config_invalid",
+    "config_legacy",
+    *FILE_ERRORS,
+    "auth_missing",
+    "auth_failed",
+    "forbidden",
+    "keyring_unavailable",
+    "not_found",
+    "transport_error",
+    "tls_error",
+    "redirect_refused",
+    "service_error",
+    "rate_limited",
+    "response_invalid",
+    "metadata_incomplete",
+]
+
 COMMANDS: list[CommandSpec] = [
     CommandSpec(
         path="commands",
@@ -437,7 +521,7 @@ COMMANDS: list[CommandSpec] = [
             "yojo login --service jira|confluence|bitbucket|all [--base-url URL] "
             "[--auth pat|basic] [--username NAME] [--token-stdin | --password-stdin]"
         ),
-        example="yojo login --service jira --base-url https://jira.example.test/jira",
+        example="yojo --json login --service jira --base-url https://jira.example.test/jira",
         arguments=_obj(
             {
                 "service": {"enum": ["jira", "confluence", "bitbucket", "all"]},
@@ -487,6 +571,149 @@ COMMANDS: list[CommandSpec] = [
             ["status", "summary", "checks"],
         ),
         errors=[*COMMON_REMOTE_ERRORS, "config_drift", "config_unverified"],
+    ),
+    CommandSpec(
+        path="init",
+        summary=(
+            "Draft a version 1 yojo.yaml from live Jira, Confluence, and Bitbucket metadata, "
+            "using the logins already stored for each URL. Shows a preview by default; --save "
+            "creates the file only if it is absent, and --replace needs the current file's "
+            "sha256. Team rules come only from --policy-input (or --input); nothing is "
+            "inferred and no secret is written."
+        ),
+        usage=(
+            "yojo init [--jira-url URL] [--project KEY]... [--confluence-url URL] "
+            "[--bitbucket-url URL] [--repo PROJECT/slug]... "
+            "[--policy-input FILE|- | --input FILE|-] [--output PATH] "
+            "[--save] [--replace --expected-sha256 HEX]"
+        ),
+        example="yojo --json init --jira-url https://jira.example.test/jira --project PROJ",
+        arguments=_obj(
+            {
+                "jira_url": {"type": "string", "description": "Jira HTTPS application root."},
+                "project": {
+                    "type": "array",
+                    "items": {"type": "string", "pattern": PROJECT_KEY_PATTERN},
+                    "description": "Jira project key to list in jira.projects; needs jira_url.",
+                },
+                "confluence_url": {"type": "string", "description": "Confluence HTTPS root."},
+                "bitbucket_url": {"type": "string", "description": "Bitbucket HTTPS root."},
+                "repo": {
+                    "type": "array",
+                    "items": {"type": "string", "pattern": REPO_PATTERN},
+                    "description": "PROJECT/slug to check; reported, not saved (no config key).",
+                },
+                "input": INPUT_PATH,
+                "output": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Where to save; default yojo.yaml in the current directory.",
+                },
+                "save": {"type": "boolean", "default": False, "description": "Write the file."},
+                "replace": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Allow --save to replace an existing file; needs the sha256.",
+                },
+                "expected_sha256": SHA256 | {"description": "existing_sha256 from a preview."},
+            }
+        ),
+        input=POLICY_INPUT,
+        success=_obj(
+            {
+                "action": {"enum": ["preview", "created", "replaced", "unchanged"]},
+                "path": STR,
+                "yaml": STR,
+                "sha256": SHA256,
+                "existing_sha256": {"oneOf": [{"type": "null"}, SHA256]},
+                "services": _arr(
+                    _obj(
+                        {
+                            "service": {"enum": SERVICE_NAMES},
+                            "base_url": STR,
+                            "user": NULLABLE_STR,
+                            "version": NULLABLE_STR,
+                        },
+                        ["service", "base_url", "user", "version"],
+                    )
+                ),
+                "projects": _arr(_obj({"key": STR, "name": STR}, ["key", "name"])),
+                "repos": _arr(_obj({"repo": STR, "name": STR}, ["repo", "name"])),
+                "notes": _arr(STR),
+                "next": _arr(STR),
+            },
+            [
+                "action",
+                "path",
+                "yaml",
+                "sha256",
+                "existing_sha256",
+                "services",
+                "projects",
+                "repos",
+                "notes",
+                "next",
+            ],
+        ),
+        errors=INIT_ERRORS,
+        needs_config=False,
+    ),
+    CommandSpec(
+        path="agent print",
+        summary=(
+            "Print the yojo instructions for an AI agent: every command's signature and a "
+            "--json example, plus the safety rules. Offline; paste the text into any chat."
+        ),
+        usage="yojo agent print",
+        example="yojo --json agent print",
+        arguments=_obj({}),
+        success=_obj(
+            {"text": STR, "bytes": INT, "approx_tokens": INT, "commands": INT},
+            ["text", "bytes", "approx_tokens", "commands"],
+        ),
+        needs_config=False,
+    ),
+    CommandSpec(
+        path="agent install",
+        summary=(
+            "Write the agent instructions where each tool looks for them: agents (AGENTS.md), "
+            "claude (.claude/skills/yojo/SKILL.md), cursor (.cursor/rules/yojo.mdc), copilot "
+            "(.github/copilot-instructions.md), gemini (GEMINI.md). Only the marked yojo "
+            "section is replaced; other text is kept, and an unchanged file is not rewritten."
+        ),
+        usage="yojo agent install --target agents|claude|cursor|copilot|gemini...",
+        example="yojo --json agent install --target agents --target claude",
+        arguments=_obj(
+            {
+                "target": {
+                    "type": "array",
+                    "items": {"enum": AGENT_TARGETS},
+                    "minItems": 1,
+                    "description": "Repeat --target for each tool.",
+                }
+            },
+            ["target"],
+        ),
+        success=_obj(
+            {
+                "files": _arr(
+                    _obj(
+                        {
+                            "target": {"enum": AGENT_TARGETS},
+                            "path": STR,
+                            "action": {"enum": ["created", "updated", "unchanged"]},
+                            "managed_bytes": INT,
+                        },
+                        ["target", "path", "action", "managed_bytes"],
+                    )
+                ),
+                "core_bytes": INT,
+                "approx_tokens": INT,
+            },
+            ["files", "core_bytes", "approx_tokens"],
+        ),
+        errors=FILE_ERRORS,
+        needs_config=False,
     ),
     CommandSpec(
         path="jira issue create",

@@ -1014,7 +1014,7 @@ def _project_statuses(client: ServiceClient, key: str) -> set[str] | None:
             name = nested_str(status)
             if name:
                 names.add(name)
-    return names
+    return names or None
 
 
 def _name_check(check_id: str, name: str, known: set[str], what: str, fix: str) -> Check:

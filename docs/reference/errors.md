@@ -2,7 +2,7 @@
 
 # Error catalog
 
-`yojo` defines **33 error codes**. Every failure prints `{"ok": false, "error": {"code", "message", "fix", "details"}}` and exits with the code below. `error.fix` in the real output is specific to the failing call; follow it first. This page explains each code and the general fix.
+`yojo` defines **34 error codes**. Every failure prints `{"ok": false, "error": {"code", "message", "fix", "details"}}` and exits with the code below. `error.fix` in the real output is specific to the failing call; follow it first. This page explains each code and the general fix.
 
 > [!IMPORTANT]
 > `yojo` never retries a write. A refusal (`requirements_unmet`) sent nothing and carries a corrected `details.retry`. After `outcome_unknown` (exit 6) or `partial_transition` (exit 7) there is no retry: inspect the issue or page before running anything again. See [Writes and retries](../commands.md#writes-and-retries).
@@ -12,7 +12,7 @@
 | Exit | Meaning | Error codes |
 |------|---------|-------------|
 | 0 | success | none (success) |
-| 2 | input or configuration error | [`usage_error`](#usage_error), [`input_invalid`](#input_invalid), [`config_not_found`](#config_not_found), [`config_invalid`](#config_invalid), [`config_legacy`](#config_legacy), [`service_not_configured`](#service_not_configured), [`issue_key_mismatch`](#issue_key_mismatch), [`file_invalid`](#file_invalid), [`attachment_too_large`](#attachment_too_large) |
+| 2 | input or configuration error | [`usage_error`](#usage_error), [`input_invalid`](#input_invalid), [`config_not_found`](#config_not_found), [`config_invalid`](#config_invalid), [`config_legacy`](#config_legacy), [`service_not_configured`](#service_not_configured), [`issue_key_mismatch`](#issue_key_mismatch), [`file_invalid`](#file_invalid), [`file_conflict`](#file_conflict), [`attachment_too_large`](#attachment_too_large) |
 | 3 | authentication or keyring error | [`auth_missing`](#auth_missing), [`auth_failed`](#auth_failed), [`forbidden`](#forbidden), [`keyring_unavailable`](#keyring_unavailable), [`login_failed`](#login_failed) |
 | 4 | unmet requirement (nothing was written), or config drift/unverified | [`requirements_unmet`](#requirements_unmet), [`config_drift`](#config_drift), [`config_unverified`](#config_unverified) |
 | 5 | remote validation error, not found, or conflict | [`remote_validation`](#remote_validation), [`remote_limit_exceeded`](#remote_limit_exceeded), [`not_found`](#not_found), [`conflict`](#conflict), [`version_conflict`](#version_conflict) |
@@ -39,7 +39,7 @@
 
 **Details:** `details.errors[]` lists schema problems by location and rule; rejected values and unknown caller-defined keys are masked.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo init`](commands.md#yojo-init), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `config_not_found`
 
@@ -47,7 +47,7 @@
 
 **Fix:** Pass `--config` with an existing file, or copy `yojo.example.yaml` to `yojo.yaml` in the repository root and fill in team values.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `config_invalid`
 
@@ -57,7 +57,7 @@
 
 **Details:** `details.where` is the exact key path and `details.problem` says what is wrong.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo init`](commands.md#yojo-init), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `config_legacy`
 
@@ -65,7 +65,7 @@
 
 **Fix:** Rename the file to `yojo.yaml` and review it against [Configuration](../configuration.md) (version 1 dropped the story and feature settings), or pass `--config PATH`. `yojo` works without a config file when you pass `--base-url`.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo init`](commands.md#yojo-init), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `service_not_configured`
 
@@ -73,7 +73,7 @@
 
 **Fix:** Pass `--base-url https://...` for this call, or add the `jira` or `confluence` section with its `base_url` to `yojo.yaml`.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `issue_key_mismatch`
 
@@ -85,11 +85,21 @@
 
 ### `file_invalid`
 
-**Exit 2.** The `--file` for an attachment does not exist, is not a regular file, cannot be opened, was replaced between the check and the open, or changed while `yojo` was reading it. Nothing was sent.
+**Exit 2.** A local file cannot be used. For `jira attachment add`, the `--file` does not exist, is not a regular file, cannot be opened, was replaced between the check and the open, or changed while `yojo` was reading it. For `init` and `agent install`, the destination or a folder on its path is a symbolic link, is not a regular file, is not UTF-8, or cannot be read or written. Nothing was sent or written.
 
-**Fix:** Pass the path of an existing, readable regular file. Relative paths resolve from the current directory. If the file was replaced or changed, wait until it is fully written, then retry.
+**Fix:** Pass the path of an existing, readable regular file (relative paths resolve from the current directory), or replace the symbolic link with a real file or folder. If the file was replaced or changed, wait until it is fully written, then retry.
 
-**Returned by:** [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add).
+**Returned by:** [`yojo init`](commands.md#yojo-init), [`yojo agent install`](commands.md#yojo-agent-install), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add).
+
+### `file_conflict`
+
+**Exit 2.** A local file `yojo` would write is not in the expected state, so nothing was written: `init --save` found an existing file that differs from the draft, `--expected-sha256` does not match the current file, the file changed or appeared while `yojo` was writing, another `yojo` holds the write lock, or a file has missing, repeated, or out-of-order `yojo:begin`/`yojo:end` marker lines.
+
+**Fix:** Follow `error.fix`. For `init`, review the preview, then replace with `--save --replace --expected-sha256 HEX` using the preview's `existing_sha256`. For markers, leave one `<!-- yojo:begin ... -->` line before one `<!-- yojo:end -->` line, or remove both.
+
+**Details:** `details.path` is the file. For `init`, `details.existing_sha256` is the current file's digest.
+
+**Returned by:** [`yojo init`](commands.md#yojo-init), [`yojo agent install`](commands.md#yojo-agent-install).
 
 ### `attachment_too_large`
 
@@ -107,7 +117,7 @@
 
 **Fix:** Ask a human to run `yojo login --service <service>` (with `--base-url URL` when there is no `yojo.yaml`). Agents never handle the secret.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo init`](commands.md#yojo-init), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `auth_failed`
 
@@ -115,7 +125,7 @@
 
 **Fix:** Ask a human to run `yojo login --service <service>` with a valid personal access token or password.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo init`](commands.md#yojo-init), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `forbidden`
 
@@ -123,7 +133,7 @@
 
 **Fix:** Ask an administrator for access to the project or space. If `details.login_reason` mentions CAPTCHA, a human signs in through the browser once, then retries.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo init`](commands.md#yojo-init), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `keyring_unavailable`
 
@@ -133,7 +143,7 @@
 
 **Details:** `details.backends` names the refused backends, or `details.error_type` names the keyring exception.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo init`](commands.md#yojo-init), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `login_failed`
 
@@ -197,7 +207,7 @@
 
 **Fix:** Check the key or ID and your permissions. If every call fails this way, check that `base_url` includes the right context path.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo init`](commands.md#yojo-init), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `conflict`
 
@@ -223,7 +233,7 @@
 
 **Fix:** Check network or VPN access to the host in `details.host`, then retry. Read-only commands are safe to retry.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo init`](commands.md#yojo-init), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `tls_error`
 
@@ -231,7 +241,7 @@
 
 **Fix:** Confirm the `base_url` host name. If the server uses an internal CA, set `ca_bundle` in `yojo.yaml` to that CA's PEM file.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo init`](commands.md#yojo-init), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `redirect_refused`
 
@@ -239,7 +249,7 @@
 
 **Fix:** Set `base_url` to the final HTTPS URL including the context path. SSO redirects usually mean you should log in with a personal access token.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo init`](commands.md#yojo-init), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `service_error`
 
@@ -247,7 +257,7 @@
 
 **Fix:** Retry later. Contact the Atlassian administrators if it persists.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo init`](commands.md#yojo-init), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `rate_limited`
 
@@ -255,7 +265,7 @@
 
 **Fix:** Wait for `details.retry_after`, then run the command again. Do not loop.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo init`](commands.md#yojo-init), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `response_invalid`
 
@@ -263,7 +273,7 @@
 
 **Fix:** Check that `base_url` points at the Data Center application root, including any context path, and is not behind a rewriting proxy. For an oversized answer, narrow the query or lower `--limit`.
 
-**Returned by:** every command except `yojo commands`, `yojo schema`.
+**Returned by:** [`yojo login`](commands.md#yojo-login), [`yojo config check`](commands.md#yojo-config-check), [`yojo init`](commands.md#yojo-init), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page read`](commands.md#yojo-confluence-page-read), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket repo list`](commands.md#yojo-bitbucket-repo-list), [`yojo bitbucket repo get`](commands.md#yojo-bitbucket-repo-get), [`yojo bitbucket branch list`](commands.md#yojo-bitbucket-branch-list), [`yojo bitbucket pr list`](commands.md#yojo-bitbucket-pr-list), [`yojo bitbucket pr get`](commands.md#yojo-bitbucket-pr-get), [`yojo bitbucket pr diff`](commands.md#yojo-bitbucket-pr-diff), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `metadata_incomplete`
 
@@ -271,7 +281,7 @@
 
 **Fix:** Retry. If it persists, ask a Jira admin to check the metadata endpoint (createmeta, transitions, or editmeta) and the fields on that screen.
 
-**Returned by:** [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
+**Returned by:** [`yojo init`](commands.md#yojo-init), [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `outcome_unknown`
 

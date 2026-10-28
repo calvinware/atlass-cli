@@ -43,6 +43,11 @@ flowchart TD
     cli --> workflow
     cli --> confluence
     cli --> retry
+    cli --> init
+    cli --> agents
+    init["init.py<br/>yojo.yaml drafts"] --> files
+    agents["agents.py<br/>agent instructions"] --> files
+    files["files.py<br/>atomic local writes"]
     jira["jira.py<br/>issues, links, attachments,<br/>comments, search, config check"] --> workflow
     jira --> metadata
     jira --> fields
@@ -77,6 +82,9 @@ flowchart TD
 | [`fields.py`](../src/yojo/fields.py) | Resolves field names, aliases, and IDs to live fields, and coerces plain values to the field's live type. |
 | [`retry.py`](../src/yojo/retry.py) | Builds the corrected `retry` command line from the caller's argv and each check's edit. |
 | [`workflow.py`](../src/yojo/workflow.py) | Pure transition checklist plus the PUT/recheck/POST executor. |
+| [`init.py`](../src/yojo/init.py) | `yojo init`: the draft from named URLs, projects, and `--input` policy, live checks, and guarded saves. |
+| [`agents.py`](../src/yojo/agents.py) | The agent instruction core generated from `COMMANDS`, target wrappers, and marked-section installs. |
+| [`files.py`](../src/yojo/files.py) | Conflict-checked atomic writes of local files: same-folder temp file, hard-link create, compare-then-replace, no symbolic links. |
 | [`response.py`](../src/yojo/response.py) | Output budgets: long text is trimmed with a marker and a `more` command. |
 | [`jira.py`](../src/yojo/jira.py), [`confluence.py`](../src/yojo/confluence.py), [`bitbucket.py`](../src/yojo/bitbucket.py) | Command implementations. |
 
@@ -118,7 +126,10 @@ Tests never touch a real server or keyring. [`tests/conftest.py`](../tests/conft
 6. **Terminal view.** Check the `run_tty` output: it names the thing changed and links to it.
 7. **Tests.** `tests/test_cli.py` already fails if the registry, parser, and handlers disagree.
    Add behavior tests with the harness, including a "nothing was written" assertion for refused
-   writes.
+   writes. `tests/test_one_call.py` runs every command's registry `example` once, exactly as
+   written; add the command's fixture routes to `GOLDEN_SETUP`. The example and usage line are
+   what `yojo agent install` writes, so `tests/test_agents.py` checks that the usage names every
+   parser flag and that the installed text stays within 12 KiB.
 8. **Docs.** Add an entry to [`docs/examples/commands.json`](examples/commands.json), then run
    `python scripts/generate_command_reference.py --write`. The generator refuses to run until every
    discovered command has a schema-valid example, and CI fails while the committed reference is

@@ -189,6 +189,14 @@ def _success(data: Any, command: str | None, style: Style) -> list[str]:
         return [clean(data)]
     if isinstance(data.get("help"), dict):
         return _help(data["help"], style)
+    if command == "init":
+        return _init(data, style)
+    if command == "agent print":
+        return [clean(line, 2000) for line in str(data.get("text") or "").splitlines()]
+    if command == "agent install":
+        files = data.get("files") or []
+        head = style.green(f"Installed yojo instructions for {len(files)} tool(s).")
+        return [head, "", *table(files, ["target", "action", "path"], style)]
     lines: list[str] = []
     verb = WRITE_VERBS.get(command or "")
     subject = data.get("key") or data.get("id")
@@ -263,6 +271,32 @@ def _success(data: Any, command: str | None, style: Style) -> list[str]:
         lines.append(f"Full text: {clean(data['more'])}")
     if data.get("next_start") is not None:
         lines.append(f"Next page: run the same command with --start {clean(data['next_start'])}")
+    return lines
+
+
+INIT_HEADS = {
+    "preview": "Draft yojo.yaml (not saved) for",
+    "created": "Saved",
+    "replaced": "Replaced",
+    "unchanged": "Already up to date:",
+}
+
+
+def _init(data: Mapping[str, Any], style: Style) -> list[str]:
+    action = str(data.get("action"))
+    head = f"{INIT_HEADS.get(action, action)} {clean(data.get('path'), 1000)}"
+    lines = [style.bold(head) if action == "preview" else style.green(head), ""]
+    lines += [style.dim(clean(line)) for line in str(data.get("yaml") or "").splitlines()]
+    services = data.get("services") or []
+    columns = ["service", "user", "version", "base_url"]
+    lines += ["", style.bold("Checked"), *table(services, columns, style)]
+    for key, columns in (("projects", ["key", "name"]), ("repos", ["repo", "name"])):
+        if data.get(key):
+            lines += ["", *table(data[key], columns, style)]
+    lines += [""] + [clean(note, 1000) for note in data.get("notes") or []]
+    steps = data.get("next") or []
+    if steps:
+        lines += ["", style.bold("Next")] + [f"  {clean(step, 2000)}" for step in steps]
     return lines
 
 

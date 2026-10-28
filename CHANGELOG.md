@@ -32,3 +32,10 @@ First release under the name `yojo`. It replaces `atlass-cli` 1.0.0, which stays
 - The `field_set` transition rule.
 - Compact output: `--fields`, trimmed long text with a command to get the rest, and a default
   search limit of 20.
+- `yojo init` drafts a version 1 `yojo.yaml` from live metadata with the stored logins. It
+  previews by default, saves only with `--save`, and replaces a file only with
+  `--replace --expected-sha256`. Team rules come only from `--input` and are checked live.
+- `yojo agent print` and `yojo agent install --target agents|claude|cursor|copilot|gemini`
+  generate agent instructions from the command registry, with every command's signature and a
+  `--json` example in under 12 KiB. Installs replace only the marked yojo section.
+- The `file_conflict` error code (exit 2) for local files that changed or would be overwritten.

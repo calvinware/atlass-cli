@@ -15,6 +15,62 @@ This page is the exact reference for every key. For annotated, ready-to-adapt ex
 [cookbook](admin-cookbook.md). For fixing `config check` results, see
 [Troubleshooting](troubleshooting.md#config-drift).
 
+## Draft it with `yojo init`
+
+`yojo init` writes a starting `yojo.yaml` from live metadata, using the logins already stored for
+each URL. It only lists what you name: the service URLs and the `--project` keys. It confirms each
+URL answers with your login, each project exists, and each `--repo` exists in Bitbucket, then
+shows the YAML. Version 1 has no repository list, so `--repo` is checked and reported but not
+saved.
+
+```bash
+yojo --json init --jira-url https://jira.example.test/jira --project PROJ
+yojo --json init --jira-url https://jira.example.test/jira --project PROJ --save
+```
+
+- Without `--save`, nothing is written. `existing_sha256` is the digest of any file already at the
+  destination (`yojo.yaml` in the current directory, or `--output PATH`).
+- `--save` creates the file only if it is absent, and reports `unchanged` when the file already
+  matches the draft.
+- `--save --replace --expected-sha256 HEX` replaces an existing file only while its digest still
+  equals `HEX`. Use the `existing_sha256` from the preview you reviewed. A different file is
+  refused with [`file_conflict`](reference/errors.md#file_conflict) and kept as it is. The file's
+  permissions are kept.
+- A symbolic link at the destination or in a folder on its path is refused, and a lone `atl.yaml`
+  next to the destination stops the save with `config_legacy`.
+
+`yojo init` never infers team policy from Jira. To add aliases and rules, pass them as JSON with
+`--policy-input FILE` (or `--policy-input -` for stdin). `--input` is an equivalent short form.
+The document has one key, `jira`, holding the same
+`fields` and `projects` shapes as this file; each `projects[].key` must also be given with
+`--project`:
+
+```json
+{
+  "jira": {
+    "fields": {"points": {"jira_name": "Story Points"}},
+    "projects": [
+      {
+        "key": "PROJ",
+        "create": {"Bug": {"required": ["Severity"]}},
+        "transitions": {
+          "finish": {
+            "from": ["In Progress"],
+            "to": "Done",
+            "require": [{"kind": "field_set", "field": "points"}]
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
+Every field, issue type, and status in it is checked against live Jira, the same way as
+`yojo config check`. A name Jira does not have, or one that matches more than one field, is
+refused with `input_invalid` and the problems listed in `details.problems`, each with a
+suggestion when one is clear. Nothing is written then.
+
 ## Discovery
 
 `yojo` looks for `yojo.yaml` in the current directory, then in each parent directory up to the

@@ -53,6 +53,9 @@ def test_commands_lists_every_command_offline(harness: Harness) -> None:
     for expected in (
         "login",
         "config check",
+        "init",
+        "agent print",
+        "agent install",
         "jira issue create",
         "jira issue get",
         "jira issue update",
@@ -155,6 +158,9 @@ def test_bare_yojo_returns_a_usage_envelope(harness: Harness) -> None:
         ["jira", "comment", "add", "EXAMPLE-1", "--body", "x", "--body-file", "-"],
         ["confluence", "page", "read", "abc"],
         ["login", "--service", "jira", "--token", "secret-in-argv"],
+        ["init", "--token", "secret-in-argv"],
+        ["agent", "install", "--target", "notepad"],
+        ["agent", "print", "--target", "agents"],
     ],
 )
 def test_parser_errors_are_json_exit_2(harness: Harness, argv: list[str]) -> None:
