@@ -118,6 +118,35 @@ def test_connection_result_is_ignored_after_url_or_ca_change(tmp_path: Path) -> 
     world.drive(scenario)
 
 
+def test_cleared_service_is_dropped_from_later_steps_and_the_file(tmp_path: Path) -> None:
+    world = World(tmp_path)
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        app = app_of(pilot)
+        await connect(pilot, "jira", "bitbucket")
+        assert set(app.draft.urls) == {"jira", "bitbucket"}
+        pilot.app.query_one("#url-bitbucket", Input).value = ""
+        await pilot.pause()
+        assert "bitbucket" not in app.draft.urls
+        await next_step(pilot)
+        assert app.step == 2
+        assert not pilot.app.query_one("#login-bitbucket").display
+        await login(pilot, "jira", JIRA_TOKEN)
+        await next_step(pilot)
+        assert app.step == 3
+        assert not pilot.app.query_one("#bitbucket-choice").display
+        projects = pilot.app.query_one("#project-search", Input)
+        projects.value = "example proj"
+        projects.focus()
+        await pilot.press("enter", "space")
+        assert app.draft.projects == ["PROJ"]
+        candidate = await asyncio.to_thread(app.services.candidate, app.draft)
+        assert "bitbucket" not in candidate.text
+        assert "jira" in candidate.text
+
+    world.drive(scenario)
+
+
 async def next_step(pilot: Pilot[Any]) -> None:
     await pilot.press("ctrl+n")
     await settle(pilot)
@@ -413,6 +442,54 @@ def test_second_login_cannot_race_the_first_keyring_write(tmp_path: Path) -> Non
     assert JIRA_TOKEN in (world.stored("jira") or "")
 
 
+@pytest.mark.parametrize("accepted", [True, False], ids=["token-accepted", "token-rejected"])
+def test_late_saved_login_lookup_cannot_override_a_newer_login(
+    tmp_path: Path, accepted: bool
+) -> None:
+    world = World(tmp_path)
+    app = world.app()
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_lookup(draft: Draft, service: str) -> str:
+        started.set()
+        assert release.wait(5)
+        return "Logged in to Jira as earlier-user."
+
+    def rejected(draft: Draft, service: str, secret: str) -> str:
+        raise YojoError("auth_failed", "rejected", "Check the token.")
+
+    app.services.stored_login = slow_lookup  # type: ignore[method-assign]
+    if not accepted:
+        app.services.login = rejected  # type: ignore[method-assign]
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await connect(pilot, "jira")
+        app.action_next_step()
+        await pilot.pause()
+        assert app.step == 2
+        assert await asyncio.to_thread(started.wait, 5)
+        app.query_one("#token-jira", Input).value = JIRA_TOKEN
+        app.query_one("#step-2", setup.LoginStep)._login("jira")
+        while "jira" in app.query_one("#step-2", setup.LoginStep).inflight:
+            await pilot.pause(0.05)
+        expected = text(pilot, "#who-jira")
+        release.set()
+        await settle(pilot)
+        assert text(pilot, "#who-jira") == expected
+        assert "earlier-user" not in expected
+        if accepted:
+            assert "Saved to your keyring" in app.draft.logins["jira"]
+        else:
+            assert expected.startswith("Nothing was stored.")
+            assert "jira" not in app.draft.logins
+
+    try:
+        world.drive(scenario, app)
+    finally:
+        release.set()
+
+
 def test_token_field_never_copies_its_value_out(tmp_path: Path) -> None:
     world = World(tmp_path)
 
@@ -532,6 +609,62 @@ def test_repositories_page_with_load_more(tmp_path: Path) -> None:
         if r.url.path == bitbucket_path("/repos")
     ]
     assert starts == ["0", "1"]
+
+
+@pytest.mark.parametrize(
+    "bad_page",
+    [
+        {"values": "not-a-list", "start": 1, "size": 1, "limit": 100, "isLastPage": True},
+        bitbucket_page([repo("PROJ", "web")], start=1),
+    ],
+    ids=["malformed", "duplicate"],
+)
+def test_failed_later_repository_page_keeps_rows_and_retries(
+    tmp_path: Path, bad_page: dict[str, Any]
+) -> None:
+    server = add_routes(FakeServer())
+    server.routes[("GET", bitbucket_path("/repos"))] = []
+    server.add("GET", bitbucket_path("/repos"), bitbucket_page([repo("PROJ", "web")], last=False))
+    server.add("GET", bitbucket_path("/repos"), bad_page)
+    server.add("GET", bitbucket_path("/repos"), bitbucket_page([repo("OPS", "deploy")], start=1))
+    world = World(tmp_path, server)
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        app = app_of(pilot)
+        await through_login(pilot, "bitbucket")
+        repos = pilot.app.query_one("#repo-list", SelectionList)
+        search = pilot.app.query_one("#repo-search", Input)
+        search.value = "web"
+        search.focus()
+        await pilot.press("enter", "space")
+        search.value = ""
+        await pilot.pause()
+        assert app.draft.repos == ["PROJ/web"]
+        await press_button(pilot, "#more-repos")
+        more = pilot.app.query_one("#more-repos", Button)
+        status = text(pilot, "#repo-status")
+        assert "1 loaded; could not load more repositories." in status
+        assert "Press Retry." in status
+        assert str(more.label) == "Retry" and not more.disabled
+        assert repos.option_count == 1
+        assert app.draft.repos == ["PROJ/web"] and repos.selected == ["PROJ/web"]
+        more.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await settle(pilot)
+        more = pilot.app.query_one("#more-repos", Button)
+        assert str(more.label) == "Load more" and more.disabled
+        assert repos.option_count == 2
+        assert app.draft.repos == ["PROJ/web"] and repos.selected == ["PROJ/web"]
+        assert "2 loaded." in text(pilot, "#repo-status")
+
+    world.drive(scenario)
+    starts = [
+        r.url.params["start"]
+        for r in world.server.requests
+        if r.url.path == bitbucket_path("/repos")
+    ]
+    assert starts == ["0", "1", "1"]
 
 
 # --------------------------------------------------------------------------- step 4
@@ -855,6 +988,67 @@ def test_held_save_keeps_setup_open_until_its_result_is_shown(tmp_path: Path) ->
     assert (tmp_path / "yojo.yaml").is_file()
 
 
+def test_failure_after_publishing_reports_the_written_file(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+    save = app.services.save
+    reviewed: list[bytes] = []
+
+    def save_then_fail(candidate: Any) -> str:
+        reviewed.append(candidate.data)
+        save(candidate)
+        raise YojoError("config_invalid", "read back failed", "Edit the file.")
+
+    app.services.save = save_then_fail  # type: ignore[method-assign]
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await _to_review(pilot)
+        await press_button(pilot, "#save")
+        status = text(pilot, "#review-status")
+        assert status.startswith("Created ./yojo.yaml: it holds exactly the reviewed preview")
+        assert "nothing was written" not in status
+        assert "config_invalid" in status
+        await pilot.press("ctrl+q", "tab", "enter")
+        await pilot.pause()
+
+    world.drive(scenario, app)
+    assert (tmp_path / "yojo.yaml").read_bytes() == reviewed[0]
+    assert app.return_value is not None
+    assert app.return_value["config"] == {
+        "path": str(tmp_path / "yojo.yaml"),
+        "action": "created",
+    }
+
+
+def test_unconfirmed_save_asks_for_inspection_and_a_fresh_preview(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+
+    def half_write(candidate: Any) -> str:
+        candidate.dest.write_bytes(candidate.data[:10])
+        raise YojoError("file_invalid", "write interrupted", "Check the disk.")
+
+    app.services.save = half_write  # type: ignore[method-assign]
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await _to_review(pilot)
+        await press_button(pilot, "#save")
+        status = text(pilot, "#review-status")
+        assert status.startswith("Save did not finish, and ./yojo.yaml now matches neither")
+        assert "Open ./yojo.yaml to check it, then press Refresh preview" in status
+        assert "nothing was written" not in status
+        assert pilot.app.query_one("#save", Button).disabled
+        await next_step(pilot)
+        assert app_of(pilot).step == 5
+        await pilot.press("ctrl+q", "tab", "enter")
+        await pilot.pause()
+
+    world.drive(scenario, app)
+    assert app.return_value is not None
+    assert app.return_value["config"] is None
+    assert app.return_value["notes"][0].startswith("A save did not finish; ./yojo.yaml may have")
+
+
 def test_held_agent_install_is_reported_before_setup_finishes(tmp_path: Path) -> None:
     world = World(tmp_path)
     app = _ready(world)
@@ -1134,6 +1328,74 @@ def test_failed_fields_have_a_keyboard_retry(tmp_path: Path) -> None:
         assert app.query_one("#step-4", setup.RulesStep).fields
 
     world.drive(scenario, app)
+
+
+def test_malformed_jira_fields_from_the_server_recover_with_keyboard_retry(
+    tmp_path: Path,
+) -> None:
+    server = add_routes(FakeServer())
+    route = ("GET", jira_path("/rest/api/2/field"))
+    good = server.routes[route]
+    server.routes[route] = []
+    server.add(*route, [{"id": "customfield_10001", "name": ""}])
+    server.routes[route] += good
+    world = World(tmp_path, server)
+    app = _ready(world)
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        for _ in range(3):
+            await pilot.press("ctrl+n")
+            await settle(pilot)
+        assert app.step == 4
+        rules = app.query_one("#step-4", setup.RulesStep)
+        assert not rules.fields
+        assert app.query_one("#retry-fields", Button).display
+        app.query_one("#retry-fields", Button).focus()
+        await pilot.press("enter")
+        await settle(pilot)
+        assert not app.query_one("#retry-fields", Button).display
+        assert any(f.name == "Story Points" for f in rules.fields)
+
+    world.drive(scenario, app)
+    assert world.server.paths("GET").count(jira_path("/rest/api/2/field")) == 2
+
+
+def test_try_reads_the_saved_nondefault_file_and_finish_checks_it_again(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+    saved = tmp_path / "team" / "custom.yaml"
+    run_read = app.services.run_read
+    argvs: list[list[str]] = []
+
+    def recorded(argv: list[str]) -> Any:
+        argvs.append(argv)
+        return run_read(argv)
+
+    app.services.run_read = recorded  # type: ignore[method-assign]
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await _to_review(pilot)
+        app.query_one("#output", Input).value = "team/custom.yaml"
+        await press_button(pilot, "#preview")
+        await press_button(pilot, "#save")
+        assert app.draft.saved == (str(saved), "created")
+        await next_step(pilot)
+        await next_step(pilot)
+        assert app.step == 7
+        app.query_one("#run-try", Button).focus()
+        await pilot.press("enter")
+        await settle(pilot)
+        assert argvs and argvs[-1][-2:] == ["--config", str(saved)]
+        assert app.draft.try_revision == app.draft.saved_revision
+        saved.write_text(saved.read_text() + "# edited elsewhere\n")
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+        assert app.is_running
+        assert "Save the current yojo.yaml before finishing." in text(pilot, "#nav-hint")
+
+    world.drive(scenario, app)
+    assert not (tmp_path / "yojo.yaml").exists()
+    assert app.return_value is None
 
 
 def test_keyboard_finish_waits_for_saved_config_and_successful_try(tmp_path: Path) -> None:

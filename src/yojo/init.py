@@ -529,8 +529,21 @@ def publish_reviewed(
     else:
         files.publish(dest, data, current)
         action = "replaced"
-    parse_config_file(dest)
+    _read_back(dest, action)
     return action
+
+
+def _read_back(dest: Path, action: str) -> None:
+    """A failure here comes after the write, so it must not read as "nothing was written"."""
+    try:
+        parse_config_file(dest)
+    except YojoError as exc:
+        raise YojoError(
+            exc.code,
+            f"{dest} was {action}, but reading it back failed: {exc.message}",
+            exc.fix,
+            {**exc.details, "path": str(dest), "action": action},
+        ) from None
 
 
 def draft(
@@ -546,7 +559,7 @@ def draft(
     existing = candidate.existing_sha256
     action = _save(request, dest, current, data) if request.save else "preview"
     if action in ("created", "replaced"):
-        parse_config_file(dest)
+        _read_back(dest, action)
     notes = []
     if action == "preview":
         notes.append("Nothing was written. Review the YAML, then run the next command to save it.")

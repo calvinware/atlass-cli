@@ -69,6 +69,8 @@ def test_terminal_uses_color_unless_no_color(harness: Harness) -> None:
 
 
 def test_bare_yojo_on_a_terminal_shows_how_to_start(harness: Harness) -> None:
+    # With no yojo.yaml this would be setup's JSON refusal: stdin here is not a terminal.
+    harness.write_config()
     tty = harness.run_tty(environ={"NO_COLOR": "1"})
     assert tty.code == 2
     assert tty.stdout.startswith("Error: ")

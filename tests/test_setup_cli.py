@@ -66,6 +66,8 @@ def run(
         (["setup", "--json"], True, True, {}),
         (["setup"], True, False, {}),
         (["setup"], True, True, {"TERM": "dumb"}),
+        ([], True, False, {}),
+        ([], True, True, {"TERM": "dumb"}),
     ],
 )
 def test_setup_without_a_usable_terminal_is_one_usage_envelope(
@@ -201,9 +203,10 @@ def test_piped_setup_prints_one_json_line_and_never_imports_textual(tmp_path: Pa
 
 
 @pytest.mark.skipif(os.name == "nt", reason="needs a POSIX pseudo-terminal")
+@pytest.mark.parametrize("argv", [["setup"], []], ids=["setup", "bare"])
 @pytest.mark.parametrize(("stdin_closed", "term"), [(True, "xterm-256color"), (False, "dumb")])
 def test_unusable_terminal_prints_one_json_line_and_never_imports_textual(
-    tmp_path: Path, stdin_closed: bool, term: str
+    tmp_path: Path, stdin_closed: bool, term: str, argv: list[str]
 ) -> None:
     """stdout is a terminal, but stdin is not one or TERM=dumb: the app cannot run there."""
     pty = pytest.importorskip("pty")
@@ -212,7 +215,7 @@ def test_unusable_terminal_prints_one_json_line_and_never_imports_textual(
     script = (
         "import sys\n"
         "from yojo.cli import main\n"
-        "code = main(['setup'])\n"
+        f"code = main({argv!r})\n"
         "sys.stderr.write('textual-loaded' if 'textual' in sys.modules else 'textual-absent')\n"
         "raise SystemExit(code)\n"
     )

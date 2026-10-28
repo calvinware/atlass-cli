@@ -222,6 +222,7 @@ class Draft:
     saved: tuple[str, str] | None = None
     saved_data: bytes | None = None
     saved_revision: int | None = None
+    save_unknown: str | None = None
     try_revision: int | None = None
     agent_files: list[dict[str, Any]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -656,6 +657,9 @@ class ConnectStep(StepView):
                 self.draft.forget_connection(service)
                 self.setup.discard_discovery(service)
                 self.say(f"probe-{service}", "")
+                # A cleared service is skipped: drop it now so Next cannot carry its old address.
+                if not event.value.strip() and self.draft.urls.pop(service, None) is not None:
+                    self.draft.touch()
         elif (
             event.input.id == "ca-bundle" and (event.value.strip() or None) != self.draft.ca_bundle
         ):
@@ -752,6 +756,8 @@ class LoginStep(StepView):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.inflight: set[str] = set()
+        # The newest lookup or token check per service; an older one's result is dropped.
+        self.attempts: dict[str, object] = {}
 
     def compose(self) -> ComposeResult:
         yield self.lead(
@@ -798,11 +804,16 @@ class LoginStep(StepView):
     def _look_for_saved(self, service: str) -> None:
         url, ca = self.draft.urls[service], self.draft.ca_bundle
         snapshot = Draft(urls={service: url}, ca_bundle=ca)
+        attempt = self.attempts[service] = object()
         self.say(f"who-{service}", "Looking for a saved login...", "busy")
         self.setup.background(
             f"login-{service}",
             lambda: self.setup.services.stored_login(snapshot, service),
-            lambda who, error: self._stored(service, url, ca, who, error),
+            lambda who, error: (
+                self._stored(service, url, ca, who, error)
+                if self.attempts.get(service) is attempt
+                else None
+            ),
         )
 
     def _stored(
@@ -848,6 +859,7 @@ class LoginStep(StepView):
             return
         url, ca = self.draft.urls[service], self.draft.ca_bundle
         snapshot = Draft(urls={service: url}, ca_bundle=ca)
+        self.attempts[service] = object()
         self.inflight.add(service)
         self.query_one(f"#login-button-{service}", Button).disabled = True
         self.say(f"who-{service}", f"Checking the token with {LABELS[service]}...", "busy")
@@ -1023,21 +1035,44 @@ class ChooseStep(StepView):
             "repos",
             lambda: self.setup.services.repos(snapshot, start),
             lambda page, error: (
-                self._repos(page, error)
+                self._repos(start, page, error)
                 if request is self.repo_request and key == self.draft.connection("bitbucket")
                 else None
             ),
         )
 
-    def _repos(self, page: dict[str, Any] | None, error: YojoError | None) -> None:
+    def _repos(self, start: int, page: dict[str, Any] | None, error: YojoError | None) -> None:
+        if page is not None:
+            names = [r["repo"] for r in page["repos"]]
+            if len(set(names)) != len(names) or {r["repo"] for r in self.all_repos} & set(names):
+                page = None
+                error = YojoError(
+                    "response_invalid",
+                    "Bitbucket repeated repositories while paging.",
+                    "Retry loading repositories.",
+                )
+        more = self.query_one("#more-repos", Button)
         if page is None:
             assert error is not None
-            self.loaded_for = None
-            self.say("repo-status", f"Could not load repositories. {_error_text(error)}", "error")
+            # The failed page can be asked for again; rows already loaded stay as they are.
+            self.next_repo = start
+            more.label, more.disabled = "Retry", False
+            if not self.all_repos:
+                self.loaded_for = None
+            failed = (
+                f"{len(self.all_repos)} loaded; could not load more repositories."
+                if self.all_repos
+                else "Could not load repositories."
+            )
+            self.say(
+                "repo-status",
+                f"{self._chosen(self.draft.repos)} {failed} {_error_text(error)} Press Retry.",
+                "error",
+            )
             return
         self.all_repos += page["repos"]
         self.next_repo = page["next_start"]
-        self.query_one("#more-repos", Button).disabled = self.next_repo is None
+        more.label, more.disabled = "Load more", self.next_repo is None
         self._filter_repos()
 
     def _filter_repos(self) -> None:
@@ -1550,16 +1585,29 @@ class ReviewStep(StepView):
     def _saved(
         self, candidate: init.Candidate, revision: int, action: str | None, error: YojoError | None
     ) -> None:
+        where = show_path(candidate.dest, self.setup.services.cwd)
+        problem = None
         if action is None:
             assert error is not None
-            self.candidate, self.stale = None, True
-            self.say(
-                "review-status",
-                f"Not saved; nothing was written. {_error_text(error)}\n"
-                "Press Refresh preview to review the current state.",
-                "error",
-            )
-            return
+            published = _published(candidate, error)
+            if published is not True:
+                self.candidate, self.stale = None, True
+                self.draft.save_unknown = None if published is False else str(candidate.dest)
+                self.say(
+                    "review-status",
+                    f"Not saved; nothing was written. {_error_text(error)}\n"
+                    "Press Refresh preview to review the current state."
+                    if published is False
+                    else f"Save did not finish, and {where} now matches neither the reviewed "
+                    f"preview nor the file it replaces. {_error_text(error)}\n"
+                    f"Open {where} to check it, then press Refresh preview before saving again.",
+                    "error",
+                )
+                return
+            # The reviewed bytes are in place; only a step after publishing failed.
+            action = "created" if candidate.current is None else "replaced"
+            problem = error
+        self.draft.save_unknown = None
         self.draft.saved = (str(candidate.dest), action)
         self.draft.saved_data = candidate.data
         self.draft.saved_revision = revision
@@ -1568,9 +1616,16 @@ class ReviewStep(StepView):
             self._invalidate("Saved the earlier preview. Your choices changed; Refresh preview.")
         elif self.setup.step == self.number:
             self.setup.query_one("#next", Button).label = "Next"
-        where = show_path(candidate.dest, self.setup.services.cwd)
         verb = {"created": "Created", "replaced": "Saved", "unchanged": "Already up to date:"}
-        if revision == self.draft.revision:
+        if revision == self.draft.revision and problem is not None:
+            self.say(
+                "review-status",
+                f"{verb[action]} {where}: it holds exactly the reviewed preview, but a check "
+                f"after writing failed. {_error_text(problem)}\nNext, connect your agent; "
+                "the last step reads this file.",
+                "warn",
+            )
+        elif revision == self.draft.revision:
             self.say("review-status", f"{verb[action]} {where}. Next, connect your agent.", "ok")
         self.setup.notify(f"{verb[action]} {where}", title="yojo.yaml", markup=False)
 
@@ -1578,6 +1633,24 @@ class ReviewStep(StepView):
         if not self.setup.saved_snapshot_current():
             return "Review the current preview and press Save before continuing."
         return None
+
+
+# Raised only before anything is written: another writer or live data changed after review.
+REFUSED_BEFORE_WRITING = frozenset({"file_conflict", "conflict"})
+
+
+def _published(candidate: init.Candidate, error: YojoError) -> bool | None:
+    """After a failed save: True if the reviewed bytes are in place, False if setup wrote
+    nothing, None if that cannot be confirmed."""
+    if error.code in REFUSED_BEFORE_WRITING:
+        return False
+    try:
+        now = files.read_current(candidate.dest)
+    except (YojoError, OSError):
+        return None
+    if now == candidate.data and candidate.current != candidate.data:
+        return True
+    return False if now == candidate.current else None
 
 
 class AgentStep(StepView):
@@ -1973,11 +2046,19 @@ class SetupApp(App[dict[str, Any]]):
             self.finish("cancelled")
 
     def leave_message(self) -> str:
+        unknown = self.draft.save_unknown
         lines = [
             f"yojo.yaml was saved ({self.draft.saved[1]})."
             if self.draft.saved
+            else "yojo.yaml was not confirmed saved."
+            if unknown
             else "yojo.yaml was not changed."
         ]
+        if unknown:
+            lines.append(
+                f"A save did not finish; {show_path(Path(unknown), self.services.cwd)} may have "
+                "changed. Open it to check, then run `yojo setup` to review and save again."
+            )
         if self.draft.saved and not self.saved_snapshot_current():
             lines.append("Later choices were not saved. Run `yojo setup` to review them.")
         if self.draft.stored:

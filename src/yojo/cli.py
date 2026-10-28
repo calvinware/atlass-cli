@@ -1313,6 +1313,14 @@ def _first_run(rt: Runtime) -> bool:
     return load_config(None, rt.cwd) is None
 
 
+def _quiet_first_run(rt: Runtime) -> bool:
+    """Like ``_first_run``, but a legacy or invalid file is left for the command to report."""
+    try:
+        return _first_run(rt)
+    except YojoError:
+        return False
+
+
 def run(argv: list[str], rt: Runtime) -> Any:
     if any(token in ("-h", "--help") for token in argv):
         return _help(argv)
@@ -1424,6 +1432,9 @@ def main(argv: list[str] | None = None, runtime: Runtime | None = None) -> int:
     except (OSError, ValueError):
         is_tty = False
     rt.json_mode = "--json" in options or not is_tty
+    if not tokens and is_tty and not interactive_terminal(rt) and _quiet_first_run(rt):
+        # Bare yojo on a first run means setup, so this terminal gets setup's refusal.
+        tokens = options = ["setup"]
     if (
         command_path(options) == "setup"
         and not any(token in ("-h", "--help") for token in options)
