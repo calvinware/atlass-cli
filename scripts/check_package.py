@@ -1,7 +1,9 @@
-"""Check the built wheel and sdist: core metadata and the complete MIT license.
+"""Check the built wheel and sdist: identity, core metadata, and the complete MIT license.
 
-The source LICENSE must contain the copyright line, permission grant, condition, and disclaimer.
-Each archive's LICENSE must be byte-identical to that validated source file.
+Both archives must be the `yojo` distribution at the pyproject.toml version, and the wheel must
+install only the `yojo` package and the `yojo` command (no leftover `atlass_cli` module or `atl`
+entry point). The source LICENSE must contain the copyright line, permission grant, condition,
+and disclaimer. Each archive's LICENSE must be byte-identical to that validated source file.
 
     python scripts/check_package.py dist   # exit 1 and list every problem on failure
 """
@@ -11,11 +13,17 @@ from __future__ import annotations
 import argparse
 import sys
 import tarfile
+import tomllib
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LICENSE_PATH = ROOT / "LICENSE"
+PYPROJECT_PATH = ROOT / "pyproject.toml"
+DIST_NAME = "yojo"
+ENTRY_POINT = "yojo = yojo.cli:main"
+LEGACY_PACKAGE = "atlass_cli"
+LEGACY_COMMAND = "atl"
 
 LICENSE_CLAUSES = {
     "title": "MIT License",
@@ -50,6 +58,11 @@ EXPECTED_METADATA = (
 )
 
 
+def project_version(pyproject: Path = PYPROJECT_PATH) -> str:
+    with pyproject.open("rb") as f:
+        return str(tomllib.load(f)["project"]["version"])
+
+
 def license_problems(text: str) -> list[str]:
     normalized = " ".join(text.split())
     return [
@@ -59,9 +72,10 @@ def license_problems(text: str) -> list[str]:
     ]
 
 
-def metadata_problems(label: str, metadata: str) -> list[str]:
+def metadata_problems(label: str, metadata: str, version: str) -> list[str]:
     lines = metadata.split("\n\n", 1)[0].splitlines()
-    missing = [field for field in EXPECTED_METADATA if field not in lines]
+    expected = (f"Name: {DIST_NAME}", f"Version: {version}", *EXPECTED_METADATA)
+    missing = [field for field in expected if field not in lines]
     problems = [f"{label} metadata is missing {field!r}" for field in missing]
     if any(line.startswith("License: ") for line in lines):
         problems.append(f"{label} metadata has a legacy License field")
@@ -74,12 +88,42 @@ def _one(label: str, names: list[str]) -> str:
     return names[0]
 
 
-def _read_wheel(path: Path) -> tuple[str, bytes]:
+def _read_wheel(path: Path) -> tuple[str, bytes, list[str], str]:
     with zipfile.ZipFile(path) as zf:
         names = zf.namelist()
         meta = _one("wheel METADATA", [n for n in names if n.endswith(".dist-info/METADATA")])
         lic = _one("wheel LICENSE", [n for n in names if n.endswith(".dist-info/licenses/LICENSE")])
-        return zf.read(meta).decode("utf-8"), zf.read(lic)
+        entry = _one(
+            "wheel entry_points.txt",
+            [n for n in names if n.endswith(".dist-info/entry_points.txt")],
+        )
+        return (
+            zf.read(meta).decode("utf-8"),
+            zf.read(lic),
+            names,
+            zf.read(entry).decode("utf-8"),
+        )
+
+
+def wheel_content_problems(names: list[str], entry_points: str) -> list[str]:
+    problems = []
+    if not any(n.startswith(f"{DIST_NAME}/") for n in names):
+        problems.append(f"wheel has no {DIST_NAME}/ package")
+    if any(n.split("/", 1)[0] == LEGACY_PACKAGE for n in names):
+        problems.append(f"wheel still contains the {LEGACY_PACKAGE} package")
+    scripts: list[str] = []
+    section = ""
+    for raw in entry_points.splitlines():
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            section = line
+        elif line and section == "[console_scripts]":
+            scripts.append(" ".join(line.replace("=", " = ", 1).split()))
+    if ENTRY_POINT not in scripts:
+        problems.append(f"wheel console_scripts is missing {ENTRY_POINT!r}")
+    if any(s.split(" = ", 1)[0] == LEGACY_COMMAND for s in scripts):
+        problems.append(f"wheel still installs the {LEGACY_COMMAND!r} command")
+    return problems
 
 
 def _read_sdist(path: Path) -> tuple[str, bytes]:
@@ -93,17 +137,22 @@ def _read_sdist(path: Path) -> tuple[str, bytes]:
         return meta_file.read().decode("utf-8"), lic_file.read()
 
 
-def check(dist: Path, license_path: Path = LICENSE_PATH) -> list[str]:
+def check(
+    dist: Path, license_path: Path = LICENSE_PATH, pyproject: Path = PYPROJECT_PATH
+) -> list[str]:
     source = license_path.read_bytes()
     problems = license_problems(source.decode("utf-8"))
+    version = project_version(pyproject)
     try:
         wheel = _one("wheel", sorted(str(p) for p in dist.glob("*.whl")))
         sdist = _one("sdist", sorted(str(p) for p in dist.glob("*.tar.gz")))
-        archives = (("wheel", _read_wheel(Path(wheel))), ("sdist", _read_sdist(Path(sdist))))
+        wheel_meta, wheel_license, names, entry_points = _read_wheel(Path(wheel))
+        archives = (("wheel", (wheel_meta, wheel_license)), ("sdist", _read_sdist(Path(sdist))))
     except (ValueError, KeyError, OSError, zipfile.BadZipFile, tarfile.TarError) as exc:
         return [*problems, str(exc)]
+    problems += wheel_content_problems(names, entry_points)
     for label, (metadata, license_bytes) in archives:
-        problems += metadata_problems(label, metadata)
+        problems += metadata_problems(label, metadata, version)
         if license_bytes != source:
             problems.append(f"{label} LICENSE differs from the source LICENSE")
     return problems
@@ -117,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     if problems:
         sys.stderr.write("".join(f"::error::{p}\n" for p in problems))
         return 1
-    sys.stdout.write("package metadata and license ok\n")
+    sys.stdout.write("package identity, metadata, and license ok\n")
     return 0
 
 

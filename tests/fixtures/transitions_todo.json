@@ -17,7 +17,7 @@
             "custom": "com.atlassian.jira.plugin.system.customfieldtypes:select",
             "customId": 10300
           },
-          "name": "Work Started",
+          "name": "Review Flag",
           "hasDefaultValue": false,
           "operations": [
             "set"

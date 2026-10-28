@@ -1,0 +1,7 @@
+{
+  "self": "https://jira.example.test/jira/rest/api/2/project/10000",
+  "id": "10000",
+  "key": "PROJ",
+  "name": "Example Project",
+  "projectTypeKey": "software"
+}

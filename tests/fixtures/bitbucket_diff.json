@@ -1,0 +1,88 @@
+{
+  "fromHash": "0a943a29376f2336b78312d99e65da17048951db",
+  "toHash": "8d51122def5632836d1cb1026e879069e10a1e13",
+  "contextLines": 3,
+  "whitespace": "SHOW",
+  "diffs": [
+    {
+      "source": {
+        "components": ["src", "app.py"],
+        "parent": "src",
+        "name": "app.py",
+        "extension": "py",
+        "toString": "src/app.py"
+      },
+      "destination": {
+        "components": ["src", "app.py"],
+        "parent": "src",
+        "name": "app.py",
+        "extension": "py",
+        "toString": "src/app.py"
+      },
+      "hunks": [
+        {
+          "sourceLine": 10,
+          "sourceSpan": 2,
+          "destinationLine": 10,
+          "destinationSpan": 3,
+          "segments": [
+            {
+              "type": "CONTEXT",
+              "lines": [
+                {"source": 10, "destination": 10, "line": "def login(user):", "truncated": false}
+              ],
+              "truncated": false
+            },
+            {
+              "type": "REMOVED",
+              "lines": [
+                {"source": 11, "destination": 11, "line": "    return check(user)", "truncated": false}
+              ],
+              "truncated": false
+            },
+            {
+              "type": "ADDED",
+              "lines": [
+                {"source": 11, "destination": 11, "line": "    if not user:", "truncated": false},
+                {"source": 11, "destination": 12, "line": "        return False", "truncated": false}
+              ],
+              "truncated": false
+            }
+          ],
+          "truncated": false
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "source": null,
+      "destination": {
+        "components": ["docs", "login.md"],
+        "parent": "docs",
+        "name": "login.md",
+        "extension": "md",
+        "toString": "docs/login.md"
+      },
+      "hunks": [
+        {
+          "sourceLine": 0,
+          "sourceSpan": 0,
+          "destinationLine": 1,
+          "destinationSpan": 1,
+          "segments": [
+            {
+              "type": "ADDED",
+              "lines": [
+                {"source": 0, "destination": 1, "line": "# Login", "truncated": false}
+              ],
+              "truncated": false
+            }
+          ],
+          "truncated": false
+        }
+      ],
+      "truncated": false
+    }
+  ],
+  "truncated": false
+}

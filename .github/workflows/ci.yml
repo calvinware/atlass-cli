@@ -60,10 +60,23 @@ jobs:
           python -m venv smoke
           if [ -f smoke/Scripts/python.exe ]; then BIN=smoke/Scripts; else BIN=smoke/bin; fi
           "$BIN/python" -m pip install dist/*.whl
-          "$BIN/atl" commands > commands.json
-          "$BIN/atl" schema 'jira story create' > schema.json
-          "$BIN/python" -c "import json; from atlass_cli.contracts import COMMANDS; d=json.load(open('commands.json')); assert d['ok'] and [c['path'] for c in d['data']['commands']] == [c.path for c in COMMANDS]"
-          python -c "import json; d=json.load(open('schema.json')); assert d['ok'] and d['data']['command'] == 'jira story create'"
+          "$BIN/python" -c "import yojo"
+          "$BIN/yojo" --json commands > commands.json
+          "$BIN/yojo" --json schema 'jira issue create' > schema.json
+          "$BIN/python" -c "import json; from yojo.contracts import COMMANDS; d=json.load(open('commands.json')); assert d['ok'] and [c['path'] for c in d['data']['commands']] == [c.path for c in COMMANDS]"
+          python -c "import json; d=json.load(open('schema.json')); assert d['ok'] and d['data']['command'] == 'jira issue create'"
+          "$BIN/python" -c "import yojo, textual; from importlib.resources import files; assert files('yojo').joinpath('setup.tcss').is_file()"
+          # Off a terminal, setup starts nothing: one usage_error envelope and exit 2.
+          check_setup() {
+            set +e
+            "$BIN/yojo" "$@" < /dev/null > setup.json
+            code=$?
+            set -e
+            test "$code" -eq 2
+            python -c "import json; d=json.load(open('setup.json')); assert d['ok'] is False and d['error']['code'] == 'usage_error' and d['error']['details']['steps']"
+          }
+          check_setup --json setup
+          check_setup setup
 
   docs:
     name: docs (reference, site, links, py${{ matrix.python }})
@@ -89,7 +102,7 @@ jobs:
         run: python scripts/generate_command_reference.py --check
       - name: Docs tests, including the built-site checks
         env:
-          ATL_REQUIRE_SITE_BUILD: "1"
+          YOJO_REQUIRE_SITE_BUILD: "1"
         run: python -m pytest -q tests/test_docs.py
       - name: Build site (strict)
         env:
@@ -111,6 +124,25 @@ jobs:
           fail: true
           failIfEmpty: true
           output: ${{ runner.temp }}/lychee/out.md
+
+  captures:
+    name: setup captures (pinned Textual)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      # The SVGs are byte-for-byte renderer output; pin the renderer they were written with.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip setuptools
+          python -m pip install -e ".[dev]" "textual==8.2.8" "rich==15.0.0"
+      - name: Committed setup captures match the app
+        run: python scripts/capture_setup.py --check
 
   workflows:
     name: workflows (actionlint, release invariants)

@@ -1,0 +1,274 @@
+/* yojo setup. Colors come from the active theme (light or dark); meaning never depends on color
+   alone, so the app stays usable with NO_COLOR, where Textual renders it in monochrome. */
+
+Screen {
+    background: $background;
+}
+
+Screen, VerticalScroll, DataTable, SelectionList, ListView, #diff-panel {
+    scrollbar-size-vertical: 1;
+    scrollbar-size-horizontal: 1;
+    scrollbar-color: $primary 35%;
+    scrollbar-background: $surface;
+}
+
+#top {
+    height: auto;
+    padding: 0 1;
+    background: $boost;
+}
+
+#progress {
+    height: auto;
+    align: left middle;
+}
+
+.crumb {
+    width: auto;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+.crumb.-done {
+    color: $primary;
+}
+
+.crumb.-current {
+    text-style: bold;
+    color: $background;
+    background: $primary;
+    padding: 0 1;
+}
+
+#step-title {
+    text-style: bold;
+    width: auto;
+    margin-left: 1;
+    color: $primary;
+}
+
+.-narrow .crumb {
+    padding: 0;
+}
+
+#steps {
+    height: 1fr;
+}
+
+#steps > VerticalScroll {
+    padding: 1 2;
+}
+
+.lead {
+    margin-bottom: 1;
+}
+
+.hint {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+.row {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.row Input {
+    width: 1fr;
+}
+
+.row Select {
+    width: 1fr;
+}
+
+.row Button {
+    margin-right: 2;
+}
+
+#check {
+    padding: 0 1;
+}
+
+.field-label {
+    width: 12;
+    padding: 1 1 0 0;
+    text-style: bold;
+}
+
+.-narrow .field-label {
+    width: 100%;
+    padding: 0;
+}
+
+.-narrow .row {
+    layout: vertical;
+    margin-bottom: 0;
+}
+
+.-narrow #steps > VerticalScroll {
+    padding: 0 1;
+}
+
+.-narrow .status {
+    margin-bottom: 0;
+}
+
+.-narrow TabPane {
+    padding: 0 1;
+}
+
+.-narrow #diff-panel {
+    height: 6;
+}
+
+.-narrow #save {
+    display: none;
+}
+
+.card {
+    height: auto;
+    border: round $primary 50%;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+.card-title {
+    text-style: bold;
+}
+
+.status {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.status.-ok {
+    color: $success;
+}
+
+.status.-warn {
+    color: $warning;
+}
+
+.status.-error {
+    color: $error;
+    text-style: bold;
+}
+
+.status.-busy {
+    color: $text-muted;
+    text-style: italic;
+}
+
+.command {
+    background: $boost;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+SelectionList {
+    height: auto;
+    max-height: 14;
+}
+
+/* A checked box differs by weight as well as color. */
+SelectionList > .selection-list--button {
+    text-style: dim;
+}
+
+SelectionList > .selection-list--button-selected,
+SelectionList > .selection-list--button-selected-highlighted {
+    text-style: bold;
+}
+
+ListView#rule-list {
+    height: auto;
+    max-height: 12;
+    margin-bottom: 1;
+}
+
+#rules-editor {
+    height: auto;
+}
+
+TabbedContent {
+    height: auto;
+}
+
+TabPane {
+    padding: 1 2;
+}
+
+#diff, #yaml {
+    height: auto;
+}
+
+#diff-panel {
+    height: 12;
+    max-height: 14;
+    border: round $primary;
+    background: $surface;
+    padding: 0 1;
+}
+
+#save-note {
+    background: $boost;
+    color: $primary;
+    text-style: bold;
+    padding: 0 1;
+    dock: bottom;
+}
+
+#retry-fields {
+    display: none;
+}
+
+DataTable {
+    height: auto;
+    max-height: 9;
+    margin-bottom: 1;
+}
+
+/* Focus must be visible without color. */
+Button:focus {
+    text-style: bold reverse;
+}
+
+#run-try:focus {
+    text-style: bold;
+}
+
+#nav {
+    height: auto;
+    padding: 0 1;
+    background: $boost;
+    align: right middle;
+}
+
+#nav Button {
+    width: auto;
+    min-width: 10;
+    margin-left: 1;
+}
+
+#nav-hint {
+    width: 1fr;
+    padding: 1 2 0 2;
+    color: $warning;
+}
+
+LeaveScreen {
+    align: center middle;
+}
+
+#leave {
+    width: 70;
+    max-width: 100%;
+    height: auto;
+    border: thick $warning;
+    background: $surface;
+    padding: 1 2;
+}
+
+#leave Static {
+    margin-bottom: 1;
+}

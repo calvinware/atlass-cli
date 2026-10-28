@@ -8,11 +8,6 @@ from typing import Any
 import httpx
 import pytest
 
-from atlass_cli.auth import Credential
-from atlass_cli.confluence import update
-from atlass_cli.contracts import AtlError
-from atlass_cli.features import jql_quote
-from atlass_cli.transport import ServiceClient
 from tests.conftest import (
     CONFLUENCE,
     CONFLUENCE_TOKEN,
@@ -25,6 +20,10 @@ from tests.conftest import (
     run_argv,
     run_in_posix_shell,
 )
+from yojo.auth import Credential
+from yojo.confluence import update
+from yojo.contracts import YojoError
+from yojo.transport import ServiceClient, jql_quote
 
 PAGE = confluence_path("/rest/api/content/123456")
 CONTENT = confluence_path("/rest/api/content")
@@ -128,7 +127,13 @@ def test_create_sends_storage(harness: Harness) -> None:
     )
     doc = {"space_key": "ENG", "title": "T", "body_storage": "<p>x</p>", "parent_id": "1000"}
     result = run_input(harness, "confluence", "page", "create", doc=doc)
-    assert result.data == {"id": "9", "title": "T", "space_key": "ENG", "version": 1}
+    assert result.data == {
+        "id": "9",
+        "title": "T",
+        "space_key": "ENG",
+        "version": 1,
+        "url": "https://confluence.example.test/confluence/pages/viewpage.action?pageId=9",
+    }
     assert json.loads(harness.server.requests[0].content) == {
         "type": "page",
         "title": "T",
@@ -174,7 +179,7 @@ def test_create_unconfirmed_success_is_outcome_unknown(harness: Harness, body: A
     assert result.error["code"] == "outcome_unknown"
     assert "data" not in result.out
     assert (
-        """atl confluence page search --cql 'space = "ENG" AND type = page AND """
+        """yojo confluence page search --cql 'space = "ENG" AND type = page AND """
         """(title = "T")'""" in (result.error["fix"])
     )
     assert "recovery_argv" in result.error["details"]
@@ -234,7 +239,13 @@ def test_update_increments_version_and_keeps_body(harness: Harness) -> None:
         "123456",
         doc={"expected_version": 7, "title": "New"},
     )
-    assert result.data == {"id": "123456", "title": "New", "version": 8, "previous_version": 7}
+    assert result.data == {
+        "id": "123456",
+        "title": "New",
+        "version": 8,
+        "previous_version": 7,
+        "url": "https://confluence.example.test/confluence/pages/viewpage.action?pageId=123456",
+    }
     (put,) = harness.server.writes()
     body = json.loads(put.content)
     assert body["version"] == {"number": 8}
@@ -306,7 +317,7 @@ def test_update_race_409_is_version_conflict(harness: Harness) -> None:
     )
     assert result.code == 5
     assert result.error["code"] == "version_conflict"
-    assert "atl confluence page read 123456" in result.error["fix"]
+    assert "yojo confluence page read 123456 --full" in result.error["fix"]
     assert len(harness.server.writes()) == 1
 
 
@@ -320,11 +331,38 @@ def test_update_requires_title_or_body(harness: Harness) -> None:
 
 
 def test_confluence_not_configured(harness: Harness) -> None:
-    harness.write_config(
-        "version: 1\njira:\n  base_url: https://jira.example.test\n  projects: []\n"
-    )
+    harness.write_config("version: 1\njira:\n  base_url: https://jira.example.test\n")
     result = harness.run("confluence", "page", "read", "1")
-    assert result.error["code"] == "config_invalid"
+    assert result.code == 2
+    assert result.error["code"] == "service_not_configured"
+    assert "--base-url" in result.error["fix"]
+    assert harness.server.requests == []
+
+
+def test_read_without_config_uses_base_url_and_matching_credential(harness: Harness) -> None:
+    harness.store("confluence", CONFLUENCE_TOKEN)
+    harness.server.add("GET", PAGE, fixture("confluence_page.json"))
+    result = harness.run("confluence", "page", "read", "123456", "--base-url", CONFLUENCE + "/")
+    assert result.code == 0
+    assert result.data["url"] == f"{CONFLUENCE}/pages/viewpage.action?pageId=123456"
+    assert harness.server.requests[0].headers["authorization"] == f"Bearer {CONFLUENCE_TOKEN}"
+
+
+def test_read_trims_long_body_and_says_how_to_get_the_rest(harness: Harness) -> None:
+    setup(harness)
+    page = fixture("confluence_page.json")
+    page["body"]["storage"]["value"] = "<p>" + "x" * 5000 + "</p>"
+    harness.server.add("GET", PAGE, page)
+    result = harness.run("confluence", "page", "read", "123456")
+    data = result.data
+    assert data["truncated"] is True
+    assert data["body_chars"] == 5007
+    assert len(data["body_storage"]) == 2000
+    assert data["more"] == "yojo confluence page read 123456 --full"
+    assert result.nbytes <= 4096
+    full = harness.run("confluence", "page", "read", "123456", "--full").data
+    assert full["truncated"] is False and full["more"] is None
+    assert len(full["body_storage"]) == 5007
 
 
 def _page_with(damage: str) -> dict[str, Any]:
@@ -556,7 +594,7 @@ def test_update_incomplete_success_is_outcome_unknown(harness: Harness, body: An
     assert result.error["code"] == "outcome_unknown"
     assert "data" not in result.out
     if body != b"not json":
-        assert "atl confluence page read 123456" in result.error["fix"]
+        assert "yojo confluence page read 123456 --full" in result.error["fix"]
         assert "version 8" in result.error["fix"]
     assert len(harness.server.writes()) == 1
 
@@ -571,7 +609,7 @@ def test_update_incomplete_success_marks_write_outcome_unknown() -> None:
         Credential(auth="pat", secret=CONFLUENCE_TOKEN),
         transport=server.transport(),
     )
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         update(client, "123456", {"expected_version": 7, "title": "New"})
     assert info.value.code == "outcome_unknown"
     assert info.value.write_outcome == "unknown"
@@ -623,7 +661,13 @@ def test_create_accepts_canonical_space_key_case(harness: Harness) -> None:
     harness.server.add("POST", CONTENT, CREATED)
     doc = {"space_key": "eng", "title": "T", "body_storage": "<p>x</p>"}
     result = run_input(harness, "confluence", "page", "create", doc=doc)
-    assert result.data == {"id": "9", "title": "T", "space_key": "ENG", "version": 1}
+    assert result.data == {
+        "id": "9",
+        "title": "T",
+        "space_key": "ENG",
+        "version": 1,
+        "url": "https://confluence.example.test/confluence/pages/viewpage.action?pageId=9",
+    }
     assert json.loads(harness.server.requests[0].content)["space"] == {"key": "eng"}
 
 
@@ -687,8 +731,8 @@ def test_create_outcome_unknown_fix_searches_every_accepted_title(
     fix = result.error["fix"]
     exact_cql = f'space = "ENG" AND type = page AND ({exact})'
     broad_cql = 'space = "ENG" AND type = page ORDER BY created DESC'
-    search = ["atl", "confluence", "page", "search", "--cql"]
-    assert [shlex.split(c) for c in backticked(fix, "atl confluence page search")] == [
+    search = ["yojo", "confluence", "page", "search", "--cql"]
+    assert [shlex.split(c) for c in backticked(fix, "yojo confluence page search")] == [
         [*search, exact_cql],
         [*search, broad_cql],
     ]
@@ -697,7 +741,7 @@ def test_create_outcome_unknown_fix_searches_every_accepted_title(
         "broad_search": [*search, broad_cql],
     }
     assert "An empty exact-title search alone does not show the page was not created" in fix
-    assert "atl confluence page read ID" in fix
+    assert "yojo confluence page read ID --full" in fix
     assert "POSIX shells" in fix and "details.recovery_argv" in fix
     assert "does not retry writes" in fix
     assert len(harness.server.writes()) == 1
@@ -714,7 +758,7 @@ def test_create_outcome_unknown_commands_stay_literal_in_shells(
     argv = error["details"]["recovery_argv"]
     shell_dir = tmp_path / "shell"
     shell_dir.mkdir()
-    commands = backticked(error["fix"], "atl confluence page search")
+    commands = backticked(error["fix"], "yojo confluence page search")
     assert [run_in_posix_shell(c, shell_dir) for c in commands] == [
         argv["exact_search"],
         argv["broad_search"],
