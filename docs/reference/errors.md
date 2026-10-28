@@ -5,7 +5,7 @@
 `yojo` defines **34 error codes**. Every failure prints `{"ok": false, "error": {"code", "message", "fix", "details"}}` and exits with the code below. `error.fix` in the real output is specific to the failing call; follow it first. This page explains each code and the general fix.
 
 > [!IMPORTANT]
-> `yojo` never retries a write. A refusal (`requirements_unmet`) sent nothing and carries a corrected `details.retry`. After `outcome_unknown` (exit 6) or `partial_transition` (exit 7) there is no retry: inspect the issue or page before running anything again. See [Writes and retries](../commands.md#writes-and-retries).
+> `yojo` never retries a write. A refusal (`requirements_unmet`) sent nothing; when a corrected command line would help, it carries one in `details.retry`, otherwise `retry` is `null` and each check's `fix` says what to do. After `outcome_unknown` (exit 6) or `partial_transition` (exit 7) there is no retry: inspect the issue, page, or pull request before running anything again. See [Writes and retries](../commands.md#writes-and-retries).
 
 ## Exit codes
 
@@ -161,7 +161,7 @@
 
 **Exit 4.** The preflight inside a write command found one or more problems: a missing or unknown field, an ambiguous name, a disallowed value, a missing permission, or a failed team rule. Every problem is reported at once, and nothing was sent.
 
-**Fix:** Apply each failing check's `fix`, then run `details.retry` (fill in any `<placeholder>`). The retry is your own command with the corrections applied; it is omitted when a value came from `--input`.
+**Fix:** Apply each failing check's `fix`, then run `details.retry` when it is present (fill in any `<placeholder>`). The retry is your own command with the corrections applied. It is `null` when a value came from `--input` or when no rerun would help, such as a duplicate that already exists; then follow each check's `fix` only.
 
 **Details:** `details.nothing_sent` is `true`; `details.checks[]` lists the failing checks and `details.passed` counts the rest. `details.retry` is quoted for POSIX shells; `details.retry_argv` is the same command as an argument list.
 
@@ -169,9 +169,9 @@
 
 ### `config_drift`
 
-**Exit 4.** `yojo config check` found at least one difference between `yojo.yaml` and live Jira metadata.
+**Exit 4.** `yojo config check` found at least one difference between `yojo.yaml` and the live services: Jira metadata, or a `bitbucket.base_url` whose server does not identify itself as Bitbucket Data Center.
 
-**Fix:** Apply each `drift` check's fix, either by updating `yojo.yaml` (through team review) or by asking a Jira admin to change the screen or workflow, then re-run `yojo config check`. See [Troubleshooting](../troubleshooting.md).
+**Fix:** Apply each `drift` check's fix. For a Jira check, update `yojo.yaml` (through team review) or ask a Jira admin to change the screen or workflow. For `bitbucket:application`, set `bitbucket.base_url` to the Bitbucket application root including any context path. Then re-run `yojo config check`. See [Troubleshooting](../troubleshooting.md).
 
 **Details:** `details.checks[]` holds every check with `pass`, `drift`, or `unverified`; `details.summary` counts them.
 
@@ -299,7 +299,7 @@
 
 **Exit 6.** The process was interrupted (for example Ctrl+C) before it finished.
 
-**Fix:** If the command was a write, inspect the issue or page before running it again.
+**Fix:** If the command was a write, inspect the issue, page, or pull request before running it again.
 
 **Returned by:** every command.
 

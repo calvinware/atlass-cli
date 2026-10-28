@@ -103,9 +103,11 @@ yojo bitbucket pr create --repo PROJ/web --source feature/login --target main \
 
 This is one call. Before anything is sent, `yojo` checks the title, that the repository is visible
 to you, that both branches exist, that they differ, and that no open pull request already goes from
-that source to that target. If anything fails, it lists every problem, sends nothing, and gives
-`retry`, the corrected command, with a placeholder such as `<title>` only where you must supply
-text. A misspelled branch is suggested and used in `retry`:
+that source to that target. If anything fails, it lists every problem and sends nothing. When the
+problems can be fixed in the command line, it gives `retry`, the corrected command, with a
+placeholder such as `<title>` only where you must supply text. When an open pull request already
+exists, `retry` is `null`: use that pull request instead of running the command again. A misspelled
+branch is suggested and used in `retry`:
 
 Repository visibility confirms only that the token can read it. It does not establish that the
 token has permission for pull request actions; Bitbucket enforces that when it receives the POST.
@@ -141,9 +143,11 @@ yojo bitbucket pr comment 42 --repo PROJ/web --body 'Ready for review.'
 yojo bitbucket pr comment 42 --repo PROJ/web --body-file notes.txt
 ```
 
-The comment is plain text. `yojo` checks that the pull request exists and that it has no comment
-with exactly the same text, so running the same command again after the first one landed is
-refused. The check runs before posting, so two calls sent at the same time can both post; do not
+The comment is plain text. `yojo` checks that the pull request exists, that Bitbucket reports it
+as open, merged, or declined (comments are allowed in all three states, as in the Bitbucket UI),
+and that no comment or reply in its activity has exactly the same text, so running the same
+command again after the first one landed is refused. A pull request whose state is missing or
+unrecognized is refused as unverified, with nothing sent. The check runs before posting, so two calls sent at the same time can both post; do not
 send the same comment concurrently. A successful POST is read back through that pull request's
 comment endpoint before `yojo` reports success. If the read cannot confirm the comment, the
 result is `outcome_unknown` and needs inspection.

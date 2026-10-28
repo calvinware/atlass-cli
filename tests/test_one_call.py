@@ -156,7 +156,7 @@ def test_golden_open_pull_request(harness: Harness) -> None:
     harness.server.add("GET", repo, fixture("bitbucket_repo.json"))
     harness.server.add("GET", repo + "/branches", branches)
     harness.server.add(
-        "GET", repo + "/pull-requests", {"isLastPage": True, "start": 0, "values": []}
+        "GET", repo + "/pull-requests", {"size": 0, "isLastPage": True, "start": 0, "values": []}
     )
     harness.server.add("POST", repo + "/pull-requests", pr, status=201)
     result = harness.run(*example[1:], "--base-url", BITBUCKET)

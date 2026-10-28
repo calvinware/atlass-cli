@@ -70,12 +70,12 @@
     },
     "requirements_unmet": {
       "meaning": "The preflight inside a write command found one or more problems: a missing or unknown field, an ambiguous name, a disallowed value, a missing permission, or a failed team rule. Every problem is reported at once, and nothing was sent.",
-      "fix": "Apply each failing check's `fix`, then run `details.retry` (fill in any `<placeholder>`). The retry is your own command with the corrections applied; it is omitted when a value came from `--input`.",
+      "fix": "Apply each failing check's `fix`, then run `details.retry` when it is present (fill in any `<placeholder>`). The retry is your own command with the corrections applied. It is `null` when a value came from `--input` or when no rerun would help, such as a duplicate that already exists; then follow each check's `fix` only.",
       "details": "`details.nothing_sent` is `true`; `details.checks[]` lists the failing checks and `details.passed` counts the rest. `details.retry` is quoted for POSIX shells; `details.retry_argv` is the same command as an argument list."
     },
     "config_drift": {
-      "meaning": "`yojo config check` found at least one difference between `yojo.yaml` and live Jira metadata.",
-      "fix": "Apply each `drift` check's fix, either by updating `yojo.yaml` (through team review) or by asking a Jira admin to change the screen or workflow, then re-run `yojo config check`. See [Troubleshooting](../troubleshooting.md).",
+      "meaning": "`yojo config check` found at least one difference between `yojo.yaml` and the live services: Jira metadata, or a `bitbucket.base_url` whose server does not identify itself as Bitbucket Data Center.",
+      "fix": "Apply each `drift` check's fix. For a Jira check, update `yojo.yaml` (through team review) or ask a Jira admin to change the screen or workflow. For `bitbucket:application`, set `bitbucket.base_url` to the Bitbucket application root including any context path. Then re-run `yojo config check`. See [Troubleshooting](../troubleshooting.md).",
       "details": "`details.checks[]` holds every check with `pass`, `drift`, or `unverified`; `details.summary` counts them."
     },
     "config_unverified": {
@@ -139,7 +139,7 @@
     },
     "interrupted": {
       "meaning": "The process was interrupted (for example Ctrl+C) before it finished.",
-      "fix": "If the command was a write, inspect the issue or page before running it again."
+      "fix": "If the command was a write, inspect the issue, page, or pull request before running it again."
     },
     "internal_error": {
       "meaning": "An unexpected error inside `yojo`. Only the exception type is reported.",

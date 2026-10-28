@@ -911,8 +911,8 @@ def cmd_config_check(args: argparse.Namespace, rt: Runtime) -> Any:
         raise YojoError(
             "config_drift",
             f"yojo.yaml no longer matches live {live} ({summary['drift']} check(s)).",
-            "Apply each drift check's fix (update yojo.yaml or the Jira configuration), then "
-            "re-run `yojo config check`.",
+            "Apply each drift check's fix in details.checks (each names the yojo.yaml key or "
+            "service setting to change), then re-run `yojo config check`.",
             {"status": "drift", "summary": summary, "checks": report},
         )
     if summary.get("unverified"):

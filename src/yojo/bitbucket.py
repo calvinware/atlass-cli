@@ -33,6 +33,8 @@ MAX_TITLE_CHARS = 255
 MAX_DIFF_FILES = 10
 MAX_REVIEWERS = 10
 DIFF_CONTEXT_LINES = 3
+# Bitbucket accepts comments on open, merged, and declined pull requests alike.
+PR_STATES = ("OPEN", "MERGED", "DECLINED")
 SEGMENT_PREFIX = {"ADDED": "+", "REMOVED": "-", "CONTEXT": " "}
 # Separators str.splitlines() breaks on besides \n and \r (which a source line may not contain).
 LINE_BREAKS = re.compile("[\x0b\x0c\x1c-\x1e\x85\u2028\u2029]")
@@ -140,7 +142,7 @@ def _page(
 
     The next cursor is only ever Bitbucket's ``nextPageStart``; a page that is not the last but
     has a missing, repeating, or backward cursor is refused rather than guessed, and so is a page
-    that does not echo the requested ``start``.
+    that does not echo the requested ``start`` or whose ``size`` does not count its values.
     """
     raw = client.get(path, {**params, "start": start, "limit": limit})
     if not isinstance(raw, dict) or not isinstance(raw.get("values"), list):
@@ -148,7 +150,15 @@ def _page(
     values: list[Any] = raw["values"]
     last = raw.get("isLastPage")
     echoed = raw.get("start")
-    if type(last) is not bool or len(values) > limit or type(echoed) is not int or echoed != start:
+    size = raw.get("size")
+    if (
+        type(last) is not bool
+        or len(values) > limit
+        or type(echoed) is not int
+        or echoed != start
+        or type(size) is not int
+        or size != len(values)
+    ):
         raise _invalid(f"{what} page")
     if last:
         return values, None
@@ -347,12 +357,15 @@ def _clone(raw: dict[str, Any], kind: str) -> str | None:
 
 
 def _default_branch(client: ServiceClient, repo: Repo) -> str | None:
+    """The configured default ref, which exists even before the first push; None when unset."""
     try:
-        raw = client.get(f"{repo.api}/branches/default")
+        raw = client.get(f"{repo.api}/default-branch")
     except YojoError as exc:
         if exc.code == "not_found":
             return None
         raise
+    if raw is None:
+        return None
     if not _branch_ok(raw):
         raise _invalid("default branch")
     return nested_str(raw, "displayId")
@@ -497,13 +510,20 @@ def _pr_row(raw: Any, titles: TextBudget | None = None) -> dict[str, Any]:
         title, trimmed = titles.fit(title[: MAX_LIST_TITLE - 3] if cut else title)
         if cut or trimmed:
             title += "..."
+    state = nested_str(raw, "state")
+    if state not in PR_STATES:
+        raise _invalid("pull request state")
+    source = _ref_id(raw, "fromRef")
+    target = _ref_id(raw, "toRef")
+    if not source or not target:
+        raise _invalid("pull request branches")
     author = raw.get("author")
     return {
         "id": pr_id,
         "title": title,
-        "state": nested_str(raw, "state"),
-        "source": _branch_name(_ref_id(raw, "fromRef")),
-        "target": _branch_name(_ref_id(raw, "toRef")),
+        "state": state,
+        "source": _branch_name(source),
+        "target": _branch_name(target),
         "author": _person(author.get("user") if isinstance(author, dict) else None),
         "updated": _when(raw.get("updatedDate")),
     }
@@ -673,6 +693,7 @@ def _diff_file(raw: Any) -> tuple[dict[str, Any], list[str], bool]:
         if not isinstance(segments, list):
             raise _invalid("diff")
         cut = _cut(hunk) or cut
+        spans = {"+": 0, "-": 0, " ": 0}
         lines.append(
             f"@@ -{_number(hunk.get('sourceLine'))},{_number(hunk.get('sourceSpan'))} "
             f"+{_number(hunk.get('destinationLine'))},{_number(hunk.get('destinationSpan'))} @@"
@@ -691,6 +712,13 @@ def _diff_file(raw: Any) -> tuple[dict[str, Any], list[str], bool]:
                 lines.append(prefix + LINE_BREAKS.sub(lambda m: _escape(m.group()), text))
                 added += prefix == "+"
                 removed += prefix == "-"
+                spans[prefix] += 1
+        # A hunk whose lines do not add up to its header spans is missing lines.
+        if (
+            spans[" "] + spans["-"] != hunk["sourceSpan"]
+            or spans[" "] + spans["+"] != hunk["destinationSpan"]
+        ):
+            cut = True
     row = {
         "path": new or old,
         "old_path": old if change == "renamed" else None,
@@ -1156,7 +1184,7 @@ def _create(
         "title": created["title"],
         "source": source.name,
         "target": target.name,
-        "state": nested_str(created, "state"),
+        "state": created["state"],
         "url": _pr_url(client, repo, pr_id),
     }
 
@@ -1186,6 +1214,8 @@ def _create_mismatch(
         return "create response did not confirm the target branch and repository"
     if not _text_confirmed(title, created.get("title")):
         return "create response did not confirm the submitted title"
+    if created.get("state") != "OPEN":
+        return "create response did not confirm the pull request is open"
     returned = created.get("description")
     if description == "" and returned in (None, ""):
         return None
@@ -1197,18 +1227,34 @@ def _create_mismatch(
 # --------------------------------------------------------------------------- comment
 
 
+def _comment_tree(comment: Any) -> list[dict[str, Any]] | None:
+    """A comment and every nested reply, or None if any of them cannot be read."""
+    found: list[dict[str, Any]] = []
+    pending = [comment]
+    while pending:
+        node = pending.pop()
+        replies = node.get("comments", []) if isinstance(node, dict) else None
+        if nested_str(node, "text") is None or not isinstance(replies, list):
+            return None
+        found.append(node)
+        pending += replies
+    return found
+
+
 def _duplicate_comment(client: ServiceClient, repo: Repo, pr_id: int, body: str) -> Check:
     def readable(activity: Any) -> bool:
         if not isinstance(activity, dict) or not isinstance(activity.get("action"), str):
             return False
         return activity["action"] != "COMMENTED" or (
-            nested_str(activity.get("comment"), "text") is not None
+            _comment_tree(activity.get("comment")) is not None
         )
 
+    def same(activity: Any) -> dict[str, Any] | None:
+        tree = _comment_tree(activity["comment"]) or []
+        return next((c for c in tree if _text_confirmed(body, c["text"])), None)
+
     def same_text(activity: Any) -> bool:
-        return activity["action"] == "COMMENTED" and _text_confirmed(
-            body, activity["comment"]["text"]
-        )
+        return activity["action"] == "COMMENTED" and same(activity) is not None
 
     scan = _scan(
         client,
@@ -1220,7 +1266,7 @@ def _duplicate_comment(client: ServiceClient, repo: Repo, pr_id: int, body: str)
     )
     view = _pr_url(client, repo, pr_id, "/overview")
     if scan.found is not None:
-        comment_id = _positive_int(scan.found["comment"].get("id"))
+        comment_id = _positive_int((same(scan.found) or {}).get("id"))
         return Check(
             "duplicate",
             "fail",
@@ -1283,8 +1329,22 @@ def pr_comment(
             )
         raise refusal(f"Commenting on pull request #{pr_id}", checks) from None
     repo = _ref_repo(pr, "toRef") or repo
-    state = nested_str(pr, "state") or "unknown"
-    checks.append(Check("pull_request", "pass", f"Pull request #{pr_id} is {state.lower()}."))
+    state = nested_str(pr, "state")
+    if state is None or state not in PR_STATES:
+        read = posix(_cmd(client, "pr", "get", str(pr_id), "--repo", repo.ref))
+        checks.append(
+            Check(
+                "pull_request",
+                "unverified",
+                f"Could not confirm the state of pull request #{pr_id}: Bitbucket returned "
+                f"{'no state' if state is None else repr(sanitize_text(state, 40))}.",
+                f"Run `{read}` to inspect it; yojo comments only on an open, merged, or declined "
+                "pull request.",
+                {"state": None if state is None else sanitize_text(state, 40)},
+            )
+        )
+    else:
+        checks.append(Check("pull_request", "pass", f"Pull request #{pr_id} is {state.lower()}."))
     if not blank:
         try:
             checks.append(_duplicate_comment(client, repo, pr_id, body))
