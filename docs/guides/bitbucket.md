@@ -151,12 +151,15 @@ response that does not match what was sent), the result is `outcome_unknown` (ex
 no `retry`. Do not run the command again yet:
 
 - After `pr create`, run `details.recovery_argv.list` (every state, `--state ALL`), follow
-  `next_start` through every page, and look for your branches and title. The pull request may
-  already be merged or declined, so missing from the first page of open pull requests does not
-  mean the create failed.
+  `next_start` through every page, and note the ID of each pull request from your source branch
+  into your target. List titles are shortened, so the list only finds candidates. Read each one
+  with `yojo bitbucket pr get ID --repo PROJ/web --full` (`details.recovery_argv.get` when the
+  response named an ID) and count it as yours only if its title, source, target, and description
+  equal what you sent and `created` is at or after `details.sent_at`, allowing for clock skew. An
+  older merged or declined pull request can share the branches and title.
 - After `pr comment`, open the pull request link in `error.fix` and look for your comment.
 
 A paged list can change while you scan it, so no match does not prove the create was absent. If
-none appears, ask a person to confirm in the repository that it was not applied before running the
-create again. For a comment, post again only when the pull request view confirms it is absent; ask a
+no candidate matches exactly, or more than one does, ask a person to confirm in the repository
+before running the create again. For a comment, post again only when the pull request view confirms it is absent; ask a
 person if the result remains unclear. See [Writes and retries](../commands.md#writes-and-retries).

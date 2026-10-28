@@ -139,15 +139,16 @@ def _page(
     """One page and the server's cursor for the next one (None on the last page).
 
     The next cursor is only ever Bitbucket's ``nextPageStart``; a page that is not the last but
-    has a missing, repeating, or backward cursor is refused rather than guessed.
+    has a missing, repeating, or backward cursor is refused rather than guessed, and so is a page
+    that does not echo the requested ``start``.
     """
     raw = client.get(path, {**params, "start": start, "limit": limit})
     if not isinstance(raw, dict) or not isinstance(raw.get("values"), list):
         raise _invalid(what)
     values: list[Any] = raw["values"]
     last = raw.get("isLastPage")
-    echoed = raw.get("start", start)
-    if type(last) is not bool or len(values) > limit or echoed != start:
+    echoed = raw.get("start")
+    if type(last) is not bool or len(values) > limit or type(echoed) is not int or echoed != start:
         raise _invalid(f"{what} page")
     if last:
         return values, None
@@ -1062,22 +1063,33 @@ def _create_recovery(
     repo: Repo,
     source: Branch,
     target: Branch,
-    title: str,
+    sent_at: str,
     pr_id: int | None = None,
 ) -> YojoError:
     argv = {"list": _cmd("pr", "list", "--repo", repo.ref, "--state", "ALL")}
     if pr_id is not None:
-        argv["get"] = _cmd("pr", "get", str(pr_id), "--repo", repo.ref)
+        argv["get"] = _cmd("pr", "get", str(pr_id), "--repo", repo.ref, "--full")
+    read = (
+        posix(argv["get"])
+        if "get" in argv
+        else f"yojo bitbucket pr get ID --repo {repo.ref} --full"
+    )
     error = client.unknown_outcome(
         reason,
         f"Do not retry yet. List pull requests in every state with `{posix(argv['list'])}`, "
-        "following next_start through every page, and look for one from "
-        f"{source.name!r} into {target.name!r} titled {sanitize_text(title, 120)!r}"
-        + (f"; also check `{posix(argv['get'])}`" if "get" in argv else "")
-        + ". A paged scan can miss an item while the list changes. If no match appears, ask a "
-        "person to confirm in the repository that the create was not applied before trying again. "
+        "following next_start through every page, and note the ID of each one from "
+        f"{source.name!r} into {target.name!r}"
+        + (f", plus {pr_id} from the response" if pr_id is not None else "")
+        + ". List titles are shortened, so use the list only to find candidates. Read each "
+        f"candidate with `{read}` and count it as this create only if its title, source, target, "
+        "and description equal what you sent and it was created at or after details.sent_at "
+        "(allow for clock skew); an older merged or declined pull request can share the "
+        "branches and title. A paged scan can miss an item while the list changes. If no "
+        "candidate matches exactly, or more than one does, ask a person to confirm in the "
+        "repository before trying again. "
         f"yojo does not retry writes. {POSIX_NOTE} Use details.recovery_argv for the argv lists.",
     )
+    error.details["sent_at"] = sent_at
     error.details["recovery_argv"] = argv
     return error
 
@@ -1101,20 +1113,22 @@ def _create(
         f"Opening a pull request in {repo.ref}: {source.name} into {target.name}, "
         f"{sanitize_text(title, 60)!r}"
     )
+    sent_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         created = client.request("POST", f"{repo.api}/pull-requests", json_body=body)
     except YojoError as exc:
         if exc.code == "outcome_unknown":
             recovery = _create_recovery(
-                client, str(exc.details.get("reason", "")), repo, source, target, title
+                client, str(exc.details.get("reason", "")), repo, source, target, sent_at
             )
             exc.fix = recovery.fix
+            exc.details["sent_at"] = sent_at
             exc.details["recovery_argv"] = recovery.details["recovery_argv"]
         raise
     reason = _create_mismatch(created, repo, source, target, title, description)
     if reason is not None:
         pr_id = _positive_int(created.get("id")) if isinstance(created, dict) else None
-        raise _create_recovery(client, reason, repo, source, target, title, pr_id)
+        raise _create_recovery(client, reason, repo, source, target, sent_at, pr_id)
     assert isinstance(created, dict)
     pr_id = created["id"]
     return {

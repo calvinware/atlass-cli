@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import shlex
 from typing import Any
 
@@ -306,10 +307,22 @@ def test_global_repo_list_and_last_page(harness: Harness) -> None:
         {"isLastPage": False, "start": 0, "nextPageStart": "20", "values": []},
         {"start": 0, "values": []},
         {"isLastPage": True, "start": 40, "values": []},
+        {"isLastPage": True, "values": []},
+        {"isLastPage": True, "start": "0", "values": []},
         {"isLastPage": True, "start": 0, "values": [{}] * 21},
         {"isLastPage": True, "start": 0, "values": "nope"},
     ],
-    ids=["missing", "repeating", "not-int", "no-last-flag", "wrong-start", "too-many", "values"],
+    ids=[
+        "missing",
+        "repeating",
+        "not-int",
+        "no-last-flag",
+        "wrong-start",
+        "no-start",
+        "start-not-int",
+        "too-many",
+        "values",
+    ],
 )
 def test_malformed_pagination_fails_closed(harness: Harness, body: dict[str, Any]) -> None:
     config(harness)
@@ -944,6 +957,28 @@ def test_create_refuses_when_the_duplicate_scan_cannot_finish(harness: Harness) 
     assert harness.server.writes() == []
 
 
+@pytest.mark.parametrize("echoed", [None, "1", 0])
+def test_create_refuses_when_a_later_page_does_not_echo_its_start(
+    harness: Harness, echoed: Any
+) -> None:
+    setup_create(harness)
+    other = fixture("bitbucket_pull_request.json")
+    other["id"] = 41
+    other["toRef"]["id"] = "refs/heads/release"
+    later = page([], start=1)
+    if echoed is None:
+        del later["start"]
+    else:
+        later["start"] = echoed
+    harness.server.routes[("GET", PRS)] = []
+    harness.server.add("GET", PRS, page([other], next_start=1))
+    harness.server.add("GET", PRS, later)
+    details = refusal(harness.run(*CREATE_ARGV))
+    (check,) = details["checks"]
+    assert (check["id"], check["status"]) == ("duplicate", "unverified")
+    assert harness.server.writes() == []
+
+
 @pytest.mark.parametrize("on_later_page", [False, True])
 @pytest.mark.parametrize("side", ["fromRef", "toRef"])
 def test_create_refuses_when_an_open_pull_request_lacks_refs(
@@ -1081,7 +1116,12 @@ def test_uncertain_create_offers_inspection_not_a_retry(harness: Harness) -> Non
     }
     assert "Do not retry yet" in error["fix"]
     assert "every page" in error["fix"]
+    assert "only to find candidates" in error["fix"]
+    assert "yojo bitbucket pr get ID --repo PROJ/web --full" in error["fix"]
+    assert "created at or after details.sent_at" in error["fix"]
+    assert "merged or declined" in error["fix"]
     assert "ask a person to confirm" in error["fix"]
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", error["details"]["sent_at"])
     assert len(harness.server.writes()) == 1
     assert result.nbytes <= WRITE_BUDGET
 
@@ -1103,7 +1143,10 @@ def test_unconfirmed_create_is_outcome_unknown(harness: Harness) -> None:
         "42",
         "--repo",
         "PROJ/web",
+        "--full",
     ]
+    assert "yojo bitbucket pr get 42 --repo PROJ/web --full" in result.error["fix"]
+    assert "sent_at" in result.error["details"]
 
 
 def test_create_response_with_changed_title_whitespace_is_outcome_unknown(harness: Harness) -> None:
@@ -1252,6 +1295,25 @@ def test_comment_refuses_when_activity_scan_is_incomplete(harness: Harness) -> N
     harness.server.add("GET", ACTIVITIES, page([], next_start=0))
     details = refusal(harness.run(*COMMENT_ARGV, "--body", "New note"))
     assert details["checks"][0]["status"] == "unverified"
+    assert harness.server.writes() == []
+
+
+@pytest.mark.parametrize("echoed", [None, "1", 0])
+def test_comment_refuses_when_a_later_page_does_not_echo_its_start(
+    harness: Harness, echoed: Any
+) -> None:
+    setup_comment(harness)
+    later = page([], start=1)
+    if echoed is None:
+        del later["start"]
+    else:
+        later["start"] = echoed
+    harness.server.routes[("GET", ACTIVITIES)] = []
+    harness.server.add("GET", ACTIVITIES, page([{"action": "OPENED"}], next_start=1))
+    harness.server.add("GET", ACTIVITIES, later)
+    details = refusal(harness.run(*COMMENT_ARGV, "--body", "New note"))
+    (check,) = details["checks"]
+    assert (check["id"], check["status"]) == ("duplicate", "unverified")
     assert harness.server.writes() == []
 
 
