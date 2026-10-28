@@ -281,7 +281,11 @@ so `more` can be `null` while `complete` is `false`. Then `inspect` is a `git di
 command, using the two commits Bitbucket compared, for a clone that has both; the pull request's
 diff view (`url`) shows the same change. With `--path`, a response for a different file fails with
 `response_invalid`, and a file the pull request does not change is `not_found`. Header lines quote
-a file name containing a newline or control character the way Git does. If a diff is too large to
+a file name containing a newline or control character the way Git does. In a source line, any
+other character that starts a new line for some readers (vertical tab, form feed, `\x1c`-`\x1e`,
+`\x85`, U+2028, U+2029) is shown escaped (for example `\x0c` or `\u2028`), so `diff` splits into
+lines only at `\n`; a source line containing `\n` or `\r`, or a file, hunk, or segment whose
+hunks, segments, or lines are not lists, fails with `response_invalid`. If a diff is too large to
 fetch at all, the error names the `--path` form.
 
 `pr create` and `pr comment` check everything first and send nothing when a check fails or cannot
@@ -290,14 +294,17 @@ be completed:
 - `pr create`: a non-blank title of at most 255 characters; the repository is visible to you; the
   source and target branches each resolve to exactly one branch (exact case first, then a unique
   any-case match; a near miss is suggested and used in `retry`); the branches differ; and no open
-  pull request already goes from that source to that target. The duplicate check reads every page
-  of open pull requests from the source branch, up to 1000; if it cannot finish, the check is
-  `unverified` and nothing is sent. Values from `--input` get no command-line `retry`.
+  pull request already goes from that source to that target. A branch whose ID is not
+  `refs/heads/` plus its name is not used. The duplicate check reads every page of open pull
+  requests from the source branch, up to 1000; if it cannot finish, or an entry lacks either
+  branch or repository, the check is `unverified` and nothing is sent. Values from `--input` get no command-line `retry`.
 - `pr comment`: a non-blank comment, the pull request exists, and it has no comment with exactly
-  the same text (scanning up to 1000 activity entries; otherwise `unverified`).
+  the same text (scanning up to 1000 activity entries; otherwise, or when an entry has no
+  action or a comment entry has no text, `unverified`).
 
 A create succeeds only when Bitbucket's response has a pull request ID, the requested source and
-target branches in the requested repository, and the submitted title. A comment succeeds only when
+target branches in the requested repository, the submitted title, and, when a description was
+sent, exactly that description (an empty one may come back missing). A comment succeeds only when
 the response has a comment ID and the submitted text. A rejection (for example 409 when Bitbucket
 already has an open pull request for the pair) shows Bitbucket's `errors[].message` in
 `details.messages`, or in `details.fields` under the field it names. Approving, merging, and

@@ -274,7 +274,8 @@ def _diff(data: Mapping[str, Any], style: Style) -> list[str]:
     if isinstance(total, int) and total > listed:
         lines.append(style.dim(f"... {total - listed} more changed files"))
     text = data.get("diff")
-    body = text.splitlines() if isinstance(text, str) else []
+    # Split on newlines only: splitlines() would also break on separators inside source text.
+    body = text.removesuffix("\n").split("\n") if isinstance(text, str) and text else []
     if body:
         lines.append("")
     for raw in body[:DIFF_LINES]:

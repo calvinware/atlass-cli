@@ -592,6 +592,52 @@ def test_pr_diff_rejects_a_source_line_that_could_forge_lines(harness: Harness) 
     assert result.error["code"] == "response_invalid"
 
 
+@pytest.mark.parametrize(
+    "separator", ["\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"]
+)
+def test_pr_diff_escapes_other_line_separators_in_source_lines(
+    harness: Harness, separator: str
+) -> None:
+    config(harness)
+    diff = fixture("bitbucket_diff.json")
+    forged = separator + "+++ b/forged.py" + separator + "@@ -1,1 +1,1 @@" + separator + "+forged"
+    diff["diffs"][0]["hunks"][0]["segments"][0]["lines"][0]["line"] += forged
+    harness.server.add("GET", DIFF, diff)
+    data = harness.run("bitbucket", "pr", "diff", "42", "--repo", "PROJ/web").data
+    lines = data["diff"].splitlines()
+    assert lines == data["diff"].removesuffix("\n").split("\n")
+    assert "+forged" not in lines and "+++ b/forged.py" not in lines
+    escaped = separator.encode("unicode_escape").decode()
+    assert f" def login(user):{escaped}+++ b/forged.py{escaped}" in data["diff"]
+    tty = harness.run_tty("bitbucket", "pr", "diff", "42", "--repo", "PROJ/web")
+    shown = [line.strip() for line in tty.stdout.splitlines()]
+    assert "+forged" not in shown and "+++ b/forged.py" not in shown
+
+
+@pytest.mark.parametrize(
+    "spoil",
+    [
+        lambda d: d["diffs"][0].update(hunks=None),
+        lambda d: d["diffs"][0]["hunks"][0].update(segments=None),
+        lambda d: d["diffs"][0]["hunks"][0].pop("segments"),
+        lambda d: d["diffs"][0]["hunks"][0]["segments"][0].update(lines=None),
+        lambda d: d["diffs"][0]["hunks"][0]["segments"][0].pop("lines"),
+        lambda d: d["diffs"][0]["hunks"].append(None),
+        lambda d: d["diffs"][0]["hunks"][0]["segments"].append(None),
+    ],
+)
+def test_pr_diff_rejects_malformed_hunks_instead_of_an_empty_complete_diff(
+    harness: Harness, spoil: Any
+) -> None:
+    config(harness)
+    diff = fixture("bitbucket_diff.json")
+    spoil(diff)
+    harness.server.add("GET", DIFF, diff)
+    result = harness.run("bitbucket", "pr", "diff", "42", "--repo", "PROJ/web")
+    assert result.code == 6
+    assert result.error["code"] == "response_invalid"
+
+
 def test_pr_diff_git_inspection_uses_full_scope_for_an_unsafe_path(harness: Harness) -> None:
     config(harness)
     diff = fixture("bitbucket_diff.json")
@@ -784,6 +830,18 @@ def test_create_prefers_exact_branch_and_lists_ambiguous_ones(harness: Harness) 
     assert harness.server.writes() == []
 
 
+def test_create_refuses_a_branch_whose_id_is_not_its_name(harness: Harness) -> None:
+    setup_create(harness)
+    branches = fixture("bitbucket_branches.json")["values"]
+    harness.server.routes[("GET", BRANCHES)] = []
+    harness.server.add("GET", BRANCHES, page([{**branches[1], "id": "refs/heads/release"}]))
+    harness.server.add("GET", BRANCHES, page([branches[0]]))
+    details = refusal(harness.run(*CREATE_ARGV))
+    source = next(c for c in details["checks"] if c["id"] == "source")
+    assert source["status"] == "unverified"
+    assert harness.server.writes() == []
+
+
 def test_create_refuses_an_inaccessible_repository(harness: Harness) -> None:
     config(harness)
     harness.server.add(
@@ -845,6 +903,30 @@ def test_create_refuses_when_the_duplicate_scan_cannot_finish(harness: Harness) 
     details = refusal(harness.run(*CREATE_ARGV))
     (check,) = details["checks"]
     assert (check["id"], check["status"]) == ("duplicate", "unverified")
+    assert harness.server.writes() == []
+
+
+@pytest.mark.parametrize("on_later_page", [False, True])
+@pytest.mark.parametrize("side", ["fromRef", "toRef"])
+def test_create_refuses_when_an_open_pull_request_lacks_refs(
+    harness: Harness, on_later_page: bool, side: str
+) -> None:
+    setup_create(harness)
+    other = fixture("bitbucket_pull_request.json")
+    other["id"] = 41
+    other["toRef"]["id"] = "refs/heads/release"
+    broken = fixture("bitbucket_pull_request.json")
+    del broken[side]
+    harness.server.routes[("GET", PRS)] = []
+    if on_later_page:
+        harness.server.add("GET", PRS, page([other], next_start=1))
+        harness.server.add("GET", PRS, page([broken], start=1))
+    else:
+        harness.server.add("GET", PRS, page([broken, other]))
+    details = refusal(harness.run(*CREATE_ARGV))
+    (check,) = details["checks"]
+    assert (check["id"], check["status"]) == ("duplicate", "unverified")
+    assert "without the details needed" in check["message"]
     assert harness.server.writes() == []
 
 
@@ -997,6 +1079,29 @@ def test_create_response_with_changed_title_whitespace_is_outcome_unknown(harnes
     assert len(harness.server.writes()) == 1
 
 
+@pytest.mark.parametrize(
+    "returned",
+    [None, "", "Handles an empty user. ", "Something else", {"text": "Handles an empty user."}],
+)
+def test_create_response_with_changed_description_is_outcome_unknown(
+    harness: Harness, returned: Any
+) -> None:
+    setup_create(harness)
+    response = fixture("bitbucket_pull_request.json")
+    response["title"] = "Fix login on Safari"
+    if returned is None:
+        del response["description"]
+    else:
+        response["description"] = returned
+    harness.server.routes[("POST", PRS)] = []
+    harness.server.add("POST", PRS, response, status=201)
+    result = harness.run(*CREATE_ARGV, "--description", "Handles an empty user.")
+    assert result.code == 6
+    assert result.error["code"] == "outcome_unknown"
+    assert "description" in result.error["details"]["reason"]
+    assert len(harness.server.writes()) == 1
+
+
 def test_create_terminal_and_json_share_exit_codes(harness: Harness) -> None:
     setup_create(harness)
     tty = harness.run_tty(*CREATE_ARGV, environ={"NO_COLOR": "1"})
@@ -1075,6 +1180,32 @@ def test_comment_refuses_when_activity_scan_is_incomplete(harness: Harness) -> N
     harness.server.add("GET", ACTIVITIES, page([], next_start=0))
     details = refusal(harness.run(*COMMENT_ARGV, "--body", "New note"))
     assert details["checks"][0]["status"] == "unverified"
+    assert harness.server.writes() == []
+
+
+@pytest.mark.parametrize("on_later_page", [False, True])
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"action": "COMMENTED", "comment": {"id": 502}},
+        {"action": "COMMENTED"},
+        {"comment": {"id": 502, "text": "x"}},
+        None,
+    ],
+)
+def test_comment_refuses_when_an_activity_cannot_be_compared(
+    harness: Harness, on_later_page: bool, broken: Any
+) -> None:
+    setup_comment(harness)
+    harness.server.routes[("GET", ACTIVITIES)] = []
+    if on_later_page:
+        harness.server.add("GET", ACTIVITIES, page([{"action": "OPENED"}], next_start=1))
+        harness.server.add("GET", ACTIVITIES, page([broken], start=1))
+    else:
+        harness.server.add("GET", ACTIVITIES, page([broken, {"action": "OPENED"}]))
+    details = refusal(harness.run(*COMMENT_ARGV, "--body", "New note"))
+    (check,) = details["checks"]
+    assert (check["id"], check["status"]) == ("duplicate", "unverified")
     assert harness.server.writes() == []
 
 

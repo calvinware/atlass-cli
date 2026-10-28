@@ -34,6 +34,8 @@ MAX_DIFF_FILES = 10
 MAX_REVIEWERS = 10
 DIFF_CONTEXT_LINES = 3
 SEGMENT_PREFIX = {"ADDED": "+", "REMOVED": "-", "CONTEXT": " "}
+# Separators str.splitlines() breaks on besides \n and \r (which a source line may not contain).
+LINE_BREAKS = re.compile("[\x0b\x0c\x1c-\x1e\x85\u2028\u2029]")
 
 
 @dataclass(frozen=True)
@@ -164,7 +166,8 @@ def _page(
 
 @dataclass
 class Scan:
-    """A bounded walk over every page; ``complete`` is False when it stopped early."""
+    """A bounded walk over every page; ``complete`` is False when it stopped early or an item
+    could not be read."""
 
     found: Any = None
     complete: bool = False
@@ -178,9 +181,11 @@ def _scan(
     params: dict[str, Any],
     what: str,
     match: Callable[[Any], bool],
+    valid: Callable[[Any], bool] | None = None,
 ) -> Scan:
     scan = Scan()
     start = 0
+    unreadable = 0
     for _ in range(MAX_SCAN_PAGES):
         try:
             values, cursor = _page(client, path, params, start, SCAN_LIMIT, what)
@@ -191,11 +196,20 @@ def _scan(
             return scan
         for value in values:
             scan.seen.append(value)
+            if valid is not None and not valid(value):
+                unreadable += 1
+                continue
             if match(value):
                 scan.found = value
                 scan.complete = True
                 return scan
         if cursor is None:
+            if unreadable:
+                scan.problem = (
+                    f"Bitbucket returned {unreadable} {what} item(s) without the details needed "
+                    "to compare them"
+                )
+                return scan
             scan.complete = True
             return scan
         start = cursor
@@ -360,8 +374,8 @@ def repo_get(client: ServiceClient, ref: str) -> dict[str, Any]:
 
 
 def _branch_ok(raw: Any) -> bool:
-    ref_id = nested_str(raw, "id")
-    return bool(ref_id and ref_id.startswith(BRANCH_PREFIX) and nested_str(raw, "displayId"))
+    name = nested_str(raw, "displayId")
+    return bool(name) and nested_str(raw, "id") == BRANCH_PREFIX + str(name)
 
 
 def branch_list(
@@ -406,7 +420,8 @@ def _resolve_branch(
         f"{repo.api}/branches",
         {"filterText": name, "details": "false"},
         "branch list",
-        lambda raw: _branch_ok(raw) and raw["displayId"] == name,
+        lambda raw: raw["displayId"] == name,
+        _branch_ok,
     )
     listing = posix(_cmd("branch", "list", "--repo", repo.ref, "--filter", name))
     pool = [
@@ -636,28 +651,30 @@ def _diff_file(raw: Any) -> tuple[dict[str, Any], list[str], bool]:
         lines.append("Binary files differ")
     cut = _cut(raw)
     added = removed = 0
-    hunks = raw.get("hunks") or []
+    hunks = raw.get("hunks", [])
     if not isinstance(hunks, list):
         raise _invalid("diff")
     for hunk in hunks:
-        if not isinstance(hunk, dict) or not isinstance(hunk.get("segments") or [], list):
+        segments = hunk.get("segments") if isinstance(hunk, dict) else None
+        if not isinstance(segments, list):
             raise _invalid("diff")
         cut = _cut(hunk) or cut
         lines.append(
             f"@@ -{_number(hunk.get('sourceLine'))},{_number(hunk.get('sourceSpan'))} "
             f"+{_number(hunk.get('destinationLine'))},{_number(hunk.get('destinationSpan'))} @@"
         )
-        for segment in hunk.get("segments") or []:
+        for segment in segments:
             prefix = SEGMENT_PREFIX.get(nested_str(segment, "type") or "")
-            if prefix is None or not isinstance(segment.get("lines") or [], list):
+            seg_lines = segment.get("lines") if prefix is not None else None
+            if prefix is None or not isinstance(seg_lines, list):
                 raise _invalid("diff")
             cut = _cut(segment) or cut
-            for line in segment.get("lines") or []:
+            for line in seg_lines:
                 text = nested_str(line, "line")
                 if text is None or "\n" in text or "\r" in text:
                     raise _invalid("diff")
                 cut = _cut(line) or cut
-                lines.append(prefix + text)
+                lines.append(prefix + LINE_BREAKS.sub(lambda m: _escape(m.group()), text))
                 added += prefix == "+"
                 removed += prefix == "-"
     row = {
@@ -880,12 +897,21 @@ def _duplicate_check(client: ServiceClient, repo: Repo, source: Branch, target: 
             and _same_repo(_ref_repo(pr, "toRef"), repo)
         )
 
+    def readable(pr: Any) -> bool:
+        return None not in (
+            _ref_id(pr, "fromRef"),
+            _ref_id(pr, "toRef"),
+            _ref_repo(pr, "fromRef"),
+            _ref_repo(pr, "toRef"),
+        )
+
     scan = _scan(
         client,
         f"{repo.api}/pull-requests",
         {"state": "OPEN", "at": source.id, "direction": "OUTGOING"},
         "pull request list",
         same_pair,
+        readable,
     )
     if scan.found is not None:
         pr_id = scan.found.get("id")
@@ -1046,7 +1072,7 @@ def _create(
             exc.fix = recovery.fix
             exc.details["recovery_argv"] = recovery.details["recovery_argv"]
         raise
-    reason = _create_mismatch(created, repo, source, target, title)
+    reason = _create_mismatch(created, repo, source, target, title, description)
     if reason is not None:
         pr_id = _positive_int(created.get("id")) if isinstance(created, dict) else None
         raise _create_recovery(client, reason, repo, source, target, title, pr_id)
@@ -1068,7 +1094,12 @@ def _text_confirmed(submitted: str, returned: Any) -> bool:
 
 
 def _create_mismatch(
-    created: Any, repo: Repo, source: Branch, target: Branch, title: str
+    created: Any,
+    repo: Repo,
+    source: Branch,
+    target: Branch,
+    title: str,
+    description: str | None,
 ) -> str | None:
     """Return why a create response does not confirm the submitted pull request, or None."""
     if not isinstance(created, dict):
@@ -1083,6 +1114,11 @@ def _create_mismatch(
         return "create response did not confirm the target branch and repository"
     if not _text_confirmed(title, created.get("title")):
         return "create response did not confirm the submitted title"
+    returned = created.get("description")
+    if description == "" and returned in (None, ""):
+        return None
+    if description is not None and not _text_confirmed(description, returned):
+        return "create response did not confirm the submitted description"
     return None
 
 
@@ -1090,14 +1126,25 @@ def _create_mismatch(
 
 
 def _duplicate_comment(client: ServiceClient, repo: Repo, pr_id: int, body: str) -> Check:
+    def readable(activity: Any) -> bool:
+        if not isinstance(activity, dict) or not isinstance(activity.get("action"), str):
+            return False
+        return activity["action"] != "COMMENTED" or (
+            nested_str(activity.get("comment"), "text") is not None
+        )
+
     def same_text(activity: Any) -> bool:
-        comment = activity.get("comment") if isinstance(activity, dict) else None
-        return activity.get("action") == "COMMENTED" and _text_confirmed(
-            body, nested_str(comment, "text")
+        return activity["action"] == "COMMENTED" and _text_confirmed(
+            body, activity["comment"]["text"]
         )
 
     scan = _scan(
-        client, f"{repo.api}/pull-requests/{pr_id}/activities", {}, "activity list", same_text
+        client,
+        f"{repo.api}/pull-requests/{pr_id}/activities",
+        {},
+        "activity list",
+        same_text,
+        readable,
     )
     view = _pr_url(client, repo, pr_id, "/overview")
     if scan.found is not None:
