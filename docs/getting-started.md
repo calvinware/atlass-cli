@@ -251,7 +251,8 @@ yojo init --jira-url https://jira.example.test/jira --project PROJ \
 
 `--save` never overwrites a file. To replace an existing `yojo.yaml`, preview first, then add
 `--save --replace --expected-sha256 HEX` with the preview's `existing_sha256`; a file that changed
-in between is refused. The draft holds only the URLs and project keys you named. Aliases and
+in between is refused. Close any editor that may write `yojo.yaml` first: a change made in the
+moment between the final check and the replacement is not detected and can be lost. The draft holds only the URLs and project keys you named. Aliases and
 rules are added only when you pass them with `--policy-input` (or `--input`; see
 [Configuration](configuration.md#draft-it-with-yojo-init)), and every name in them is checked
 against live Jira. To write the file by hand instead, start from

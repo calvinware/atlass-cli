@@ -388,7 +388,7 @@
         ]
       },
       "input": null,
-      "note": "A preview: nothing is written. Add `--save` to create yojo.yaml, which never overwrites a file. To replace an existing file, add `--save --replace --expected-sha256 HEX` with the preview's `existing_sha256`. Team aliases and rules come only from `--input`.",
+      "note": "A preview: nothing is written. Add `--save` to create yojo.yaml, which never overwrites a file. To replace an existing file, add `--save --replace --expected-sha256 HEX` with the preview's `existing_sha256`, and keep other editors off the file while it is replaced. Team aliases and rules come only from `--input`.",
       "success": {
         "ok": true,
         "data": {

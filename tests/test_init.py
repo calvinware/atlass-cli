@@ -302,6 +302,43 @@ def test_explicit_policy_is_checked_live_and_merged(harness: Harness, flag: str)
     assert harness.server.writes() == []
 
 
+def boundary_policy(auto_set_value: str) -> dict[str, Any]:
+    policy: dict[str, Any] = json.loads(json.dumps(POLICY))
+    project = policy["jira"]["projects"][0]
+    project["create"]["Task"] = {"required": []}
+    project["transitions"]["finish"]["auto_set"] = {"Description": auto_set_value}
+    return policy
+
+
+def test_policy_accepts_loader_limits_through_preview_save_and_reload(
+    harness: Harness,
+) -> None:
+    policy_live(harness)
+    policy = boundary_policy("x" * 32767)
+    stdin = json.dumps(policy).encode()
+    preview = harness.run(*INIT, "--input", "-", stdin=stdin)
+    assert preview.code == 0, preview.out
+    saved = harness.run(*INIT, "--input", "-", "--save", stdin=stdin)
+    assert saved.code == 0, saved.out
+    assert saved.data["action"] == "created"
+    config = load_config(None, harness.tmp_path)
+    assert config is not None
+    assert config.jira is not None
+    project = config.jira.projects["PROJ"]
+    assert project.create_required["Task"] == ()
+    assert project.transitions["finish"].auto_set["Description"] == "x" * 32767
+
+
+def test_policy_refuses_auto_set_value_over_loader_limit(harness: Harness) -> None:
+    policy = boundary_policy("x" * 32768)
+    result = harness.run(*INIT, "--input", "-", "--save", stdin=json.dumps(policy).encode())
+    assert result.code == 2
+    assert result.error["code"] == "input_invalid"
+    assert "input schema" in result.error["message"]
+    assert not (harness.tmp_path / "yojo.yaml").exists()
+    assert harness.server.requests == []
+
+
 def test_policy_names_that_jira_does_not_have_are_refused(harness: Harness) -> None:
     policy_live(harness)
     policy = json.loads(json.dumps(POLICY))

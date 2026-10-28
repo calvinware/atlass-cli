@@ -191,6 +191,8 @@ def _publish_locked(path: Path, data: bytes, expected: bytes | None) -> None:
                     "Choose a path on a local disk that supports hard links.",
                 ) from None
         else:
+            # Not a compare-and-swap: a non-yojo writer between the comparison above and this
+            # rename loses its edit. Replacement is safe only while the file is quiet.
             try:
                 os.replace(staged, path)
             except OSError:

@@ -2,7 +2,9 @@
 
 One shared core lists every command's signature and a ``--json`` example, so an agent can act from
 the installed text alone. Each target adds only the wrapper its tool needs. The core sits between
-marker lines, so a later install replaces exactly that section and keeps everything else.
+marker lines, so a later install replaces exactly that section and keeps everything else. A
+target whose tool reads front matter gets yojo's wrapper when the file has none; existing front
+matter is kept only when it already has the keys the tool needs to find the instructions.
 """
 
 from __future__ import annotations
@@ -11,6 +13,8 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from yojo import files, retry
 from yojo.contracts import COMMANDS, CommandSpec, YojoError
@@ -82,6 +86,7 @@ class Target:
     name: str
     path: str
     header: str
+    keys: tuple[str, ...] = ()
 
 
 TARGETS: dict[str, Target] = {
@@ -90,11 +95,13 @@ TARGETS: dict[str, Target] = {
         "claude",
         ".claude/skills/yojo/SKILL.md",
         f"---\nname: yojo\ndescription: {DESCRIPTION}\n---\n\n",
+        ("name", "description"),
     ),
     "cursor": Target(
         "cursor",
         ".cursor/rules/yojo.mdc",
         f"---\ndescription: {DESCRIPTION}\nglobs:\nalwaysApply: true\n---\n\n",
+        ("description",),
     ),
     "copilot": Target("copilot", ".github/copilot-instructions.md", ""),
     "gemini": Target("gemini", "GEMINI.md", ""),
@@ -178,11 +185,56 @@ def print_data() -> dict[str, Any]:
     }
 
 
+def _bad_front_matter(path: Path, target: Target, problem: str) -> YojoError:
+    wanted = "; ".join(
+        line for line in target.header.splitlines() if line.split(":")[0] in target.keys
+    )
+    return YojoError(
+        "file_invalid",
+        f"{path} {problem}, so {target.name} would not find the yojo instructions; nothing was "
+        "written.",
+        f"Edit the front matter at the top of {path} so it is valid YAML between two `---` lines "
+        f"and has {wanted} (or remove it and yojo adds its own), then run the command again.",
+        {"path": str(path), "keys": list(target.keys)},
+    )
+
+
+def _front_matter(path: Path, existing: str, target: Target) -> bool:
+    """Whether the file already has usable front matter; refuse front matter the tool rejects."""
+    lines = existing.splitlines()
+    if not lines or lines[0].rstrip() != "---":
+        return False
+    close = next((i for i, line in enumerate(lines[1:], 1) if line.rstrip() == "---"), None)
+    if close is None:
+        raise _bad_front_matter(path, target, "has front matter with no closing `---` line")
+    try:
+        meta = yaml.safe_load("\n".join(lines[1:close]))
+    except yaml.YAMLError:
+        meta = None
+    if not isinstance(meta, dict):
+        raise _bad_front_matter(path, target, "has front matter that is not a YAML mapping")
+    missing = [
+        key for key in target.keys if not (isinstance(meta.get(key), str) and meta[key].strip())
+    ]
+    if missing:
+        raise _bad_front_matter(
+            path, target, f"has front matter without {' or '.join(f'`{k}`' for k in missing)}"
+        )
+    return True
+
+
 def merge(path: Path, existing: str | None, target: Target, text: str) -> str:
     """The file after install: the marked block replaced, or added, with all else kept."""
     if existing is None:
         return managed(target, text)
     newline = "\r\n" if "\r\n" in existing else "\n"
+    if target.keys and not _front_matter(path, existing, target):
+        header = target.header.replace("\n", newline)
+        return header + _merge_block(path, existing, newline, text)
+    return _merge_block(path, existing, newline, text)
+
+
+def _merge_block(path: Path, existing: str, newline: str, text: str) -> str:
     section = block(text).replace("\n", newline)
     lines = existing.splitlines(keepends=True)
     begins = [i for i, line in enumerate(lines) if "yojo:begin" in line]

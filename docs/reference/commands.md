@@ -37,9 +37,9 @@ Each error code, with its meaning and fix, is in the [error catalog](errors.md).
 | [`yojo schema`](#yojo-schema) | Print argument, input, success, and error JSON Schemas for a command. Offline. | no |
 | [`yojo login`](#yojo-login) | Check a personal access token (or username and password) against the service and store it in the OS keyring for that URL. Secrets come from stdin or a hidden prompt, never arguments. Bitbucket takes a token only; `all` means Jira and Confluence. | no |
 | [`yojo config check`](#yojo-config-check) | Compare yojo.yaml aliases, create rules, and transition rules with live Jira fields, projects, and statuses, and check that a configured Bitbucket answers and accepts the stored token. Read-only. | no |
-| [`yojo init`](#yojo-init) | Draft a version 1 yojo.yaml from live Jira, Confluence, and Bitbucket metadata, using the logins already stored for each URL. Shows a preview by default; --save creates the file only if it is absent, and --replace needs the current file's sha256. Team rules come only from --policy-input (or --input); nothing is inferred and no secret is written. | yes |
+| [`yojo init`](#yojo-init) | Draft a version 1 yojo.yaml from live Jira, Confluence, and Bitbucket metadata, using the logins already stored for each URL. Shows a preview by default; --save creates the file only if it is absent, and --replace needs the current file's sha256 and no other editor writing the file. Team rules come only from --policy-input (or --input); nothing is inferred and no secret is written. | yes |
 | [`yojo agent print`](#yojo-agent-print) | Print the yojo instructions for an AI agent: every command's signature and a --json example, plus the safety rules. Offline; paste the text into any chat. | no |
-| [`yojo agent install`](#yojo-agent-install) | Write the agent instructions where each tool looks for them: agents (AGENTS.md), claude (.claude/skills/yojo/SKILL.md), cursor (.cursor/rules/yojo.mdc), copilot (.github/copilot-instructions.md), gemini (GEMINI.md). Only the marked yojo section is replaced; other text is kept, and an unchanged file is not rewritten. | no |
+| [`yojo agent install`](#yojo-agent-install) | Write the agent instructions where each tool looks for them: agents (AGENTS.md), claude (.claude/skills/yojo/SKILL.md), cursor (.cursor/rules/yojo.mdc), copilot (.github/copilot-instructions.md), gemini (GEMINI.md). Only the marked yojo section is replaced; other text is kept, and an unchanged file is not rewritten. Claude and Cursor files without front matter get yojo's; front matter without the keys the tool needs is refused. | no |
 | [`yojo jira issue create`](#yojo-jira-issue-create) | Create an issue of any type. Checks the project's live create screen and any yojo.yaml rules first, and refuses with every problem listed if anything is missing; nothing is written then. | yes |
 | [`yojo jira issue get`](#yojo-jira-issue-get) | Read an issue's key, summary, status, type, assignee, and link. --fields adds more fields by name; long text is trimmed unless --full. | no |
 | [`yojo jira issue update`](#yojo-jira-issue-update) | Change fields on an issue. Checks the live edit screen first, refuses with every problem listed, then reads the issue back to confirm the new values. | yes |
@@ -618,7 +618,7 @@ Error: an alias in yojo.yaml names a field Jira does not have (a typo) ([`config
 
 ## `yojo init`
 
-Draft a version 1 yojo.yaml from live Jira, Confluence, and Bitbucket metadata, using the logins already stored for each URL. Shows a preview by default; --save creates the file only if it is absent, and --replace needs the current file's sha256. Team rules come only from --policy-input (or --input); nothing is inferred and no secret is written.
+Draft a version 1 yojo.yaml from live Jira, Confluence, and Bitbucket metadata, using the logins already stored for each URL. Shows a preview by default; --save creates the file only if it is absent, and --replace needs the current file's sha256 and no other editor writing the file. Team rules come only from --policy-input (or --input); nothing is inferred and no secret is written.
 
 ```text
 yojo init [--jira-url URL] [--project KEY...] [--confluence-url URL] [--bitbucket-url URL] [--ca-bundle PEM] [--repo PROJECT/slug...] [--policy-input FILE] [--output PATH] [--save] [--replace] [--expected-sha256 HEX] [--json]
@@ -674,7 +674,7 @@ Success `data` fields:
 yojo init --jira-url https://jira.example.test/jira --project PROJ
 ```
 
-A preview: nothing is written. Add `--save` to create yojo.yaml, which never overwrites a file. To replace an existing file, add `--save --replace --expected-sha256 HEX` with the preview's `existing_sha256`. Team aliases and rules come only from `--input`.
+A preview: nothing is written. Add `--save` to create yojo.yaml, which never overwrites a file. To replace an existing file, add `--save --replace --expected-sha256 HEX` with the preview's `existing_sha256`, and keep other editors off the file while it is replaced. Team aliases and rules come only from `--input`.
 
 Success (exit 0):
 
@@ -814,7 +814,7 @@ Error: an option the command does not take ([`usage_error`](errors.md#usage_erro
 
 ## `yojo agent install`
 
-Write the agent instructions where each tool looks for them: agents (AGENTS.md), claude (.claude/skills/yojo/SKILL.md), cursor (.cursor/rules/yojo.mdc), copilot (.github/copilot-instructions.md), gemini (GEMINI.md). Only the marked yojo section is replaced; other text is kept, and an unchanged file is not rewritten.
+Write the agent instructions where each tool looks for them: agents (AGENTS.md), claude (.claude/skills/yojo/SKILL.md), cursor (.cursor/rules/yojo.mdc), copilot (.github/copilot-instructions.md), gemini (GEMINI.md). Only the marked yojo section is replaced; other text is kept, and an unchanged file is not rewritten. Claude and Cursor files without front matter get yojo's; front matter without the keys the tool needs is refused.
 
 ```text
 yojo agent install --target TARGET... [--config PATH] [--base-url URL] [--json]

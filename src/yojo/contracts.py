@@ -375,6 +375,7 @@ NAMES: dict[str, Any] = {"type": "array", "items": NAME, "minItems": 1}
 FIELD_REF: dict[str, Any] = _obj(
     {"jira_name": NAME, "id": {"type": "string", "pattern": FIELD_ID_PATTERN}}
 ) | {"oneOf": [{"required": ["jira_name"]}, {"required": ["id"]}]}
+AUTO_SET_VALUE: dict[str, Any] = {"type": "string", "minLength": 1, "maxLength": 32767}
 ALIASES: dict[str, Any] = {
     "type": "object",
     "description": "Alias (lowercase snake_case) to {jira_name: NAME} or {id: FIELD_ID}.",
@@ -388,7 +389,7 @@ TRANSITION_RULE: dict[str, Any] = _obj(
         "pre_edit": BOOL,
         "auto_set": {
             "type": "object",
-            "additionalProperties": {"oneOf": [NAME, NAMES]},
+            "additionalProperties": {"oneOf": [AUTO_SET_VALUE, NAMES]},
         },
         "require": _arr(
             {
@@ -583,8 +584,8 @@ COMMANDS: list[CommandSpec] = [
             "Draft a version 1 yojo.yaml from live Jira, Confluence, and Bitbucket metadata, "
             "using the logins already stored for each URL. Shows a preview by default; --save "
             "creates the file only if it is absent, and --replace needs the current file's "
-            "sha256. Team rules come only from --policy-input (or --input); nothing is "
-            "inferred and no secret is written."
+            "sha256 and no other editor writing the file. Team rules come only from "
+            "--policy-input (or --input); nothing is inferred and no secret is written."
         ),
         usage=(
             "yojo init [--jira-url URL] [--project KEY]... [--confluence-url URL] "
@@ -693,7 +694,9 @@ COMMANDS: list[CommandSpec] = [
             "Write the agent instructions where each tool looks for them: agents (AGENTS.md), "
             "claude (.claude/skills/yojo/SKILL.md), cursor (.cursor/rules/yojo.mdc), copilot "
             "(.github/copilot-instructions.md), gemini (GEMINI.md). Only the marked yojo "
-            "section is replaced; other text is kept, and an unchanged file is not rewritten."
+            "section is replaced; other text is kept, and an unchanged file is not rewritten. "
+            "Claude and Cursor files without front matter get yojo's; front matter without the "
+            "keys the tool needs is refused."
         ),
         usage="yojo agent install --target agents|claude|cursor|copilot|gemini...",
         example="yojo --json agent install --target agents --target claude",

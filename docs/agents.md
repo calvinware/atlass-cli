@@ -16,9 +16,12 @@ act from it without calling `commands`, `schema`, or `--help`.
 
 Only the lines between `<!-- yojo:begin ... -->` and `<!-- yojo:end -->` belong to `yojo`. A new
 install adds that section, a later one replaces it, and the rest of the file is kept byte for
-byte. An unchanged file is not rewritten. Every target file is read and checked before any is
-written, so missing or repeated markers, a symbolic link, or an unreadable file stops the call
-with nothing written. Each file is then replaced atomically on its own, not as a set: if a file
+byte. An unchanged file is not rewritten. Claude and Cursor only find a skill or rule through
+its front matter (`name` and `description` for Claude, `description` for Cursor), so an existing
+file without front matter gets `yojo`'s wrapper added at the top, and existing front matter with
+those keys is kept as it is. Every target file is read and checked before any is written, so
+missing or repeated markers, front matter that is unclosed, not YAML, or missing a needed key, a
+symbolic link, or an unreadable file stops the call with nothing written. Each file is then replaced atomically on its own, not as a set: if a file
 changes before its final comparison, that file is refused, and when earlier targets in the same
 call were already written the error says so and lists them in `details.written`. Review those
 files; running the same command again reports them `unchanged` and retries the rest. Close

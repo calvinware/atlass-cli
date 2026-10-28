@@ -240,6 +240,70 @@ def test_target_wrappers_are_valid(harness: Harness) -> None:
     assert rule["description"]
 
 
+WRAPPED = [("claude", ".claude/skills/yojo/SKILL.md"), ("cursor", ".cursor/rules/yojo.mdc")]
+
+
+@pytest.mark.parametrize(("target", "name"), WRAPPED)
+def test_existing_file_without_front_matter_gets_the_wrapper(
+    harness: Harness, target: str, name: str
+) -> None:
+    path = harness.tmp_path / name
+    path.parent.mkdir(parents=True)
+    path.write_text(AGENTS_MD)
+    assert install(harness, target).data["files"][0]["action"] == "updated"
+    text = path.read_text()
+    assert text.startswith(agents.TARGETS[target].header + AGENTS_MD)
+    meta = frontmatter(text)
+    assert all(meta[key] for key in agents.TARGETS[target].keys)
+    assert install(harness, target).data["files"][0]["action"] == "unchanged"
+
+
+@pytest.mark.parametrize(("target", "name"), WRAPPED)
+def test_existing_valid_front_matter_is_kept(harness: Harness, target: str, name: str) -> None:
+    path = harness.tmp_path / name
+    path.parent.mkdir(parents=True)
+    original = "---\nname: yojo\ndescription: Team's own wording.\n---\n\n" + AGENTS_MD
+    path.write_text(original)
+    assert install(harness, target).data["files"][0]["action"] == "updated"
+    assert path.read_text().startswith(original + "\n" + agents.BEGIN + "\n")
+
+
+@pytest.mark.parametrize(("target", "name"), WRAPPED)
+@pytest.mark.parametrize(
+    "text",
+    [
+        "---\nname: yojo\ndescription: Unclosed.\n\n" + AGENTS_MD,
+        "---\n[not, a, mapping]\n---\n" + AGENTS_MD,
+        "---\nname: yojo\ndescription: [unbalanced\n---\n" + AGENTS_MD,
+        "---\nname: yojo\nglobs:\n---\n" + AGENTS_MD,
+        "---\nname: yojo\ndescription: '  '\n---\n" + AGENTS_MD,
+    ],
+)
+def test_unusable_front_matter_is_refused_and_nothing_is_written(
+    harness: Harness, target: str, name: str, text: str
+) -> None:
+    path = harness.tmp_path / name
+    path.parent.mkdir(parents=True)
+    path.write_text(text)
+    result = install(harness, "agents", target)
+    assert result.code == 2
+    assert result.error["code"] == "file_invalid"
+    assert "nothing was written" in result.error["message"]
+    assert "description: " in result.error["fix"]
+    assert path.read_text() == text
+    assert not (harness.tmp_path / "AGENTS.md").exists()
+
+
+def test_claude_front_matter_needs_a_name(harness: Harness) -> None:
+    path = harness.tmp_path / ".claude/skills/yojo/SKILL.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("---\ndescription: Team notes.\n---\n")
+    result = install(harness, "claude")
+    assert result.error["code"] == "file_invalid"
+    assert "`name`" in result.error["message"]
+    assert "name: yojo" in result.error["fix"]
+
+
 def test_repeated_target_is_installed_once(harness: Harness) -> None:
     result = install(harness, "agents", "agents")
     assert [r["target"] for r in result.data["files"]] == ["agents"]

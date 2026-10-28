@@ -2,8 +2,10 @@
 
 The draft holds only what the caller named (service URLs, project keys) and any team policy given
 as ``--input``. Every selection is confirmed against the live service with the stored login before
-anything is written, and the file is saved only by explicit request, never over a file that
-changed since its preview. No credential ever enters the draft.
+anything is written, and the file is saved only by explicit request. A replacement is refused when
+the file no longer matches its preview, but the final comparison and the rename are separate steps
+(see ``yojo.files``): the file must be quiet, with no other editor writing it, while it is replaced.
+No credential ever enters the draft.
 """
 
 from __future__ import annotations

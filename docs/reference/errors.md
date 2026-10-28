@@ -85,19 +85,21 @@
 
 ### `file_invalid`
 
-**Exit 2.** A local file cannot be used. For `jira attachment add`, the `--file` does not exist, is not a regular file, cannot be opened, was replaced between the check and the open, or changed while `yojo` was reading it. For `init` and `agent install`, the destination or a folder on its path is a symbolic link, is not a regular file, is not UTF-8, or cannot be read or written. Nothing was sent or written.
+**Exit 2.** A local file cannot be used. For `jira attachment add`, the `--file` does not exist, is not a regular file, cannot be opened, was replaced between the check and the open, or changed while `yojo` was reading it. For `init` and `agent install`, the destination or a folder on its path is a symbolic link, is not a regular file, is not UTF-8, or cannot be read or written, or a Claude skill or Cursor rule has front matter that is unclosed, is not a YAML mapping, or lacks the keys the tool needs (`name` and `description` for Claude, `description` for Cursor). The failed file is unchanged. For `agent install` with several `--target`s, earlier targets may already have been written; they are listed in `details.written`, and when it is absent nothing was written.
 
-**Fix:** Pass the path of an existing, readable regular file (relative paths resolve from the current directory), or replace the symbolic link with a real file or folder. If the file was replaced or changed, wait until it is fully written, then retry.
+**Fix:** Follow `error.fix`. Pass the path of an existing, readable regular file (relative paths resolve from the current directory), or replace the symbolic link with a real file or folder. For front matter, make it valid YAML between two `---` lines with the keys named in `error.fix`, or remove it so `yojo` adds its own. If the file was replaced or changed, wait until it is fully written, then retry. After a partial `agent install`, review each file in `details.written`, then run the same command again: written files report `unchanged` and only the failed target is retried.
+
+**Details:** `details.path` is the failed file. For `agent install`, `details.target` names the failed target and `details.written` lists files already written in the same call, each with `path` and `action`; `details.keys` lists required front matter keys.
 
 **Returned by:** [`yojo init`](commands.md#yojo-init), [`yojo agent install`](commands.md#yojo-agent-install), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add).
 
 ### `file_conflict`
 
-**Exit 2.** A local file `yojo` would write is not in the expected state, so nothing was written: `init --save` found an existing file that differs from the draft, `--expected-sha256` does not match the current file, the file changed or appeared while `yojo` was writing, another `yojo` holds the write lock, or a file has missing, repeated, or out-of-order `yojo:begin`/`yojo:end` marker lines.
+**Exit 2.** A local file `yojo` would write is not in the expected state, so that file was left unchanged: `init --save` found an existing file that differs from the draft, `--expected-sha256` does not match the current file, the file changed or appeared while `yojo` was writing, another `yojo` holds the write lock, or a file has missing, repeated, or out-of-order `yojo:begin`/`yojo:end` marker lines. For `agent install` with several `--target`s, earlier targets may already have been written; they are listed in `details.written`, and when it is absent nothing was written.
 
-**Fix:** Follow `error.fix`. For `init`, review the preview, then replace with `--save --replace --expected-sha256 HEX` using the preview's `existing_sha256`. For markers, leave one `<!-- yojo:begin ... -->` line before one `<!-- yojo:end -->` line, or remove both.
+**Fix:** Follow `error.fix`. For `init`, review the preview, then replace with `--save --replace --expected-sha256 HEX` using the preview's `existing_sha256`. For markers, leave one `<!-- yojo:begin ... -->` line before one `<!-- yojo:end -->` line, or remove both. After a partial `agent install`, review each file in `details.written`, then run the same command again: written files report `unchanged` and only the failed target is retried.
 
-**Details:** `details.path` is the file. For `init`, `details.existing_sha256` is the current file's digest.
+**Details:** `details.path` is the failed file. For `init`, `details.existing_sha256` is the current file's digest. For `agent install`, `details.target` names the failed target and `details.written` lists files already written in the same call, each with `path` and `action`.
 
 **Returned by:** [`yojo init`](commands.md#yojo-init), [`yojo agent install`](commands.md#yojo-agent-install).
 
