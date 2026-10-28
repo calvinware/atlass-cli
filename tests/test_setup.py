@@ -1248,6 +1248,30 @@ def test_real_project_picker_change_invalidates_saved_preview_and_try(tmp_path: 
     world.drive(scenario, app)
 
 
+def test_leaving_after_a_connection_change_reports_the_earlier_save(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await _save_and_continue(pilot)
+        assert app.saved_snapshot_current()
+        await pilot.press("ctrl+b", "ctrl+b", "ctrl+b", "ctrl+b", "ctrl+b")
+        assert app.step == 1
+        app.query_one("#url-jira", Input).value = "https://new.example.test/jira"
+        await pilot.pause()
+        assert app.draft.saved is not None
+        assert not app.saved_snapshot_current()
+        app.finish("cancelled")
+
+    world.drive(scenario, app)
+    result = app.return_value
+    assert result is not None
+    assert result["status"] == "cancelled"
+    assert result["config"]["path"] == str(tmp_path / "yojo.yaml")
+    assert any("Later choices were not saved" in note for note in result["notes"])
+    assert any("review and save later choices" in step for step in result["next"])
+
+
 def test_edit_during_save_keeps_earlier_file_from_completing_setup(tmp_path: Path) -> None:
     world = World(tmp_path)
     app = _ready(world)

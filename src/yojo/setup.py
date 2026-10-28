@@ -241,9 +241,6 @@ class Draft:
             self.rules.clear()
         if service == "bitbucket":
             self.repos.clear()
-        self.saved = None
-        self.saved_data = None
-        self.saved_revision = None
         self.touch()
 
     def policy(self) -> dict[str, Any] | None:
@@ -1981,6 +1978,8 @@ class SetupApp(App[dict[str, Any]]):
             if self.draft.saved
             else "yojo.yaml was not changed."
         ]
+        if self.draft.saved and not self.saved_snapshot_current():
+            lines.append("Later choices were not saved. Run `yojo setup` to review them.")
         if self.draft.stored:
             names = ", ".join(LABELS[s] for s in self.draft.stored)
             lines.append(
@@ -2007,7 +2006,10 @@ class SetupApp(App[dict[str, Any]]):
             steps.append(retry.posix([retry.PROGRAM, "--json", "config", "check", *config]))
         else:
             steps.append("yojo setup  (to save yojo.yaml later)")
-        steps.append(retry.posix(self.services.try_argv(self.draft)))
+        if self.draft.saved is not None and not self.saved_snapshot_current():
+            steps.append("yojo setup  (review and save later choices)")
+        else:
+            steps.append(retry.posix(self.services.try_argv(self.draft)))
         if not self.draft.agent_files:
             steps.append("yojo --json agent install --target agents")
         steps.append("yojo commands")
