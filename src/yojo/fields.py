@@ -334,6 +334,16 @@ def coerce(meta: FieldMeta, value: Any, users: UserLookup) -> Any:
         return _pick_option(meta, _as_text(meta, value).strip())
     if kind == "number":
         return _number(meta, value)
+    if kind == "boolean":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().casefold() in ("true", "false"):
+            return value.strip().casefold() == "true"
+        raise FieldProblem(
+            f"{meta.name} needs true or false.",
+            f"Pass --set '{meta.name}=true' or --set '{meta.name}=false'.",
+            {"field_id": meta.id},
+        )
     if kind == "string":
         if meta.allowed_values:
             raise _unsupported(meta)

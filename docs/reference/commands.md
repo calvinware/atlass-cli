@@ -633,7 +633,7 @@ A JSON object from `--input PATH`, or from stdin with `--input -`. Unknown prope
 | `type` | string | no | min length 1; max length 255 |
 | `summary` | string | no | min length 1; max length 255 |
 | `description` | string | no | max length 32767 |
-| `fields` | object (field name to string or number or array of strings) | no | Field values keyed like --set NAME; same value forms, lists as arrays. |
+| `fields` | object (field name to string or number or boolean or array of strings) | no | Field values keyed like --set NAME; same value forms, lists as arrays. |
 
 **Output**
 
@@ -896,7 +896,7 @@ A JSON object from `--input PATH`, or from stdin with `--input -`. Unknown prope
 |---|---|---|---|
 | `summary` | string | no | min length 1; max length 255 |
 | `description` | string | no | max length 32767 |
-| `fields` | object (field name to string or number or array of strings) | no | Field values keyed like --set NAME; same value forms, lists as arrays. |
+| `fields` | object (field name to string or number or boolean or array of strings) | no | Field values keyed like --set NAME; same value forms, lists as arrays. |
 
 **Output**
 
@@ -1263,7 +1263,7 @@ A JSON object from `--input PATH`, or from stdin with `--input -`. Unknown prope
 
 | Property | Type | Required | Notes |
 |---|---|---|---|
-| `fields` | object (field name to string or number or array of strings) | no | Field values keyed like --set NAME; same value forms, lists as arrays. |
+| `fields` | object (field name to string or number or boolean or array of strings) | no | Field values keyed like --set NAME; same value forms, lists as arrays. |
 
 **Output**
 

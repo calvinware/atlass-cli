@@ -56,8 +56,9 @@ want to look before moving an issue, but it is never needed.
 Writes take flags first. Repeat `--set NAME=VALUE` for any field. The text is split at the first
 `=`. NAME is the field name shown in Jira, a `yojo.yaml` alias, or a raw ID such as
 `customfield_10002`, in any case. VALUE is plain text: a number, an option label, a person's
-username, display name, or email, an issue key, or a comma-separated list. `--input -` takes the
-same values as JSON for long or structured bodies. Ambiguous names fail with the candidates listed.
+username, display name, or email, an issue key, true/false for a boolean field, or a
+comma-separated list. `--input -` takes the same values as JSON for long or structured bodies.
+Ambiguous names fail with the candidates listed.
 A near miss fails with "Did you mean ...?", and the suggestion is applied in `details.retry`, never
 silently.
 

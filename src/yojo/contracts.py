@@ -262,7 +262,8 @@ SET_ITEM: dict[str, Any] = {
     "pattern": "^[^=]+=",
     "description": (
         "NAME=VALUE, split at the first '='. NAME is the field name shown in Jira, a yojo.yaml "
-        "alias, or a raw ID such as customfield_10002 (any case). VALUE is plain text: a number; "
+        "alias, or a raw ID such as customfield_10002 (any case). VALUE is plain text: a number "
+        "or true/false for a boolean field; "
         "an option, priority, resolution, version, or component label; a person's username, "
         "display name, or email; an issue key for link fields; or a comma-separated list for "
         "multi-value fields."
@@ -273,6 +274,7 @@ FIELD_VALUE: dict[str, Any] = {
     "oneOf": [
         {"type": "string", "maxLength": 32767},
         {"type": "number"},
+        BOOL,
         {"type": "array", "items": STR, "maxItems": 100},
     ]
 }

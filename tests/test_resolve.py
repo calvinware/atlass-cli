@@ -79,6 +79,10 @@ def test_field_resolution_order_id_alias_name() -> None:
     [
         ({"type": "number"}, {}, "3", 3),
         ({"type": "number"}, {}, "2.5", 2.5),
+        ({"type": "boolean"}, {}, "TRUE", True),
+        ({"type": "boolean"}, {}, " false ", False),
+        ({"type": "boolean"}, {}, True, True),
+        ({"type": "boolean"}, {}, False, False),
         ({"type": "string"}, {}, "  keep spaces ", "  keep spaces "),
         ({"type": "date"}, {}, "2026-10-24", "2026-10-24"),
         ({"type": "array", "items": "string"}, {}, "a, b,,c", ["a", "b", "c"]),
@@ -108,6 +112,8 @@ def test_coerce_plain_text_values(
     ("schema", "given"),
     [
         ({"type": "number"}, "three"),
+        ({"type": "boolean"}, "yes"),
+        ({"type": "boolean"}, 1),
         ({"type": "date"}, "24/10/2026"),
         ({"type": "attachment"}, "x"),
         ({"type": "any", "custom": "com.example:unknown-type"}, "x"),

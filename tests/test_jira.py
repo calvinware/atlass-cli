@@ -147,6 +147,35 @@ def test_create_with_input_document(harness: Harness) -> None:
     assert fields["customfield_10500"] == {"id": "22"}
 
 
+def test_create_boolean_field_from_input_document(harness: Harness) -> None:
+    meta = fixture("createmeta_bug_fields.json")
+    meta["values"].append(
+        {
+            "fieldId": "customfield_20000",
+            "name": "Customer visible",
+            "required": False,
+            "hasDefaultValue": False,
+            "operations": ["set"],
+            "schema": {"type": "boolean"},
+        }
+    )
+    meta["total"] += 1
+    setup_create(harness, bug_fields=meta)
+    doc = {
+        "project": "EXAMPLE",
+        "type": "Bug",
+        "summary": "Boolean field",
+        "fields": {
+            "Severity": "Major",
+            "Environment": "CI",
+            "Customer visible": False,
+        },
+    }
+    result = harness.run("jira", "issue", "create", "--input", "-", stdin=json.dumps(doc).encode())
+    assert result.code == 0, result.out
+    assert body_of(harness.server.writes()[0])["fields"]["customfield_20000"] is False
+
+
 def test_create_reports_every_missing_field_at_once(harness: Harness) -> None:
     setup_create(harness)
     argv = ["jira", "issue", "create", "EXAMPLE", "--type", "Bug", "--summary", "x"]
