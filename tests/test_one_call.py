@@ -365,6 +365,40 @@ REMOTE_WRITES = {
 }
 # Discovery output, the agent text, and a config draft are not ordinary compact reads.
 UNBUDGETED = {"commands", "schema", "agent print", "init"}
+BB_REF = {"repository": {"slug": "web", "project": {"key": "PROJ"}}}
+# The one write each representative example must send: method, path, query, and JSON body.
+EXPECTED_WRITES: dict[str, tuple[str, str, dict[str, str], Any]] = {
+    "jira issue create": (
+        "POST",
+        jira_path("/rest/api/2/issue"),
+        {},
+        {
+            "fields": {
+                "customfield_10002": 3,
+                "priority": {"id": "2"},
+                "project": {"key": "PROJ"},
+                "issuetype": {"id": "10002"},
+                "summary": "Login fails on Safari",
+            }
+        },
+    ),
+    "jira issue update": (
+        "PUT",
+        jira_path("/rest/api/2/issue/PROJ-123"),
+        {},
+        {"fields": {"customfield_10002": 5, "assignee": {"name": "example-user"}}},
+    ),
+    "bitbucket pr create": (
+        "POST",
+        bitbucket_path("/projects/PROJ/repos/web/pull-requests"),
+        {},
+        {
+            "title": "Fix login on Safari",
+            "fromRef": {"id": "refs/heads/feature/login", **BB_REF},
+            "toRef": {"id": "refs/heads/main", **BB_REF},
+        },
+    ),
+}
 PROJ_123 = jira_path("/rest/api/2/issue/PROJ-123")
 BB_REPO = bitbucket_path("/projects/PROJ/repos/web")
 BB_PR = BB_REPO + "/pull-requests/42"
@@ -640,6 +674,11 @@ def test_every_example_succeeds_in_one_call(harness: Harness, path: str) -> None
         assert (harness.tmp_path / "AGENTS.md").is_file()
     writes = harness.server.writes()
     assert len(writes) == (1 if path in REMOTE_WRITES else 0), [w.url.path for w in writes]
+    if path in EXPECTED_WRITES:
+        method, url_path, query, body = EXPECTED_WRITES[path]
+        sent = writes[0]
+        assert (sent.method, sent.url.path, dict(sent.url.params)) == (method, url_path, query)
+        assert json.loads(sent.content) == body
     if path in REMOTE_WRITES:
         assert result.nbytes <= WRITE_BUDGET, (path, result.nbytes)
     elif path not in UNBUDGETED:
@@ -651,3 +690,60 @@ def test_every_example_succeeds_in_one_call(harness: Harness, path: str) -> None
         BITBUCKET_TOKEN,
     ):
         assert secret not in result.stdout
+
+
+def test_setup_steps_run_non_interactively_from_an_empty_directory(harness: Harness) -> None:
+    """The getting-started table, one command per step, saving to a non-default path."""
+    assert list(harness.tmp_path.iterdir()) == []
+    jira_url = "https://jira.example.test/jira"
+    base = ["init", "--jira-url", jira_url]
+    policy = harness.tmp_path / "policy.json"
+    project = jira_path("/rest/api/2/project/PROJ")
+    statuses = [{"name": "Bug", "statuses": [{"name": n} for n in ("To Do", "Done")]}]
+    harness.server.add("GET", jira_path("/rest/api/2/myself"), {"name": "example-user"})
+    harness.server.add("GET", project, fixture("jira_project.json"))
+    harness.server.add("GET", FIELDS, fixture("fields.json"))
+    harness.server.add("GET", project + "/statuses", statuses)
+    harness.server.add(
+        "GET",
+        jira_path("/rest/api/2/issue/createmeta/PROJ/issuetypes"),
+        fixture("createmeta_issuetypes.json"),
+    )
+    row = {"id": "1", "key": "PROJ-1", "fields": {"summary": "a", "status": {"name": "To Do"}}}
+    search = {"startAt": 0, "maxResults": 5, "total": 1, "issues": [row]}
+    harness.server.add("GET", jira_path("/rest/api/2/search"), search)
+
+    # 1. Connect: without a login, init stops with the login command for a human.
+    connect = harness.run(*base)
+    assert connect.error["code"] == "auth_missing"
+    assert f"yojo login --service jira --base-url {jira_url}" in connect.error["fix"]
+    # 2. Log in (a person at a terminal; the token goes to the keyring only).
+    login = harness.run(
+        "login", "--service", "jira", "--base-url", jira_url, tty=True, hidden=[JIRA_TOKEN]
+    )
+    assert login.code == 0, login.out
+    # 3. Choose projects.
+    chosen = harness.run(*base, "--project", "PROJ")
+    assert chosen.data["projects"] == [{"key": "PROJ", "name": "Example Project"}]
+    # 4. Map fields and rules, checked against live Jira.
+    policy.write_text(json.dumps({"jira": {"fields": {"points": {"jira_name": "Story Points"}}}}))
+    mapped = [*base, "--project", "PROJ", "--policy-input", "policy.json"]
+    preview = harness.run(*mapped, "--output", "config/team.yaml")
+    assert preview.data["action"] == "preview"
+    # 5. Review and save, exactly as the preview says.
+    (save_step,) = preview.data["next"]
+    saved = harness.run(*shlex.split(save_step)[1:])
+    assert saved.data["action"] == "created", saved.out
+    config = harness.tmp_path / "config" / "team.yaml"
+    assert config.read_text() == preview.data["yaml"]
+    assert not (harness.tmp_path / "yojo.yaml").exists()
+    # 6 and 7. Check, connect the agent, and try one read, from the same directory.
+    check, agent, read = saved.data["next"]
+    assert "agent install" in agent
+    for step in (check, agent, read):
+        ran = harness.run(*shlex.split(step)[1:])
+        assert ran.code == 0, (step, ran.out)
+    assert (harness.tmp_path / "AGENTS.md").is_file()
+    assert harness.server.paths("GET")[-1] == jira_path("/rest/api/2/search")
+    assert harness.server.writes() == []
+    assert JIRA_TOKEN not in config.read_text()

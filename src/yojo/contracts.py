@@ -653,6 +653,7 @@ COMMANDS: list[CommandSpec] = [
                 "repos": _arr(_obj({"repo": STR, "name": STR}, ["repo", "name"])),
                 "notes": _arr(STR),
                 "next": _arr(STR),
+                "content_trust": {"const": "untrusted"},
             },
             [
                 "action",
@@ -665,6 +666,7 @@ COMMANDS: list[CommandSpec] = [
                 "repos",
                 "notes",
                 "next",
+                "content_trust",
             ],
         ),
         errors=INIT_ERRORS,

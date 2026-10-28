@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import math
+import re
 import shlex
 from pathlib import Path
 from typing import Any
@@ -81,6 +83,77 @@ def test_signature_names_every_parser_flag_and_example_parses(path: str) -> None
     assert argv[:2] == ["yojo", "--json"], path
     parsed: argparse.Namespace = build_parser().parse_args(argv[1:])
     assert parsed.command == path
+
+
+SIGNATURE_TOKEN = re.compile(r"'[^']*'|\.\.\.|[\[\]()]|[^\s\[\]()']+")
+
+
+def signature_tokens(usage: str) -> list[str]:
+    tokens: list[str] = []
+    for token in SIGNATURE_TOKEN.findall(usage):
+        if token.endswith("...") and token != "...":
+            tokens += [token[:-3], "..."]
+        else:
+            tokens.append(token)
+    return tokens
+
+
+def is_value_form(token: str | None) -> bool:
+    return token is not None and token not in "[]()|..." and not token.startswith("-")
+
+
+def after_group(tokens: list[str], i: int) -> str | None:
+    """The token after ``tokens[i]``, stepping out of any brackets that close right after it."""
+    i += 1
+    while i < len(tokens) and tokens[i] in ("]", ")"):
+        i += 1
+    return tokens[i] if i < len(tokens) else None
+
+
+@pytest.mark.parametrize("path", list(COMMANDS_BY_PATH))
+def test_signature_matches_parser_forms(path: str) -> None:
+    spec = COMMANDS_BY_PATH[path]
+    leaf = leaf_parsers(build_parser())[path]
+    tokens = signature_tokens(spec.usage)
+    assert tokens[: len(path.split()) + 1] == ["yojo", *path.split()], path
+    body = tokens[len(path.split()) + 1 :]
+    grouped = {id(a) for g in leaf._mutually_exclusive_groups for a in g._group_actions}
+    positionals = [a for a in leaf._actions if not a.option_strings]
+    leading = list(itertools.takewhile(lambda t: not t.startswith("-") and t not in "[(", body))
+    names = [t for t in leading if t != "..."]
+    assert names == [
+        a.metavar if isinstance(a.metavar, str) else a.dest.upper() for a in positionals
+    ], f"{path}: positional names"
+    for action in positionals:
+        if action.nargs == "?":
+            from_input = action.dest in (spec.input or {}).get("properties", {})
+            assert from_input, f"{path}: optional {action.dest} shown as required"
+        repeated = action.nargs in ("+", "*")
+        i = body.index(names[positionals.index(action)])
+        assert (after_group(body, i) == "...") == repeated, f"{path}: {action.dest} repetition"
+    for action in leaf._actions:
+        if not action.option_strings or action.option_strings[0] in GLOBAL_FLAGS | {"-h"}:
+            continue
+        flag = action.option_strings[0]
+        assert body.count(flag) == 1, f"{path}: {flag} must appear once"
+        i = body.index(flag)
+        depth = sum(1 if t == "[" else -1 if t == "]" else 0 for t in body[:i])
+        if action.required:
+            assert depth == 0, f"{path}: required {flag} is bracketed"
+        elif depth == 0:
+            in_required_group = id(action) in grouped and body[:i].count("(") > body[:i].count(")")
+            from_input = action.dest in (spec.input or {}).get("properties", {})
+            assert in_required_group or from_input, f"{path}: {flag} shown required"
+        value = body[i + 1] if i + 1 < len(body) else None
+        if action.nargs == 0:
+            assert not is_value_form(value), f"{path}: {flag} takes no value"
+            continue
+        assert is_value_form(value), f"{path}: {flag} needs a value form"
+        assert value is not None
+        if action.choices is not None:
+            assert value.split("|") == list(action.choices), f"{path}: {flag} choices"
+        repeated = isinstance(action, argparse._AppendAction)
+        assert (after_group(body, i + 1) == "...") == repeated, f"{path}: {flag} repetition"
 
 
 def test_core_stands_alone_and_carries_the_safety_rules() -> None:
@@ -260,6 +333,65 @@ def test_a_concurrent_edit_is_refused(harness: Harness, monkeypatch: pytest.Monk
     assert result.error["code"] == "file_conflict"
     assert path.read_text() == "edited meanwhile\n"
     assert sorted(p.name for p in harness.tmp_path.iterdir()) == ["AGENTS.md"]
+
+
+def test_a_later_target_failing_reports_the_files_already_written(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gemini = harness.tmp_path / "GEMINI.md"
+    gemini.write_text(AGENTS_MD)
+    real_stage = files._stage
+
+    def racing_stage(dest: Path, data: bytes, mode: int) -> Path:
+        staged = real_stage(dest, data, mode)
+        if dest == gemini:
+            dest.write_text("edited meanwhile\n")
+        return staged
+
+    monkeypatch.setattr(files, "_stage", racing_stage)
+    result = install(harness, "agents", "gemini")
+    assert result.code == 2
+    error = result.error
+    assert error["code"] == "file_conflict"
+    assert "nothing was written" not in error["message"].lower()
+    assert "AGENTS.md (created)" in error["message"]
+    assert "GEMINI.md was not written" in error["message"]
+    assert error["details"]["target"] == "gemini"
+    assert [(r["target"], r["action"]) for r in error["details"]["written"]] == [
+        ("agents", "created")
+    ]
+    assert "yojo --json agent install --target agents --target gemini" in error["fix"]
+    assert (harness.tmp_path / "AGENTS.md").read_text().startswith(agents.BEGIN)
+    assert gemini.read_text() == "edited meanwhile\n"
+
+    monkeypatch.setattr(files, "_stage", real_stage)
+    again = install(harness, "agents", "gemini")
+    assert [(r["target"], r["action"]) for r in again.data["files"]] == [
+        ("agents", "unchanged"),
+        ("gemini", "updated"),
+    ]
+
+
+def test_a_failing_first_target_still_writes_nothing(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (harness.tmp_path / "AGENTS.md").write_text(
+        agents.managed(agents.TARGETS["agents"], agents.core())
+    )
+    gemini = harness.tmp_path / "GEMINI.md"
+    gemini.write_text(AGENTS_MD)
+    real_stage = files._stage
+
+    def racing_stage(dest: Path, data: bytes, mode: int) -> Path:
+        staged = real_stage(dest, data, mode)
+        dest.write_text("edited meanwhile\n")
+        return staged
+
+    monkeypatch.setattr(files, "_stage", racing_stage)
+    error = install(harness, "agents", "gemini").error
+    assert error["code"] == "file_conflict"
+    assert "nothing was written" in error["message"]
+    assert "written" not in error["details"]
 
 
 def test_non_utf8_file_is_refused(harness: Harness) -> None:

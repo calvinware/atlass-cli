@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import stat
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from tests.conftest import (
     JIRA,
     JIRA_TOKEN,
     Harness,
+    backticked,
     bitbucket_path,
     confluence_path,
     fixture,
@@ -120,6 +122,7 @@ def test_preview_drafts_only_what_was_named(harness: Harness) -> None:
     ]
     assert data["projects"] == [{"key": "PROJ", "name": "Example Project"}]
     assert data["next"] == [f"yojo --json init --jira-url {JIRA} --project PROJ --save"]
+    assert data["content_trust"] == "untrusted"
     assert not (harness.tmp_path / "yojo.yaml").exists()
     assert harness.server.writes() == []
     no_tokens(result.stdout)
@@ -160,11 +163,27 @@ def test_missing_custom_ca_bundle_fails_before_network_or_save(harness: Harness)
 
 
 def test_custom_ca_missing_login_fix_keeps_the_ca_option(harness: Harness) -> None:
-    (harness.tmp_path / "team-ca.pem").write_text("example CA fixture")
+    bundle = harness.tmp_path / "team-ca.pem"
+    bundle.write_text("example CA fixture")
     result = harness.run(*INIT, "--ca-bundle", "team-ca.pem")
     assert result.error["code"] == "auth_missing"
     assert "yojo --json login --service jira" in result.error["fix"]
-    assert "--ca-bundle team-ca.pem" in result.error["fix"]
+    assert f"--ca-bundle {bundle}" in result.error["fix"]
+
+
+def test_custom_ca_login_fix_names_the_bundle_init_validated(harness: Harness) -> None:
+    bundle = harness.tmp_path / "config" / "certs" / "team-ca.pem"
+    bundle.parent.mkdir(parents=True)
+    bundle.write_text("example CA fixture")
+    argv = [*INIT, "--ca-bundle", "certs/team-ca.pem", "--output", "config/yojo.yaml"]
+    result = harness.run(*argv)
+    assert result.error["code"] == "auth_missing"
+    login = backticked(result.error["fix"], "yojo --json login")
+    assert len(login) == 1
+    args = shlex.split(login[0])
+    assert args[args.index("--ca-bundle") + 1] == str(bundle)
+    assert not (harness.tmp_path / "certs").exists()
+    assert harness.server.requests == []
 
 
 def test_preview_checks_every_service_and_reports_repos_without_saving_them(
@@ -393,8 +412,32 @@ def test_output_path_is_relative_to_the_current_directory(harness: Harness) -> N
     jira_live(harness)
     result = harness.run(*INIT, "--save", "--output", "config/team.yaml")
     assert result.data["action"] == "created"
-    parse_config_file(harness.tmp_path / "config" / "team.yaml")
-    assert result.data["next"][0] == "yojo --json config check"
+    saved = harness.tmp_path / "config" / "team.yaml"
+    parse_config_file(saved)
+    check, install, read = result.data["next"]
+    assert check == f"yojo --json config check --config {saved}"
+    assert install == "yojo --json agent install --target agents"
+    assert read.endswith(f"--limit 5 --config {saved}")
+
+
+def test_next_steps_after_a_custom_output_run_from_the_same_directory(harness: Harness) -> None:
+    jira_live(harness)
+    harness.server.add("GET", FIELDS, fixture("fields.json"))
+    harness.server.add("GET", STATUSES, [{"name": "Bug", "statuses": [{"name": "To Do"}]}])
+    row = {"id": "1", "key": "PROJ-1", "fields": {"summary": "a", "status": {"name": "To Do"}}}
+    search = {"startAt": 0, "maxResults": 5, "total": 1, "issues": [row]}
+    harness.server.add("GET", jira_path("/rest/api/2/search"), search)
+    result = harness.run(*INIT, "--save", "--output", "config/team.yaml")
+    assert result.data["action"] == "created"
+    assert not (harness.tmp_path / "yojo.yaml").exists()
+    for step in result.data["next"]:
+        argv = shlex.split(step)
+        assert argv[:2] == ["yojo", "--json"]
+        ran = harness.run(*argv[1:])
+        assert ran.code == 0, (step, ran.out)
+    assert (harness.tmp_path / "AGENTS.md").is_file()
+    assert harness.server.paths("GET")[-1] == jira_path("/rest/api/2/search")
+    assert harness.server.writes() == []
 
 
 def test_save_never_overwrites_a_different_file(harness: Harness) -> None:

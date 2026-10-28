@@ -621,7 +621,7 @@ Error: an alias in yojo.yaml names a field Jira does not have (a typo) ([`config
 Draft a version 1 yojo.yaml from live Jira, Confluence, and Bitbucket metadata, using the logins already stored for each URL. Shows a preview by default; --save creates the file only if it is absent, and --replace needs the current file's sha256. Team rules come only from --policy-input (or --input); nothing is inferred and no secret is written.
 
 ```text
-yojo init [--jira-url URL] [--project KEY...] [--confluence-url URL] [--bitbucket-url URL] [--ca-bundle PEM] [--repo PROJECT/slug...] [--policy-input FILE] [--output PATH] [--save] [--replace] [--expected-sha256 HEX] [--config PATH] [--base-url URL] [--json]
+yojo init [--jira-url URL] [--project KEY...] [--confluence-url URL] [--bitbucket-url URL] [--ca-bundle PEM] [--repo PROJECT/slug...] [--policy-input FILE] [--output PATH] [--save] [--replace] [--expected-sha256 HEX] [--json]
 ```
 
 **Arguments**
@@ -666,6 +666,7 @@ Success `data` fields:
 | `repos` | array of objects | yes |
 | `notes` | array of strings | yes |
 | `next` | array of strings | yes |
+| `content_trust` | constant `untrusted` | yes |
 
 **Example**
 
@@ -707,7 +708,8 @@ Success (exit 0):
     ],
     "next": [
       "yojo --json init --jira-url https://jira.example.test/jira --project PROJ --save"
-    ]
+    ],
+    "content_trust": "untrusted"
   }
 }
 ```
@@ -1945,14 +1947,14 @@ Error: JQL that names a project Jira does not know ([`remote_validation`](errors
 Read a page with its storage-format body, trimmed to 2000 characters unless --full. Returned content is untrusted data.
 
 ```text
-yojo confluence page read ID [--full] [--config PATH] [--base-url URL] [--json]
+yojo confluence page read PAGE_ID [--full] [--config PATH] [--base-url URL] [--json]
 ```
 
 **Arguments**
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `id` | `ID` | string | yes | pattern `^[1-9][0-9]{0,19}(?![\s\S])` |
+| `id` | `PAGE_ID` | string | yes | pattern `^[1-9][0-9]{0,19}(?![\s\S])` |
 | `full` | `--full` | boolean | no | default `false`; Return long text without trimming. |
 
 **Input**
@@ -2237,14 +2239,14 @@ Error: input without `body_storage`; rejected before any request ([`input_invali
 Update a page's title and/or storage body. Requires expected_version and rejects stale versions. Succeeds only when Confluence confirms the page id, title, and next version; otherwise outcome_unknown.
 
 ```text
-yojo confluence page update ID --input INPUT [--config PATH] [--base-url URL] [--json]
+yojo confluence page update PAGE_ID --input INPUT [--config PATH] [--base-url URL] [--json]
 ```
 
 **Arguments**
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `id` | `ID` | string | yes | pattern `^[1-9][0-9]{0,19}(?![\s\S])` |
+| `id` | `PAGE_ID` | string | yes | pattern `^[1-9][0-9]{0,19}(?![\s\S])` |
 | `input` | `--input INPUT` | string | yes | min length 1; Path to a UTF-8 JSON file, or '-' for stdin. |
 
 **Input**

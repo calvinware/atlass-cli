@@ -16,10 +16,14 @@ act from it without calling `commands`, `schema`, or `--help`.
 
 Only the lines between `<!-- yojo:begin ... -->` and `<!-- yojo:end -->` belong to `yojo`. A new
 install adds that section, a later one replaces it, and the rest of the file is kept byte for
-byte. An unchanged file is not rewritten. Missing or repeated markers, a symbolic link, or a file
-that changes before the final comparison is refused with nothing written. Close unrelated editors
-before replacing a file: their writes are not covered by yojo's lock, and a write in the small
-interval between comparison and replacement can be lost.
+byte. An unchanged file is not rewritten. Every target file is read and checked before any is
+written, so missing or repeated markers, a symbolic link, or an unreadable file stops the call
+with nothing written. Each file is then replaced atomically on its own, not as a set: if a file
+changes before its final comparison, that file is refused, and when earlier targets in the same
+call were already written the error says so and lists them in `details.written`. Review those
+files; running the same command again reports them `unchanged` and retries the rest. Close
+unrelated editors before replacing a file: their writes are not covered by yojo's lock, and a
+write in the small interval between comparison and replacement can be lost.
 
 ## The loop
 

@@ -34,7 +34,8 @@ For an instance signed by a private CA, add `--ca-bundle certs/team-ca.pem` to b
 The bundle contains public CA certificates, never a token or client private key.
 For the first login, pass the same bundle to
 `yojo login --service jira --base-url https://jira.example.test/jira --ca-bundle certs/team-ca.pem`.
-Login resolves a relative bundle path from the current directory.
+Login resolves a relative bundle path from the current directory, so when `init` stops because
+a login is missing, its `fix` names the bundle by its absolute path.
 
 - Without `--save`, nothing is written. `existing_sha256` is the digest of any file already at the
   destination (`yojo.yaml` in the current directory, or `--output PATH`).

@@ -418,7 +418,8 @@
           ],
           "next": [
             "yojo --json init --jira-url https://jira.example.test/jira --project PROJ --save"
-          ]
+          ],
+          "content_trust": "untrusted"
         }
       },
       "error_scenario": "no Jira login is stored for that URL yet",

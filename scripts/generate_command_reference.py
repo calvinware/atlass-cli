@@ -24,7 +24,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from yojo.cli import build_parser
+from yojo.cli import NO_SERVICE_OPTIONS, build_parser
 from yojo.contracts import COMMANDS_BY_PATH, ERROR_CODES, EXIT_CODES_DOC, GLOBAL_OPTIONS
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -172,7 +172,9 @@ def synopsis(path: str, parser: argparse.ArgumentParser) -> str:
             parts.append(f"[{cli_form(action)}]")
         else:
             parts.append(cli_form(action))
-    parts.append("[--config PATH] [--base-url URL] [--json]")
+    if path not in NO_SERVICE_OPTIONS:
+        parts.append("[--config PATH] [--base-url URL]")
+    parts.append("[--json]")
     return " ".join(parts)
 
 

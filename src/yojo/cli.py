@@ -80,6 +80,8 @@ MAX_DIFF_PATH = 1024
 ROOT_SUMMARY = "Generic command line for Jira, Confluence, and Bitbucket Data Center."
 SECRET_LABELS = {"token": "personal access token", "password": "password"}
 VALUE_OPTIONS = ("--config", "--base-url")
+# Commands that name their own URLs and output file, so they refuse --config and --base-url.
+NO_SERVICE_OPTIONS = frozenset({"init"})
 
 
 @dataclass
@@ -348,7 +350,7 @@ def build_parser() -> _Parser:
     confluence_group = group(groups, "confluence")
     page = group(confluence_group, "page")
     p = leaf(page, "read", "confluence page read")
-    p.add_argument("id", type=_page_id)
+    p.add_argument("id", type=_page_id, metavar="PAGE_ID")
     p.add_argument("--full", action="store_true")
     p = leaf(page, "search", "confluence page search")
     p.add_argument("--cql", required=True, type=_query)
@@ -356,7 +358,7 @@ def build_parser() -> _Parser:
     p.add_argument("--limit", type=_bounded(1, MAX_SEARCH_LIMIT), default=20)
     leaf(page, "create", "confluence page create").add_argument("--input", required=True)
     p = leaf(page, "update", "confluence page update")
-    p.add_argument("id", type=_page_id)
+    p.add_argument("id", type=_page_id, metavar="PAGE_ID")
     p.add_argument("--input", required=True)
 
     def paging(parser: _Parser) -> None:

@@ -373,26 +373,36 @@ def _save(request: InitRequest, dest: Path, current: bytes | None, data: bytes) 
 
 
 def _next_steps(
-    request: InitRequest, action: str, current: bytes | None, existing: str | None
+    request: InitRequest,
+    action: str,
+    current: bytes | None,
+    existing: str | None,
+    dest: Path,
+    cwd: Path,
 ) -> list[str]:
     if action == "preview":
         extra = ["--save"]
         if current is not None:
             extra += ["--replace", "--expected-sha256", str(existing)]
         return [retry.posix(request.argv(*extra))]
-    steps = ["yojo --json config check", "yojo --json agent install --target agents"]
+    # Discovery from the working directory finds only ./yojo.yaml (or a parent's); name any other.
+    config = [] if dest == files.resolve(cwd, CONFIG_FILENAME) else ["--config", str(dest)]
     if request.projects:
         jql = f"project = {request.projects[0]} ORDER BY updated DESC"
-        steps.append(retry.posix([*READ, "jira", "search", "--jql", jql, "--limit", "5"]))
+        read = ["jira", "search", "--jql", jql, "--limit", "5"]
     elif request.repos:
-        steps.append(retry.posix([*READ, "bitbucket", "pr", "list", "--repo", request.repos[0]]))
+        read = ["bitbucket", "pr", "list", "--repo", request.repos[0]]
     elif request.bitbucket_url:
-        steps.append("yojo --json bitbucket repo list --limit 5")
+        read = ["bitbucket", "repo", "list", "--limit", "5"]
     elif request.confluence_url:
-        steps.append("yojo --json confluence page search --cql 'type = page' --limit 5")
+        read = ["confluence", "page", "search", "--cql", "type = page", "--limit", "5"]
     else:
-        steps.append("yojo --json jira search --jql 'assignee = currentUser()' --limit 5")
-    return steps
+        read = ["jira", "search", "--jql", "assignee = currentUser()", "--limit", "5"]
+    return [
+        retry.posix([*READ, "config", "check", *config]),
+        "yojo --json agent install --target agents",
+        retry.posix([*READ, *read, *config]),
+    ]
 
 
 def draft(
@@ -415,6 +425,8 @@ def draft(
         base_url = exc.details.get("base_url")
         if not isinstance(service, str) or not isinstance(base_url, str):
             raise
+        # login resolves --ca-bundle against the working directory, init against --output.
+        bundle = Path(request.ca_bundle).expanduser()
         login = retry.posix(
             [
                 retry.PROGRAM,
@@ -425,7 +437,7 @@ def draft(
                 "--base-url",
                 base_url,
                 "--ca-bundle",
-                request.ca_bundle,
+                str(files.resolve(dest.parent, str(bundle))),
             ]
         )
         raise YojoError(
@@ -461,5 +473,6 @@ def draft(
         "existing_sha256": existing,
         **observed,
         "notes": notes,
-        "next": _next_steps(request, action, current, existing),
+        "next": _next_steps(request, action, current, existing, dest, cwd),
+        "content_trust": "untrusted",
     }
