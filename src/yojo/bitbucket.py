@@ -63,8 +63,8 @@ def parse_repo(text: str) -> Repo:
     return Repo(project, slug)
 
 
-def _cmd(*args: str) -> list[str]:
-    return [PROGRAM, "bitbucket", *args]
+def _cmd(client: ServiceClient, *args: str) -> list[str]:
+    return [PROGRAM, *client.command_context, "bitbucket", *args]
 
 
 def _invalid(what: str) -> YojoError:
@@ -426,7 +426,7 @@ def _resolve_branch(
         lambda raw: raw["displayId"] == name,
         _branch_ok,
     )
-    listing = posix(_cmd("branch", "list", "--repo", repo.ref, "--filter", name))
+    listing = posix(_cmd(client, "branch", "list", "--repo", repo.ref, "--filter", name))
     pool = [
         Candidate(label=raw["displayId"], value=raw, token=raw["displayId"])
         for raw in scan.seen
@@ -548,11 +548,13 @@ def pr_get(client: ServiceClient, ref: str, pr_id: int, full: bool = False) -> d
     row = _pr_row(raw)
     target_repo = _ref_repo(raw, "toRef") or repo
     reviewers = []
-    for item in (raw.get("reviewers") or [])[:MAX_REVIEWERS]:
-        if isinstance(item, dict):
-            reviewers.append(
-                {"name": _person(item.get("user")), "status": nested_str(item, "status")}
-            )
+    raw_reviewers = raw.get("reviewers") or []
+    if not isinstance(raw_reviewers, list):
+        raise _invalid("pull request reviewers")
+    for item in raw_reviewers[:MAX_REVIEWERS]:
+        if not isinstance(item, dict):
+            raise _invalid("pull request reviewers")
+        reviewers.append({"name": _person(item.get("user")), "status": nested_str(item, "status")})
     description = nested_str(raw, "description") or ""
     shown, truncated = TextBudget(full).fit(description)
     return {
@@ -566,9 +568,14 @@ def pr_get(client: ServiceClient, ref: str, pr_id: int, full: bool = False) -> d
         "created": _when(raw.get("createdDate")),
         "updated": row["updated"],
         "reviewers": reviewers,
+        "reviewers_total": len(raw_reviewers),
+        "reviewers_truncated": len(raw_reviewers) > MAX_REVIEWERS,
+        "reviewers_url": _pr_url(client, target_repo, pr_id, "/overview")
+        if len(raw_reviewers) > MAX_REVIEWERS
+        else None,
         "description": shown,
         "truncated": truncated,
-        "more": posix(_cmd("pr", "get", str(pr_id), "--repo", target_repo.ref, "--full"))
+        "more": posix(_cmd(client, "pr", "get", str(pr_id), "--repo", target_repo.ref, "--full"))
         if truncated
         else None,
         "url": _pr_url(client, target_repo, pr_id),
@@ -592,7 +599,9 @@ def _diff_path(raw: Any) -> str | None:
 
 
 def _number(value: Any) -> int:
-    return value if type(value) is int and value >= 0 else 0
+    if type(value) is not int or value < 0:
+        raise _invalid("diff hunk")
+    return value
 
 
 def _cut(raw: dict[str, Any]) -> bool:
@@ -654,7 +663,9 @@ def _diff_file(raw: Any) -> tuple[dict[str, Any], list[str], bool]:
         lines.append("Binary files differ")
     cut = _cut(raw)
     added = removed = 0
-    hunks = raw.get("hunks", [])
+    hunks = raw.get("hunks")
+    if raw.get("binary") is True:
+        hunks = hunks if hunks is not None else []
     if not isinstance(hunks, list):
         raise _invalid("diff")
     for hunk in hunks:
@@ -695,7 +706,14 @@ def _path_argv(row: dict[str, Any]) -> list[str] | None:
     names = [row["path"], *([row["old_path"]] if row["old_path"] else [])]
     if not all(name.isprintable() for name in names):
         return None
-    return ["--path", row["path"], *(["--old-path", row["old_path"]] if row["old_path"] else [])]
+
+    def flag(name: str, value: str) -> list[str]:
+        return [f"{name}={value}"] if value.startswith("-") else [name, value]
+
+    return [
+        *flag("--path", row["path"]),
+        *(flag("--old-path", row["old_path"]) if row["old_path"] else []),
+    ]
 
 
 def _git_inspect(raw: dict[str, Any], rows: list[dict[str, Any]] | None) -> str | None:
@@ -735,7 +753,7 @@ def pr_diff(
     endpoint = f"{repo.api}/pull-requests/{pr_id}/diff"
     if path is not None:
         endpoint += "/" + "/".join(seg(part) for part in path.split("/"))
-    base = _cmd("pr", "diff", str(pr_id), "--repo", repo.ref)
+    base = _cmd(client, "pr", "diff", str(pr_id), "--repo", repo.ref)
     anchor = "#" + "/".join(seg(part) for part in path.split("/")) if path else ""
     web = _pr_url(client, repo, pr_id, "/diff" + anchor)
     params: dict[str, Any] = {"contextLines": DIFF_CONTEXT_LINES, "withComments": "false"}
@@ -786,8 +804,8 @@ def pr_diff(
     truncated = cut_here or len(listed) < len(rows)
     more: str | None = None
     if truncated:
-        selected = ["--path", path, *(["--old-path", old_path] if old_path else [])] if path else []
-        more = posix([*base, *selected, "--full"])
+        selected = _path_argv({"path": path, "old_path": old_path}) if path else []
+        more = posix([*base, *selected, "--full"]) if selected is not None else None
     elif server_cut and path is None and cut_rows:
         flags = _path_argv(cut_rows[0])
         more = posix([*base, *flags, "--full"]) if flags else None
@@ -930,18 +948,19 @@ def _duplicate_check(client: ServiceClient, repo: Repo, source: Branch, target: 
     if scan.found is not None:
         pr_id = scan.found.get("id")
         shown = str(pr_id) if _positive_int(pr_id) else placeholder("id")
+        existing = posix(_cmd(client, "pr", "get", shown, "--repo", repo.ref))
         return Check(
             "duplicate",
             "fail",
             f"Pull request #{shown} already proposes {source.name!r} into {target.name!r} in "
             f"{repo.ref}.",
-            f"Use the open pull request: `{posix(_cmd('pr', 'get', shown, '--repo', repo.ref))}`. "
+            f"Use the open pull request: `{existing}`. "
             "To add to it, push to the branch or comment on it.",
             {"pull_request": pr_id if _positive_int(pr_id) else None},
             Edit("none", ""),
         )
     if not scan.complete:
-        listing = posix(_cmd("pr", "list", "--repo", repo.ref))
+        listing = posix(_cmd(client, "pr", "list", "--repo", repo.ref))
         return Check(
             "duplicate",
             "unverified",
@@ -973,7 +992,7 @@ def pr_create(client: ServiceClient, request: PullRequestRequest) -> dict[str, A
     try:
         repo, _ = _get_repo(client, given)
     except YojoError as exc:
-        listing = posix(_cmd("repo", "list", "--project", given.project))
+        listing = posix(_cmd(client, "repo", "list", "--project", given.project))
         if exc.code == "not_found":
             checks.append(
                 Check(
@@ -989,7 +1008,7 @@ def pr_create(client: ServiceClient, request: PullRequestRequest) -> dict[str, A
         else:
             checks.append(
                 _probe_unverified(
-                    "repo", f"repository {given.ref}", exc, _cmd("repo", "get", given.ref)
+                    "repo", f"repository {given.ref}", exc, _cmd(client, "repo", "get", given.ref)
                 )
             )
     else:
@@ -1009,7 +1028,7 @@ def pr_create(client: ServiceClient, request: PullRequestRequest) -> dict[str, A
                 name,
                 f"{what} {value!r}",
                 exc,
-                _cmd("branch", "list", "--repo", repo.ref, "--filter", value),
+                _cmd(client, "branch", "list", "--repo", repo.ref, "--filter", value),
             )
         branches[name] = branch
         checks.append(check)
@@ -1037,7 +1056,7 @@ def pr_create(client: ServiceClient, request: PullRequestRequest) -> dict[str, A
                         "duplicate",
                         "open pull requests",
                         exc,
-                        _cmd("pr", "list", "--repo", repo.ref),
+                        _cmd(client, "pr", "list", "--repo", repo.ref),
                     )
                 )
     else:
@@ -1066,13 +1085,13 @@ def _create_recovery(
     sent_at: str,
     pr_id: int | None = None,
 ) -> YojoError:
-    argv = {"list": _cmd("pr", "list", "--repo", repo.ref, "--state", "ALL")}
+    argv = {"list": _cmd(client, "pr", "list", "--repo", repo.ref, "--state", "ALL")}
     if pr_id is not None:
-        argv["get"] = _cmd("pr", "get", str(pr_id), "--repo", repo.ref, "--full")
+        argv["get"] = _cmd(client, "pr", "get", str(pr_id), "--repo", repo.ref, "--full")
     read = (
         posix(argv["get"])
         if "get" in argv
-        else f"yojo bitbucket pr get ID --repo {repo.ref} --full"
+        else posix(_cmd(client, "pr", "get", "ID", "--repo", repo.ref, "--full"))
     )
     error = client.unknown_outcome(
         reason,
@@ -1242,7 +1261,7 @@ def pr_comment(
     try:
         pr = _get_pr(client, repo, pr_id)
     except YojoError as exc:
-        listing = posix(_cmd("pr", "list", "--repo", repo.ref, "--state", "ALL"))
+        listing = posix(_cmd(client, "pr", "list", "--repo", repo.ref, "--state", "ALL"))
         if exc.code == "not_found":
             checks.append(
                 Check(
@@ -1259,7 +1278,7 @@ def pr_comment(
                     "pull_request",
                     f"pull request #{pr_id}",
                     exc,
-                    _cmd("pr", "get", str(pr_id), "--repo", repo.ref),
+                    _cmd(client, "pr", "get", str(pr_id), "--repo", repo.ref),
                 )
             )
         raise refusal(f"Commenting on pull request #{pr_id}", checks) from None
@@ -1275,14 +1294,14 @@ def pr_comment(
                     "duplicate",
                     f"comments on pull request #{pr_id}",
                     exc,
-                    _cmd("pr", "get", str(pr_id), "--repo", repo.ref),
+                    _cmd(client, "pr", "get", str(pr_id), "--repo", repo.ref),
                 )
             )
     if failed(checks):
         raise refusal(f"Commenting on pull request #{pr_id}", checks)
 
     view = _pr_url(client, repo, pr_id, "/overview")
-    argv = {"pull_request": _cmd("pr", "get", str(pr_id), "--repo", repo.ref)}
+    argv = {"pull_request": _cmd(client, "pr", "get", str(pr_id), "--repo", repo.ref)}
     fix = (
         f"Do not retry yet. Open {view} and look for a comment matching what you sent; post "
         "again only if it is not there. Do not send the same comment from two calls at once: "
@@ -1302,6 +1321,27 @@ def pr_comment(
     if comment_id is None or not _text_confirmed(body, result.get("text")):
         error = client.unknown_outcome(
             "comment response did not confirm the comment id and text", fix
+        )
+        error.details["recovery_argv"] = argv
+        raise error
+    # The POST body does not identify its pull request. Read the returned comment through
+    # this PR's scoped endpoint before claiming it was posted here.
+    try:
+        confirmed = client.get(f"{repo.api}/pull-requests/{pr_id}/comments/{comment_id}")
+    except YojoError as exc:
+        error = client.unknown_outcome(
+            f"comment #{comment_id} could not be confirmed under pull request #{pr_id}: {exc.code}",
+            fix,
+        )
+        error.details["recovery_argv"] = argv
+        raise error from None
+    if (
+        not isinstance(confirmed, dict)
+        or confirmed.get("id") != comment_id
+        or not _text_confirmed(body, confirmed.get("text"))
+    ):
+        error = client.unknown_outcome(
+            f"comment #{comment_id} was not confirmed under pull request #{pr_id}", fix
         )
         error.details["recovery_argv"] = argv
         raise error

@@ -60,7 +60,9 @@ yojo bitbucket pr get 42 --repo PROJ/web
 `pr list` shows open pull requests unless `--state` says `MERGED`, `DECLINED`, or `ALL` (any case).
 Long titles are shortened in the list. `pr get` shows the full title, both branches, the author,
 reviewers with their status, and the description, which is trimmed unless you pass `--full`;
-`truncated` and `more` say how to get the rest.
+`truncated` and `more` say how to get the rest. The response shows at most ten reviewers;
+`reviewers_total` and `reviewers_truncated` show when there are more. Open `reviewers_url` to
+inspect the complete reviewer list. `--full` expands the description, not the reviewer list.
 
 ## Read a diff
 
@@ -142,7 +144,9 @@ yojo bitbucket pr comment 42 --repo PROJ/web --body-file notes.txt
 The comment is plain text. `yojo` checks that the pull request exists and that it has no comment
 with exactly the same text, so running the same command again after the first one landed is
 refused. The check runs before posting, so two calls sent at the same time can both post; do not
-send the same comment concurrently.
+send the same comment concurrently. A successful POST is read back through that pull request's
+comment endpoint before `yojo` reports success. If the read cannot confirm the comment, the
+result is `outcome_unknown` and needs inspection.
 
 ## When the result is unknown
 
@@ -158,6 +162,9 @@ no `retry`. Do not run the command again yet:
   equal what you sent and `created` is at or after `details.sent_at`, allowing for clock skew. An
   older merged or declined pull request can share the branches and title.
 - After `pr comment`, open the pull request link in `error.fix` and look for your comment.
+
+Generated `more` and `details.recovery_argv` commands retain the original `--base-url` or
+explicit `--config` option, so use those argv lists when the call had no local `yojo.yaml`.
 
 A paged list can change while you scan it, so no match does not prove the create was absent. If
 no candidate matches exactly, or more than one does, ask a person to confirm in the repository

@@ -1437,6 +1437,9 @@
               "status": "UNAPPROVED"
             }
           ],
+          "reviewers_total": 1,
+          "reviewers_truncated": false,
+          "reviewers_url": null,
           "description": "Handles an empty user before the credential check.",
           "truncated": false,
           "more": null,

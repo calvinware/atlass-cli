@@ -94,6 +94,7 @@ class Runtime:
     stdout_isatty: Callable[[], bool] = field(default=lambda: False)
     environ: Mapping[str, str] = field(default_factory=dict)
     json_mode: bool = True
+    command_context: tuple[str, ...] = ()
 
 
 def default_runtime() -> Runtime:
@@ -622,10 +623,19 @@ def _progress(rt: Runtime, message: str) -> None:
 @contextmanager
 def _client(rt: Runtime, service: str, cfg: ServiceConfig) -> Iterator[ServiceClient]:
     credential = rt.store_factory().load(service, cfg.base_url)
+    if service == "bitbucket" and credential is not None and credential.auth != "pat":
+        raise YojoError(
+            "auth_failed",
+            "Bitbucket requires a personal access token; the stored credential uses Basic auth.",
+            "Run `yojo login --service bitbucket --base-url URL --token-stdin` with a personal "
+            "access token for this Bitbucket instance.",
+            {"service": "bitbucket"},
+        )
     client = ServiceClient(
         service, cfg.base_url, credential, ca_bundle=cfg.ca_bundle, transport=rt.transport
     )
     client.announce = lambda message: _progress(rt, message)
+    client.command_context = rt.command_context
     try:
         yield client
     finally:
@@ -827,17 +837,30 @@ def cmd_config_check(args: argparse.Namespace, rt: Runtime) -> Any:
     base_url = getattr(args, "base_url", None)
     checks: list[workflow.Check] = []
     services: list[str] = []
-    # --base-url names one instance: Jira's when Jira is configured, otherwise Bitbucket's.
-    if config.jira is not None or config.bitbucket is None:
+    # --base-url names one instance: Jira's when configured, otherwise Bitbucket's.
+    if config.jira is not None:
         jira_cfg = cast(JiraConfig, select_service(config, "jira", base_url))
-        with _client(rt, "jira", jira_cfg) as client:
-            checks += jira.config_check(client, config, jira_cfg)
+        try:
+            with _client(rt, "jira", jira_cfg) as client:
+                checks += jira.config_check(client, config, jira_cfg)
+        except YojoError as exc:
+            checks.append(workflow.Check("jira:check", "unverified", exc.message, exc.fix))
         services.append("Jira")
         base_url = None
     if config.bitbucket is not None:
         bitbucket_cfg = select_service(config, "bitbucket", base_url)
-        checks += _bitbucket_config_checks(rt, config, bitbucket_cfg)
+        try:
+            checks += _bitbucket_config_checks(rt, config, bitbucket_cfg)
+        except YojoError as exc:
+            checks.append(workflow.Check("bitbucket:check", "unverified", exc.message, exc.fix))
         services.append("Bitbucket")
+    if config.confluence is not None:
+        if config.jira is None and config.bitbucket is None and base_url is not None:
+            select_service(config, "confluence", base_url)
+        checks.append(
+            workflow.Check("confluence:config", "pass", "Confluence has no team rules to check.")
+        )
+        services.append("Confluence")
     live = " and ".join(services)
     summary: dict[str, int] = {}
     for check in checks:
@@ -1052,9 +1075,7 @@ def cmd_pr_get(args: argparse.Namespace, rt: Runtime) -> Any:
 
 def cmd_pr_diff(args: argparse.Namespace, rt: Runtime) -> Any:
     with _client(rt, "bitbucket", _bitbucket(rt, args)) as client:
-        return bitbucket.pr_diff(
-            client, args.repo, args.id, args.path, args.full, args.old_path
-        )
+        return bitbucket.pr_diff(client, args.repo, args.id, args.path, args.full, args.old_path)
 
 
 def cmd_pr_create(args: argparse.Namespace, rt: Runtime) -> Any:
@@ -1142,6 +1163,12 @@ def run(argv: list[str], rt: Runtime) -> Any:
     if not _words(argv):
         raise _no_command()
     args = build_parser().parse_args(argv)
+    rt.command_context = tuple(
+        option
+        for name in ("config", "base_url")
+        if (value := getattr(args, name, None)) is not None
+        for option in ("--base-url" if name == "base_url" else "--config", value)
+    )
     data = HANDLERS[args.command](args, rt)
     _check_bitbucket_read_size(args, argv, data)
     return data
@@ -1196,6 +1223,11 @@ def _attach_retry(error: YojoError, argv: list[str]) -> None:
     corrected = retry.apply(argv, edits)
     error.details["retry"] = retry.posix(corrected) if corrected else None
     error.details["retry_argv"] = corrected
+    if corrected is None:
+        error.fix = (
+            "Follow each failed check's fix. No corrected retry command is available; "
+            "inspect any existing item or correct the input before issuing a new write."
+        )
     if corrected and "-" in corrected and "--input" in corrected:
         error.details["retry_note"] = "Pipe the same --input content on stdin again."
 

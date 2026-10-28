@@ -106,6 +106,18 @@ def setup_comment(harness: Harness) -> None:
     harness.server.add("GET", ACTIVITIES, fixture("bitbucket_activities.json"))
     harness.server.add("POST", COMMENTS, fixture("bitbucket_comment.json"), status=201)
 
+    def scoped_comment(_: httpx.Request) -> httpx.Response:
+        sent = next(
+            r
+            for r in reversed(harness.server.requests)
+            if r.method == "POST" and r.url.path == COMMENTS
+        )
+        result = fixture("bitbucket_comment.json")
+        result["text"] = json.loads(sent.content)["text"]
+        return httpx.Response(200, json=result)
+
+    harness.server.add("GET", COMMENTS + "/777", handler=scoped_comment)
+
 
 def refusal(result: Any) -> dict[str, Any]:
     assert result.code == 4, result.out

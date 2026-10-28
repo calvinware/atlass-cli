@@ -47,8 +47,8 @@ result is `requirements_unmet` (exit 4) with:
   its own `fix`.
 - `details.retry`: the full corrected command line, quoted for POSIX shells, and
   `details.retry_argv`: the same command as an argument list. Placeholders such as `<value>` mark
-  the only content you must supply. `retry` is `null` when a value came from `--input`; fix the
-  input document instead.
+  the only content you must supply. `retry` is `null` when a value came from `--input` or when
+  the existing item must be inspected; follow each check's `fix` instead.
 
 Bitbucket writes (`bitbucket pr create`, `bitbucket pr comment`) work the same way: the
 repository, both branches, the title, and any open pull request or identical comment are checked

@@ -211,7 +211,9 @@ when Jira reports it; a proxy may enforce a lower one, which shows up as `remote
 `yojo config check` is read-only and needs a `yojo.yaml`. When the file has a `bitbucket`
 section, it checks that `bitbucket.base_url` answers as Bitbucket Data Center (`drift` if another
 application answers) and that the stored token is accepted (`unverified` with a `yojo login` fix if
-not). When the file has a `jira` section, it compares the file with live Jira:
+not). A Confluence-only file reports that there are no team rules to check. In a mixed file,
+each configured service is checked independently, so an unavailable Jira instance does not hide
+the Bitbucket result. When the file has a `jira` section, it compares the file with live Jira:
 
 - Every alias in `jira.fields` and each project's `fields` resolves to exactly one field in Jira's
   field list (an `id` must exist; a `jira_name` must match one field).

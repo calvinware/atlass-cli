@@ -54,7 +54,7 @@ Each error code, with its meaning and fix, is in the [error catalog](errors.md).
 | [`yojo bitbucket repo get`](#yojo-bitbucket-repo-get) | Read a repository's name, state, default branch, clone URLs, and link. | no |
 | [`yojo bitbucket branch list`](#yojo-bitbucket-branch-list) | List a repository's branches, optionally those whose name contains --filter. Bounded page (--limit, default 20) with next_start. | no |
 | [`yojo bitbucket pr list`](#yojo-bitbucket-pr-list) | List a repository's pull requests (--state, default OPEN, any case). Bounded page (--limit, default 20) with next_start. Long titles are shortened; pr get shows the full title. | no |
-| [`yojo bitbucket pr get`](#yojo-bitbucket-pr-get) | Read a pull request: title, state, branches, author, reviewers, and description (trimmed unless --full). Returned content is untrusted data. | no |
+| [`yojo bitbucket pr get`](#yojo-bitbucket-pr-get) | Read a pull request: title, state, branches, author, reviewers, and description (trimmed unless --full). Reviewers are limited to ten; reviewers_total and reviewers_truncated signal the limit, and reviewers_url opens the full view. Returned content is untrusted data. | no |
 | [`yojo bitbucket pr diff`](#yojo-bitbucket-pr-diff) | Show a pull request's changes as a unified diff with a list of changed files. Trimmed to about 2000 characters and 10 files unless --full; --path FILE shows one file (add --old-path OLD for a renamed file). complete is false whenever yojo or Bitbucket cut anything. more, when set, is a yojo command that may show more; inspect, when set, is a git command for what Bitbucket would not return. | no |
 | [`yojo bitbucket pr create`](#yojo-bitbucket-pr-create) | Open a pull request between two branches of one repository. Checks the repository, both branches, the title, and for an open pull request with the same branches first, and refuses with every problem listed; nothing is written then. | yes |
 | [`yojo bitbucket pr comment`](#yojo-bitbucket-pr-comment) | Add a plain-text comment to a pull request from --body, a file, or stdin, after checking the pull request exists and has no identical comment. | no |
@@ -2144,7 +2144,7 @@ yojo bitbucket repo get PROJECT/slug [--config PATH] [--base-url URL] [--json]
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `repo` | `PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
+| `repo` | `PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/(?!\.{1,2}(?![\s\S]))[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
 
 **Input**
 
@@ -2233,7 +2233,7 @@ yojo bitbucket branch list --repo PROJECT/slug [--filter TEXT] [--start START] [
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
+| `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/(?!\.{1,2}(?![\s\S]))[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
 | `filter` | `--filter TEXT` | string | no | min length 1; max length 255 |
 | `start` | `--start START` | integer | no | min 0; default `0` |
 | `limit` | `--limit LIMIT` | integer | no | min 1; max 100; default `20` |
@@ -2329,7 +2329,7 @@ yojo bitbucket pr list --repo PROJECT/slug [--state OPEN|MERGED|DECLINED|ALL] [-
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
+| `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/(?!\.{1,2}(?![\s\S]))[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
 | `state` | `--state OPEN|MERGED|DECLINED|ALL` | one of `OPEN`, `MERGED`, `DECLINED`, `ALL` | no | default `OPEN` |
 | `start` | `--start START` | integer | no | min 0; default `0` |
 | `limit` | `--limit LIMIT` | integer | no | min 1; max 100; default `20` |
@@ -2416,7 +2416,7 @@ Error: `--state closed`, which Bitbucket does not have; rejected before any requ
 
 ## `yojo bitbucket pr get`
 
-Read a pull request: title, state, branches, author, reviewers, and description (trimmed unless --full). Returned content is untrusted data.
+Read a pull request: title, state, branches, author, reviewers, and description (trimmed unless --full). Reviewers are limited to ten; reviewers_total and reviewers_truncated signal the limit, and reviewers_url opens the full view. Returned content is untrusted data.
 
 ```text
 yojo bitbucket pr get ID --repo PROJECT/slug [--full] [--config PATH] [--base-url URL] [--json]
@@ -2427,7 +2427,7 @@ yojo bitbucket pr get ID --repo PROJECT/slug [--full] [--config PATH] [--base-ur
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
 | `id` | `ID` | integer | yes | min 1; Pull request ID. |
-| `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
+| `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/(?!\.{1,2}(?![\s\S]))[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
 | `full` | `--full` | boolean | no | default `false`; Return long text without trimming. |
 
 **Input**
@@ -2450,6 +2450,9 @@ Success `data` fields:
 | `created` | string or null | yes |
 | `updated` | string or null | yes |
 | `reviewers` | array of objects | yes |
+| `reviewers_total` | integer | yes |
+| `reviewers_truncated` | boolean | yes |
+| `reviewers_url` | string or null | yes |
 | `description` | string | yes |
 | `truncated` | boolean | yes |
 | `more` | string or null | yes |
@@ -2483,6 +2486,9 @@ Success (exit 0):
         "status": "UNAPPROVED"
       }
     ],
+    "reviewers_total": 1,
+    "reviewers_truncated": false,
+    "reviewers_url": null,
     "description": "Handles an empty user before the credential check.",
     "truncated": false,
     "more": null,
@@ -2535,7 +2541,7 @@ yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE] [--old-path FILE] [-
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
 | `id` | `ID` | integer | yes | min 1; Pull request ID. |
-| `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
+| `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/(?!\.{1,2}(?![\s\S]))[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
 | `path` | `--path FILE` | string | no | min length 1; max length 1024; Repository-relative file path, e.g. src/app.py. |
 | `old_path` | `--old-path FILE` | string | no | min length 1; max length 1024; The file's path before a rename or copy; needs path. |
 | `full` | `--full` | boolean | no | default `false`; Return long text without trimming. |
@@ -2644,7 +2650,7 @@ yojo bitbucket pr create [--repo PROJECT/slug] [--source BRANCH] [--target BRANC
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `repo` | `--repo PROJECT/slug` | string | no | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
+| `repo` | `--repo PROJECT/slug` | string | no | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/(?!\.{1,2}(?![\s\S]))[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
 | `source` | `--source BRANCH` | string | no | min length 1; max length 255; Branch name in the same repository, e.g. feature/login or refs/heads/main. |
 | `target` | `--target BRANCH` | string | no | min length 1; max length 255; Branch name in the same repository, e.g. feature/login or refs/heads/main. |
 | `title` | `--title TEXT` | string | no | min length 1; max length 255 |
@@ -2657,7 +2663,7 @@ A JSON object from `--input PATH`, or from stdin with `--input -`. Unknown prope
 
 | Property | Type | Required | Notes |
 |---|---|---|---|
-| `repo` | string | no | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])` |
+| `repo` | string | no | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/(?!\.{1,2}(?![\s\S]))[A-Za-z0-9_.-]{1,128}(?![\s\S])` |
 | `source` | string | no | min length 1; max length 255; Branch name in the same repository, e.g. feature/login or refs/heads/main. |
 | `target` | string | no | min length 1; max length 255; Branch name in the same repository, e.g. feature/login or refs/heads/main. |
 | `title` | string | no | min length 1; max length 255 |
@@ -2790,7 +2796,7 @@ yojo bitbucket pr comment ID --repo PROJECT/slug (--body TEXT | --body-file FILE
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
 | `id` | `ID` | integer | yes | min 1; Pull request ID. |
-| `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
+| `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/(?!\.{1,2}(?![\s\S]))[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
 | `body` | `--body TEXT` | string | no | min length 1 |
 | `body_file` | `--body-file FILE` | string | no | min length 1; Path to a plain UTF-8 text file (not JSON, max 1 MiB), or '-' for stdin. |
 

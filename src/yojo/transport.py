@@ -142,6 +142,7 @@ class ServiceClient:
         timeout: httpx.Timeout = DEFAULT_TIMEOUT,
     ) -> None:
         self.service = service
+        self.command_context: tuple[str, ...] = ()
         self.base_url = base_url.rstrip("/")
         headers = {
             "Accept": "application/json",

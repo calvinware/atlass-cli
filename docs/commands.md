@@ -80,7 +80,9 @@ yojo login --service jira|confluence|bitbucket|all [--base-url URL] [--auth pat|
 `yojo config check` is a read-only drift report for `yojo.yaml`. It needs a config file. It checks
 Jira when a `jira` section is present, and when a `bitbucket` section is present it checks that the
 URL answers as Bitbucket Data Center and that the stored token is accepted. A Bitbucket-only file
-works. `--base-url` applies to Jira when Jira is configured, otherwise to Bitbucket. See
+works. A Confluence-only file reports that it has no team rules to check. Mixed files collect
+independent Jira and Bitbucket results. `--base-url` applies to Jira when Jira is configured,
+otherwise to Bitbucket. See
 [configuration](configuration.md#drift-checks).
 
 ## Jira
