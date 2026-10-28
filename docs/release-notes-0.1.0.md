@@ -14,8 +14,9 @@ replaces `atlass-cli` 1.0.0, which stays on PyPI unchanged. The full list of cha
 
 - **Generic Jira commands** (#14): `jira issue create|get|update|link`, transitions, comments,
   attachments, and search, with flags-first writes, `--set NAME=VALUE` in Jira's own words, and
-  every rule and required field checked inside the same call. A refused write lists every problem,
-  sends nothing, and returns the corrected `retry` command. Works without a `yojo.yaml`.
+  every rule and required field checked inside the same call. A refused write lists every problem
+  with its `fix`, sends nothing, and returns the corrected `retry` command when `yojo` can build
+  one. Works without a `yojo.yaml`.
 - **Two faces, one result**: a readable terminal view, and one compact JSON object when piped or
   with `--json`, with identical exit codes.
 - **Bitbucket Data Center** (#15): repository, branch, and pull request reads; pull request

@@ -4,10 +4,14 @@ import copy
 import json
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from scripts import capture_command_examples as capture
 from scripts import generate_command_reference as gen
@@ -350,6 +354,39 @@ def test_terminal_capture_must_render_the_same_envelope(examples: dict[str, Any]
     assert any("token" in p for p in capture.problems_in("login", "success", leaked))
 
 
+WINDOWS_TMP = r"C:\Users\RUNNER~1\AppData\Local\Temp\tmpab12_cd"
+
+
+@pytest.mark.parametrize("folder", [WINDOWS_TMP, "/tmp/tmpab12_cd"])
+def test_capture_paths_read_the_same_on_every_os(folder: str) -> None:
+    sep = "\\" if "\\" in folder else "/"
+    path = f"{folder}{sep}docs{sep}AGENTS.md"
+    terminal = f"Error: {path} has 0 yojo:begin markers.\nNext: Edit {path}.\n"
+    assert capture.portable_text(terminal, folder) == (
+        "Error: /work/repo/docs/AGENTS.md has 0 yojo:begin markers.\n"
+        "Next: Edit /work/repo/docs/AGENTS.md.\n"
+    )
+    envelope = {"ok": False, "error": {"message": f"{path} conflicts", "details": {"path": path}}}
+    piped = capture.compact(envelope) + "\n"
+    assert json.dumps(folder)[1:-1] in piped
+    assert capture.portable_json(piped, folder) == (
+        '{"ok":false,"error":{"message":"/work/repo/docs/AGENTS.md conflicts",'
+        '"details":{"path":"/work/repo/docs/AGENTS.md"}}}\n'
+    )
+    assert capture.portable_json("not json\n", folder) == "not json\n"
+
+
+@pytest.mark.parametrize("escaped", [False, True])
+def test_capture_rejects_native_or_escaped_temporary_paths(
+    examples: dict[str, Any], monkeypatch: pytest.MonkeyPatch, escaped: bool
+) -> None:
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: WINDOWS_TMP)
+    case = copy.deepcopy(examples["init"]["captured"]["success"])
+    face, folder = ("json", json.dumps(WINDOWS_TMP)[1:-1]) if escaped else ("terminal", WINDOWS_TMP)
+    case[face] = case[face].replace("/work/repo", folder)
+    assert any("temporary path" in p for p in capture.problems_in("init", "success", case))
+
+
 @pytest.mark.skipif(os.name == "nt", reason="captures are written on POSIX paths")
 def test_committed_captures_are_current() -> None:
     expected = capture.CAPTURED_PATH.read_text(encoding="utf-8").replace("\r\n", "\n")
@@ -533,7 +570,12 @@ def test_shared_markdown_has_no_site_only_syntax(path: Path) -> None:
 
 
 README_BLOB_URL = f"{REPO_URL}/blob/main/"
-README_RAW_URL = "https://raw.githubusercontent.com/calvinware/yojo/main/"
+# README images load from one pinned revision, so a PR shows its own assets and a PyPI page never
+# changes under a release. The pre-release install line pins the same revision.
+README_RAW_RE = re.compile(r"https://raw\.githubusercontent\.com/calvinware/yojo/([0-9a-f]{40})/")
+README_INSTALL_RE = re.compile(
+    r"^pipx install git\+https://github\.com/calvinware/yojo\.git@([0-9a-f]{40})\b", re.M
+)
 # Inline links (with optional <...> and title), reference definitions, and HTML attributes.
 README_TARGET_RE = re.compile(
     r"\]\(\s*<?([^)\s<>]+)>?(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)"
@@ -556,8 +598,9 @@ def _readme_link_problems(text: str) -> list[str]:
         if not target.startswith("https://"):
             problems.append(f"{target!r} is relative; PyPI cannot resolve it")
             continue
-        prefix = next((p for p in (README_BLOB_URL, README_RAW_URL) if target.startswith(p)), None)
-        if prefix is None:
+        raw = README_RAW_RE.match(target)
+        prefix = raw.group(0) if raw else README_BLOB_URL
+        if not target.startswith(prefix):
             continue
         path = (ROOT / target.removeprefix(prefix).split("#", 1)[0]).resolve()
         if not (path.is_relative_to(ROOT) and path.is_file()):
@@ -573,8 +616,40 @@ def test_readme_link_targets_are_absolute_repository_files() -> None:
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     assert len(_readme_link_targets(text)) > 10
     assert _readme_link_problems(text) == []
+    raw = README_RAW_RE.search(text)
+    assert raw
     for variant in ("dark", "light"):
-        assert f'="{README_RAW_URL}docs/assets/banner-{variant}.svg"' in text
+        assert f'="{raw.group(0)}docs/assets/banner-{variant}.svg"' in text
+
+
+def _git(*args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(  # noqa: S603 - fixed git argv against this checkout
+        ["git", *args],  # noqa: S607
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_readme_pins_one_revision_with_the_same_assets() -> None:
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    raw = [t for t in _readme_link_targets(text) if README_RAW_RE.match(t)]
+    revisions = {README_RAW_RE.match(t).group(1) for t in raw} | set(  # type: ignore[union-attr]
+        README_INSTALL_RE.findall(text)
+    )
+    assert len(raw) >= 5 and len(revisions) == 1, revisions
+    assert "raw.githubusercontent.com/calvinware/yojo/main/" not in text
+    (revision,) = revisions
+    if shutil.which("git") is None or _git("cat-file", "-e", f"{revision}^{{commit}}").returncode:
+        pytest.skip("the pinned revision is not in this checkout's history")
+    assert _git("cat-file", "-e", f"{revision}:src/yojo/cli.py").returncode == 0
+    for target in raw:
+        path = README_RAW_RE.sub("", target)
+        pinned = _git("show", f"{revision}:{path}")
+        assert pinned.returncode == 0, path
+        assert pinned.stdout == (ROOT / path).read_bytes(), (
+            f"{path} changed since {revision[:12]}; push it and pin README.md to that commit"
+        )
 
 
 @pytest.mark.parametrize(
@@ -606,6 +681,89 @@ def test_readme_link_check_accepts_titled_absolute_targets() -> None:
     assert _readme_link_problems(markdown) == []
 
 
+# Written by hand from each product's REST API, not from captured-output.json: a regenerated
+# capture that changes what a documented write sends, or drops its confirming read, fails here.
+JIRA_API = "/jira/rest/api/2"
+CONFLUENCE_API = "/confluence/rest/api"
+REPO_API = "/bitbucket/rest/api/1.0/projects/PROJ/repos/web"
+DOCUMENTED_WRITE_REQUESTS = {
+    "jira issue create": [
+        f"GET {JIRA_API}/issue/createmeta/EXAMPLE/issuetypes",
+        f"GET {JIRA_API}/issue/createmeta/EXAMPLE/issuetypes/10002",
+        f"POST {JIRA_API}/issue",
+        f"GET {JIRA_API}/issue/EXAMPLE-42",
+    ],
+    "jira issue update": [
+        f"GET {JIRA_API}/issue/EXAMPLE-42/editmeta",
+        f"PUT {JIRA_API}/issue/EXAMPLE-42",
+        f"GET {JIRA_API}/issue/EXAMPLE-42",
+    ],
+    "jira issue link": [
+        f"GET {JIRA_API}/issue/EXAMPLE-42",
+        f"GET {JIRA_API}/issue/EXAMPLE-43",
+        f"GET {JIRA_API}/issueLinkType",
+        f"GET {JIRA_API}/mypermissions",
+        f"POST {JIRA_API}/issueLink",
+        f"GET {JIRA_API}/issue/EXAMPLE-42",
+    ],
+    "jira transition": [
+        f"GET {JIRA_API}/issue/EXAMPLE-42",
+        f"GET {JIRA_API}/issue/EXAMPLE-42/transitions",
+        f"POST {JIRA_API}/issue/EXAMPLE-42/transitions",
+    ],
+    "jira attachment add": [
+        f"GET {JIRA_API}/issue/EXAMPLE-42",
+        f"GET {JIRA_API}/mypermissions",
+        f"GET {JIRA_API}/attachment/meta",
+        f"POST {JIRA_API}/issue/EXAMPLE-42/attachments",
+    ],
+    "jira comment add": [
+        f"GET {JIRA_API}/issue/EXAMPLE-42",
+        f"GET {JIRA_API}/mypermissions",
+        f"POST {JIRA_API}/issue/EXAMPLE-42/comment",
+    ],
+    "confluence page create": [f"POST {CONFLUENCE_API}/content"],
+    "confluence page update": [
+        f"GET {CONFLUENCE_API}/content/123456",
+        f"PUT {CONFLUENCE_API}/content/123456",
+    ],
+    "bitbucket pr create": [
+        f"GET {REPO_API}",
+        f"GET {REPO_API}/branches",
+        f"GET {REPO_API}/branches",
+        f"GET {REPO_API}/pull-requests",
+        f"POST {REPO_API}/pull-requests",
+    ],
+    "bitbucket pr comment": [
+        f"GET {REPO_API}/pull-requests/42",
+        f"GET {REPO_API}/pull-requests/42/activities",
+        f"POST {REPO_API}/pull-requests/42/comments",
+        f"GET {REPO_API}/pull-requests/42/comments/777",
+    ],
+}
+
+
+@pytest.mark.parametrize("path", sorted(DOCUMENTED_WRITE_REQUESTS))
+def test_documented_write_sends_the_expected_requests(examples: dict[str, Any], path: str) -> None:
+    expected = DOCUMENTED_WRITE_REQUESTS[path]
+    writes = [r for r in expected if not r.startswith("GET ")]
+    assert len(writes) == 1, "a documented write sends exactly one write request"
+    success = examples[path]["captured"]["success"]
+    assert success["requests"] == expected
+    assert success["writes"] == 1 and success["exit"] == 0
+    envelope = json.loads(success["json"])
+    assert envelope["ok"] is True
+    # The write is confirmed by the server: either its response body or a read that follows it.
+    assert envelope["data"], path
+    error = examples[path]["captured"]["error"]
+    assert error["writes"] == 0 and error["exit"] != 0
+    assert not [r for r in error["requests"] if not r.startswith("GET ")]
+
+
+def test_documented_writes_cover_every_remote_write() -> None:
+    assert sorted(DOCUMENTED_WRITE_REQUESTS) == sorted(REMOTE_WRITES)
+
+
 @pytest.mark.parametrize(
     ("page", "count"),
     [
@@ -627,6 +785,60 @@ def test_cookbook_recipes_are_valid_config(tmp_path: Path) -> None:
         path = tmp_path / f"recipe{index}.yaml"
         path.write_text(recipe, encoding="utf-8")
         parse_config_file(path)
+
+
+# What the cookbook's comparison table promises for each team, written out independently.
+COOKBOOK_TEAMS: dict[str, dict[str, Any]] = {
+    "Small product team": {
+        "services": {"jira", "bitbucket"},
+        "project": "APP",
+        "create": {"Story": ["points"]},
+        "rule_kinds": {"field_set"},
+        "max_attachment_bytes": None,
+    },
+    "Documentation team": {
+        "services": {"jira", "confluence"},
+        "project": "DOCS",
+        "create": {"Task": ["audience"]},
+        "rule_kinds": {"field_set"},
+        "max_attachment_bytes": None,
+    },
+    "Operations team": {
+        "services": {"jira", "confluence", "bitbucket"},
+        "project": "OPS",
+        "create": {"Incident": ["sev", "service", "Environment"]},
+        "rule_kinds": {"field_set", "attachment_filename"},
+        "max_attachment_bytes": 10 * 1024 * 1024,
+    },
+}
+
+
+@pytest.mark.parametrize("team", sorted(COOKBOOK_TEAMS))
+def test_cookbook_teams_are_distinct_complete_roles(tmp_path: Path, team: str) -> None:
+    text = (DOCS / "admin-cookbook.md").read_text(encoding="utf-8")
+    section = text.split(f"\n### {team}\n", 1)[1].split("\n## ", 1)[0].split("\n### ", 1)[0]
+    recipe = re.findall(r"```yaml\n(.*?)```", section, re.S)[0]
+    path = tmp_path / "yojo.yaml"
+    path.write_text(recipe, encoding="utf-8")
+    parse_config_file(path)
+    loaded = yaml.safe_load(recipe)
+    expected = COOKBOOK_TEAMS[team]
+    assert set(loaded) - {"version"} == expected["services"]
+    (project,) = loaded["jira"]["projects"]
+    assert project["key"] == expected["project"]
+    assert {t: c["required"] for t, c in project["create"].items()} == expected["create"]
+    kinds = {r["kind"] for t in project["transitions"].values() for r in t["require"]}
+    assert kinds == expected["rule_kinds"]
+    assert loaded["jira"].get("max_attachment_bytes") == expected["max_attachment_bytes"]
+    commands = re.findall(r"```bash\n(.*?)```", section, re.S)[0]
+    keys = set(re.findall(r"\b(APP|DOCS|OPS)\b", commands))
+    assert keys == {expected["project"]}, "each team's commands use only its own project"
+
+
+def test_cookbook_teams_differ() -> None:
+    teams = list(COOKBOOK_TEAMS.values())
+    assert len({frozenset(t["services"]) for t in teams}) == len(teams)
+    assert len({t["project"] for t in teams}) == len(teams)
 
 
 def test_example_json_files_are_valid_json() -> None:

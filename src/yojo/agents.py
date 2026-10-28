@@ -63,9 +63,10 @@ fits the task and run it once. You do not need `yojo commands`, `yojo schema`, o
 ### Rules
 
 - Writes check every rule, required field, and permission first. Exit 4 `requirements_unmet`
-  means nothing was sent: `details.checks` lists every problem with its `fix`, and
-  `details.retry` is the corrected command. Put real content in any `<placeholder>`, then run it
-  once.
+  means nothing was sent: follow every `fix` in `details.checks`. Only when `details.retry` is
+  present, put real content in any `<placeholder>` and run it once. If it is `null` or absent, do
+  what the `fix` says: edit the `--input` document or config, or use the existing pull request or
+  comment.
 - Never retry a write blindly or loop on writes. After exit 6 `outcome_unknown` or exit 7
   `partial_transition`, run the inspection in `error.fix` (`details.recovery_argv`) and compare
   with what you sent; run the write again only if it was not applied. If unsure, ask the human.

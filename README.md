@@ -1,18 +1,18 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/calvinware/yojo/main/docs/assets/banner-dark.svg">
-  <img src="https://raw.githubusercontent.com/calvinware/yojo/main/docs/assets/banner-light.svg" width="800" alt="yojo: command line for Jira, Confluence, and Bitbucket Data Center">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/calvinware/yojo/e54a1c55d8d93250aa7a8e974c1586e3b1a8a257/docs/assets/banner-dark.svg">
+  <img src="https://raw.githubusercontent.com/calvinware/yojo/e54a1c55d8d93250aa7a8e974c1586e3b1a8a257/docs/assets/banner-light.svg" width="800" alt="yojo: command line for Jira, Confluence, and Bitbucket Data Center">
 </picture>
 
 **One call per task for Jira, Confluence, and Bitbucket Data Center: Jira's own words in, every
 rule checked before the write, one JSON object out.**
 
 ```bash
-pipx install git+https://github.com/calvinware/yojo.git   # after the first release: pipx install yojo
+pipx install git+https://github.com/calvinware/yojo.git@e54a1c55d8d93250aa7a8e974c1586e3b1a8a257   # pre-release; from 0.1.0: pipx install yojo
 ```
 
-<img src="https://raw.githubusercontent.com/calvinware/yojo/main/docs/assets/demos/one-call.gif" width="800" alt="Terminal recording: the command yojo jira issue create PROJ --type Bug --summary 'Fix example sign-in' --base-url https://jira.example.test/jira is typed once; yojo checks the project's create screen, creates the Bug, and prints its key, status, and link.">
+<img src="https://raw.githubusercontent.com/calvinware/yojo/e54a1c55d8d93250aa7a8e974c1586e3b1a8a257/docs/assets/demos/one-call.gif" width="800" alt="Terminal recording: the command yojo jira issue create PROJ --type Bug --summary 'Fix example sign-in' --base-url https://jira.example.test/jira is typed once; yojo checks the project's create screen, creates the Bug, and prints its key, status, and link.">
 
 <sub>Recorded with <a href="https://github.com/calvinware/yojo/blob/main/docs/demos/one-call.tape">a VHS tape</a> against yojo's test fixture server (<code>jira.example.test</code>), not a live instance.</sub>
 
@@ -55,8 +55,8 @@ Windows, macOS, and Linux steps without `pipx`.
 
 <p align="center">
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/calvinware/yojo/main/docs/assets/setup/step-5-dark.svg">
-  <img src="https://raw.githubusercontent.com/calvinware/yojo/main/docs/assets/setup/step-5-light.svg" width="760" alt="yojo setup, step 5 of 7: the exact yojo.yaml it will write, shown as a diff against the current file, with the note that nothing is written until you press Save.">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/calvinware/yojo/e54a1c55d8d93250aa7a8e974c1586e3b1a8a257/docs/assets/setup/step-5-dark.svg">
+  <img src="https://raw.githubusercontent.com/calvinware/yojo/e54a1c55d8d93250aa7a8e974c1586e3b1a8a257/docs/assets/setup/step-5-light.svg" width="760" alt="yojo setup, step 5 of 7: the exact yojo.yaml it will write, shown as a diff against the current file, with the note that nothing is written until you press Save.">
 </picture>
 <br><sub>Step 5 of <code>yojo setup</code>: review the exact file before anything is written.</sub>
 </p>
@@ -76,8 +76,9 @@ yojo --json jira issue create PROJ --type Bug --summary "Fix example sign-in" \
 ```mermaid
 flowchart TD
     Call["One call<br/>yojo --json jira issue create ..."] --> Check{"Every rule, required field,<br/>and permission OK?"}
-    Check -->|"no"| Refused["Refused, exit 4<br/>nothing was sent<br/>every problem with its fix,<br/>plus the corrected retry"]
-    Refused -->|"supply the missing content,<br/>run retry once"| Call
+    Check -->|"no"| Refused["Refused, exit 4<br/>nothing was sent<br/>every problem with its fix"]
+    Refused -->|"details.retry given:<br/>fill any placeholder, run it once"| Call
+    Refused -->|"retry null or absent"| FixOnly["Follow each fix: edit the input<br/>or config, or use the item<br/>that already exists"]
     Check -->|"yes"| Write["Write sent once"]
     Write --> Confirm{"Server confirms<br/>the change?"}
     Confirm -->|"yes"| Done["Done, exit 0<br/>key, link, what changed"]
@@ -87,9 +88,11 @@ flowchart TD
     Inspect -->|"applied, or unsure"| Stop["Stop: use what is there,<br/>or ask a person"]
 ```
 
-- **Refused** means nothing was sent. The result lists every problem at once, each with a `fix`,
-  and `details.retry` is your command with the fixes applied. A `<placeholder>` marks content
-  only you can supply; `yojo` never invents a value.
+- **Refused** means nothing was sent. The result lists every problem at once, each with a `fix`.
+  When `yojo` can correct the command itself, `details.retry` is your command with the fixes
+  applied; a `<placeholder>` marks content only you can supply, and `yojo` never invents a value.
+  When `retry` is `null` or absent (a value came from `--input`, the pull request or comment
+  already exists, or the config has drifted), follow each `fix` instead.
 - **Done** only when the server confirms it. The result names the key, the link, and what
   changed.
 - **Unknown** means the write may have happened. `yojo` never retries a write. `error.fix` names
@@ -129,8 +132,9 @@ Repeat `--target` to install several at once. Only the section between the `yojo
 The one-call shape an agent follows:
 
 1. Run the task once with `--json`, using natural values.
-2. Exit 0: done. Exit 4 `requirements_unmet`: nothing was sent; fill each `<placeholder>` with
-   real content and run `details.retry` once.
+2. Exit 0: done. Exit 4: nothing was sent; follow each check's `fix`. Only when `details.retry` is
+   present, fill each `<placeholder>` with real content and run it once. If it is `null`, edit
+   the input or use the item that already exists, as the `fix` says.
 3. Exit 3: ask the person to run `yojo login`. Exit 6 `outcome_unknown` or exit 7: inspect with
    the commands in `error.fix` before anything else.
 

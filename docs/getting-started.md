@@ -120,12 +120,15 @@ cd yojo
 pipx install .
 ```
 
-Or, in one line without a clone (this is the install shown at the top of the README until the
-first release):
+Or, in one line without a clone, from a pinned pre-release revision that ships `yojo` (this is
+the install shown at the top of the README until the first release):
 
 ```bash
-pipx install git+https://github.com/calvinware/yojo.git
+pipx install git+https://github.com/calvinware/yojo.git@e54a1c55d8d93250aa7a8e974c1586e3b1a8a257
 ```
+
+Pin a revision rather than the default branch: until the 0.1.0 work merges, the default branch
+still builds the older `atl` command. Run `yojo commands` to confirm the install, as above.
 
 For an editable development environment with the test and docs tools, see
 [Contributing](contributing.md#development-setup).

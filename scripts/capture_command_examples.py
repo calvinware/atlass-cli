@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import re
 import sys
 import tempfile
 from collections.abc import Callable
@@ -605,6 +606,47 @@ def stdin_text(example: dict[str, Any], prefix: str) -> str | None:
     return text if isinstance(text, str) else None
 
 
+def portable_text(text: str, folder: str) -> str:
+    """Show `folder`, and any path under it, as WORKDIR with forward slashes on every OS."""
+    pattern = re.escape(folder) + r"(?:[\\/][\w.~-]+)*"
+    return re.sub(pattern, lambda m: WORKDIR + m.group(0)[len(folder) :].replace("\\", "/"), text)
+
+
+def portable_value(value: Any, folder: str) -> Any:
+    if isinstance(value, str):
+        return portable_text(value, folder)
+    if isinstance(value, list):
+        return [portable_value(item, folder) for item in value]
+    if isinstance(value, dict):
+        return {key: portable_value(item, folder) for key, item in value.items()}
+    return value
+
+
+def portable_json(text: str, folder: str) -> str:
+    """Rewrite paths inside the envelope's string values, so escaped Windows paths match too.
+
+    Output that is not exactly one compact JSON line is left as printed for problems_in to report.
+    """
+    body = text.rstrip("\n")
+    try:
+        envelope = json.loads(body)
+    except ValueError:
+        return text
+    if body != compact(envelope):
+        return text
+    return compact(portable_value(envelope, folder)) + text[len(body) :]
+
+
+def compact(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+
+
+def temporary_paths() -> list[str]:
+    """Every spelling of the temporary folder that must never be published."""
+    folders = {tempfile.gettempdir(), str(Path(tempfile.gettempdir()).resolve())}
+    return sorted(folders | {json.dumps(f)[1:-1] for f in folders})
+
+
 def run_once(
     scenario: Scenario, argv: list[str], stdin: str | None, terminal: bool
 ) -> dict[str, Any]:
@@ -624,9 +666,10 @@ def run_once(
         text = stdout.getvalue()
         if "Traceback" in stderr.getvalue():
             raise CaptureError(f"`yojo {' '.join(argv)}` raised:\n{stderr.getvalue()}")
+        text = portable_text(text, str(cwd)) if terminal else portable_json(text, str(cwd))
         return {
             "exit": code,
-            "stdout": text.replace(str(cwd), WORKDIR),
+            "stdout": text,
             "requests": [f"{r.method} {r.url.path}" for r in harness.server.requests],
             "writes": len(harness.server.writes()),
         }
@@ -670,7 +713,7 @@ def problems_in(path: str, which: str, case: dict[str, Any]) -> list[str]:
     if len(lines) != 1:
         return [f"{where}: --json printed {len(lines)} lines, not 1"]
     envelope = json.loads(lines[0])
-    if lines[0] != json.dumps(envelope, ensure_ascii=True, separators=(",", ":")):
+    if lines[0] != compact(envelope):
         problems.append(f"{where}: --json output is not compact one-line JSON")
     if (which == "success") != (envelope.get("ok") is True):
         problems.append(f"{where}: expected ok={which == 'success'}, got {lines[0][:300]}")
@@ -686,7 +729,7 @@ def problems_in(path: str, which: str, case: dict[str, Any]) -> list[str]:
     for text in (case["json"], case["terminal"] or ""):
         if any(secret in text for secret in SECRETS):
             problems.append(f"{where}: output contains a token or credential header")
-        if tempfile.gettempdir() in text:
+        if any(folder in text for folder in temporary_paths()):
             problems.append(f"{where}: output contains a temporary path")
     return problems
 

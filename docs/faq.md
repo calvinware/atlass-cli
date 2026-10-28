@@ -59,9 +59,11 @@ the OS keyring. An agent must never see, store, or pass your token.
 <details>
 <summary><strong>Why was my write refused when I only made one mistake?</strong></summary>
 
-It was refused for every problem at once, so you can fix them together. Nothing was sent.
-`details.retry` (`Retry:` in a terminal) is your command with each fix applied; replace any
-`<placeholder>` with real content and run it once.
+It was refused for every problem at once, so you can fix them together. Nothing was sent. Follow
+each problem's `fix`. When `details.retry` (`Retry:` in a terminal) is present, it is your command
+with each fix applied; replace any `<placeholder>` with real content and run it once. When it is
+`null` or absent, the `fix` says what to do instead: edit the `--input` document, fix the config,
+or use the pull request or comment that already exists.
 
 </details>
 

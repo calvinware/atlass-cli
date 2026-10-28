@@ -146,13 +146,22 @@ Tests never touch a real server or keyring. [`tests/conftest.py`](../tests/conft
   fails when any output, exit code, or argument list differs. Run it before
   `scripts/generate_command_reference.py --write`, which renders those captures into
   `docs/reference/commands.md`.
+- README images load from `raw.githubusercontent.com` at one pinned commit, not `main`, so a pull
+  request shows its own images and the PyPI page never changes under a release. The pre-release
+  install line pins the same commit. After changing a README image, push it, then pin every README
+  image URL and the install line to that pushed commit; `tests/test_docs.py` fails while any
+  pinned asset differs from the working tree.
 - `python scripts/capture_demos.py --write` records the README demo from
   [`docs/demos/one-call.tape`](demos/one-call.tape) with VHS. The tape types a real `yojo`
   command that runs the actual parser, handlers, and renderer against the fixture server and an
   in-memory keyring; no network, OS keyring, or token is involved. `--check` re-records it in a
-  temporary folder and fails when the tape, the fixture responses, the CLI output, or the
-  committed GIF drift, or when the GIF is over its duration or size budget. Use the VHS version
-  pinned in CI.
+  temporary folder and fails when the tape, the fixture responses, or the CLI output drift, when
+  the committed GIF, transcript, or manifest no longer match each other, or when the GIF is over
+  its duration or size budget. It also compares the last frame of the fresh GIF with the
+  committed one, as the mean color of 12-pixel cells; a cell that moves by more than 24 of 255 in
+  any channel fails. That catches a changed color, word, or layout, but not a change to a few
+  scattered pixels or to a frame before the last, so look at the GIF yourself before committing
+  it. Use the VHS version pinned in CI.
 
 > [!NOTE]
 > Fixture tests prove behavior against modeled responses, not live compatibility. Live results go
@@ -240,10 +249,12 @@ lychee --config lychee.toml README.md AGENTS.md 'docs/**/*.md'
 
 [`.github/workflows/pages.yml`](../.github/workflows/pages.yml) builds the site with
 `mkdocs build --strict` from the same `docs/` folder after CI succeeds on the current `main`
-commit. A manual run checks for successful CI on that exact commit before building. Only its
-deploy job gets `pages: write` and `id-token: write`. Pull requests never deploy; the `docs` job
-in CI builds the same site for review. A repository owner must set *Settings > Pages > Build and
-deployment > Source* to **GitHub Actions** once before the first deployment can succeed.
+commit. Before building, and again just before deploying, it checks that the commit is still the
+head of `main` and that CI passed on a push of that exact commit, so a newer `main` that lands
+during the build stops the older site. Only its deploy job gets `pages: write` and
+`id-token: write`. Pull requests never deploy; the `docs` job in CI builds the same site for
+review. A repository owner must set *Settings > Pages > Build and deployment > Source* to
+**GitHub Actions** once before the first deployment can succeed.
 
 ## Release
 
@@ -322,5 +333,6 @@ Each release:
 5. In a clean shell, run `pipx install yojo` (or `uv tool install yojo`), then
    `yojo --json commands` (check `data.version`) and `yojo schema 'jira issue create'`.
 6. After the first release only, once step 5 works: in a pull request, change the install section
-   of `docs/getting-started.md` to say the package is available on PyPI, and recheck that the
-   README's package-first install steps work as written.
+   of `docs/getting-started.md` to say the package is available on PyPI, change the README's
+   pinned pre-release install line to `pipx install yojo`, and recheck that the README's
+   package-first install steps work as written.

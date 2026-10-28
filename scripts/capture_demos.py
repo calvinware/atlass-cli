@@ -6,7 +6,12 @@ server and an in-memory keyring. No network, no OS keyring, no real token.
 
 VHS writes the animated GIF and a text transcript of the frames. The transcript is the stable,
 reviewable record; the manifest pins the hashes of the tape, transcript, and GIF together with
-the GIF's length and size, so a changed tape, fixture, CLI output, or image is caught.
+the GIF's length and size, so a changed tape, fixture, or CLI output, or an edited committed file,
+is caught. `--check` also decodes the last frame of a fresh recording and of the committed GIF and
+compares them cell by cell (see FRAME_CELL and FRAME_TOLERANCE), so a committed GIF that no longer
+shows what the tape records fails even if its manifest was regenerated to match. Font rendering and
+frame timing differ slightly between machines, so the comparison is approximate: a person still
+reviews the GIF before it is committed.
 
     python scripts/capture_demos.py --write          # regenerate docs/assets/demos/*
     python scripts/capture_demos.py --check          # re-record and fail on any drift (needs VHS)
@@ -47,6 +52,11 @@ MAX_SECONDS = 15.0
 MAX_BYTES = 1_500_000
 # A re-recorded GIF may differ in bytes across machines, but not in length.
 DURATION_TOLERANCE = 1.5
+# The last frames are compared as the mean color of each FRAME_CELL x FRAME_CELL pixel cell. A cell
+# differs when any channel's mean moves by more than FRAME_TOLERANCE (of 255); font antialiasing
+# moves a cell's mean by a few units, a changed color, word, or layout by far more.
+FRAME_CELL = 12
+FRAME_TOLERANCE = 24
 VHS_TIMEOUT = 180
 COMMAND_LINE = DEMO_COMMAND
 EXPECTED_TEXT = ("Created PROJ-128", "Open: https://jira.example.test/jira/browse/PROJ-128")
@@ -69,6 +79,11 @@ class Recording:
 
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def tape_sha256(tape: bytes) -> str:
+    """Hash the tape with LF line endings, so a CRLF checkout pins the same tape."""
+    return sha256(tape.replace(b"\r\n", b"\n"))
 
 
 # --------------------------------------------------------------------------- GIF
@@ -115,6 +130,163 @@ def gif_timing(data: bytes) -> tuple[int, float]:
     raise DemoError("GIF has no trailer")
 
 
+def _lzw_decode(data: bytes, min_size: int, count: int) -> bytes:
+    if not 2 <= min_size <= 8:
+        raise DemoError("bad GIF LZW code size")
+    clear, end = 1 << min_size, (1 << min_size) + 1
+    base = [bytes([i]) for i in range(clear)] + [b"", b""]
+    table, size, prev = list(base), min_size + 1, b""
+    out = bytearray()
+    bits = nbits = 0
+    for byte in data:
+        bits |= byte << nbits
+        nbits += 8
+        while nbits >= size:
+            code = bits & ((1 << size) - 1)
+            bits >>= size
+            nbits -= size
+            if code == clear:
+                table, size, prev = list(base), min_size + 1, b""
+                continue
+            if code == end:
+                return bytes(out[:count])
+            if code < len(table):
+                entry = table[code]
+                if prev:
+                    table.append(prev + entry[:1])
+            elif code == len(table) and prev:
+                entry = prev + prev[:1]
+                table.append(entry)
+            else:
+                raise DemoError("bad GIF LZW code")
+            out += entry
+            prev = entry
+            if len(table) == 1 << size and size < 12:
+                size += 1
+            if len(table) > 4096:
+                del table[4096:]
+    return bytes(out[:count])
+
+
+def _color_table(data: bytes, at: int, flags: int) -> tuple[list[int], int]:
+    if not flags & 0x80:
+        return [], at
+    size = 2 ** ((flags & 0x07) + 1)
+    raw = data[at : at + 3 * size]
+    return [int.from_bytes(raw[i : i + 3], "big") for i in range(0, len(raw), 3)], at + 3 * size
+
+
+def gif_last_frame(data: bytes) -> tuple[int, int, list[int]]:
+    """Return the width, height, and 0xRRGGBB pixels of the GIF's last frame as it is shown."""
+    if data[:6] not in (b"GIF87a", b"GIF89a") or len(data) < 13:
+        raise DemoError("not a GIF file")
+    width = int.from_bytes(data[6:8], "little")
+    height = int.from_bytes(data[8:10], "little")
+    palette, pos = _color_table(data, 13, data[10])
+    background = palette[data[11]] if data[11] < len(palette) else 0
+    canvas = [background] * (width * height)
+    disposal, transparent = 0, None
+    previous: tuple[int, int, int, int, int, list[int]] | None = None
+
+    def sub_blocks(at: int) -> tuple[bytes, int]:
+        chunks = bytearray()
+        while True:
+            if at >= len(data):
+                raise DemoError("truncated GIF")
+            size = data[at]
+            if size == 0:
+                return bytes(chunks), at + 1
+            chunks += data[at + 1 : at + 1 + size]
+            at += 1 + size
+
+    while pos < len(data):
+        block = data[pos]
+        if block == 0x3B:
+            return width, height, canvas
+        if block == 0x21:
+            if data[pos + 1] == 0xF9 and data[pos + 2] == 4:
+                packed = data[pos + 3]
+                disposal = (packed >> 2) & 0x07
+                transparent = data[pos + 6] if packed & 0x01 else None
+            _, pos = sub_blocks(pos + 2)
+            continue
+        if block != 0x2C:
+            raise DemoError(f"unexpected GIF block 0x{block:02x}")
+        if previous is not None:
+            left, top, w, h, how, saved = previous
+            if how == 2:
+                for y in range(top, min(top + h, height)):
+                    row = y * width
+                    for x in range(left, min(left + w, width)):
+                        canvas[row + x] = background
+            elif how == 3:
+                canvas = saved
+        left = int.from_bytes(data[pos + 1 : pos + 3], "little")
+        top = int.from_bytes(data[pos + 3 : pos + 5], "little")
+        w = int.from_bytes(data[pos + 5 : pos + 7], "little")
+        h = int.from_bytes(data[pos + 7 : pos + 9], "little")
+        packed = data[pos + 9]
+        colors, pos = _color_table(data, pos + 10, packed)
+        colors = colors or palette
+        min_size = data[pos]
+        compressed, pos = sub_blocks(pos + 1)
+        indexes = _lzw_decode(compressed, min_size, w * h)
+        previous = (left, top, w, h, disposal, list(canvas) if disposal == 3 else [])
+        rows = list(range(h))
+        if packed & 0x40:
+            rows = [*range(0, h, 8), *range(4, h, 8), *range(2, h, 4), *range(1, h, 2)]
+        for n, y in enumerate(rows):
+            if top + y >= height:
+                continue
+            line = indexes[n * w : (n + 1) * w]
+            row = (top + y) * width
+            for x, index in enumerate(line):
+                if index != transparent and left + x < width and index < len(colors):
+                    canvas[row + left + x] = colors[index]
+        disposal, transparent = 0, None
+    raise DemoError("GIF has no trailer")
+
+
+def frame_cells(gif: bytes) -> tuple[int, int, list[tuple[int, int, int]]]:
+    """Return the last frame as the mean (r, g, b) of each FRAME_CELL-pixel cell, row by row."""
+    width, height, pixels = gif_last_frame(gif)
+    columns, rows = -(-width // FRAME_CELL), -(-height // FRAME_CELL)
+    cells = []
+    for cy in range(rows):
+        for cx in range(columns):
+            r = g = b = n = 0
+            for y in range(cy * FRAME_CELL, min((cy + 1) * FRAME_CELL, height)):
+                row = y * width
+                for x in range(cx * FRAME_CELL, min((cx + 1) * FRAME_CELL, width)):
+                    pixel = pixels[row + x]
+                    r, g, b, n = (
+                        r + (pixel >> 16),
+                        g + ((pixel >> 8) & 0xFF),
+                        b + (pixel & 0xFF),
+                        n + 1,
+                    )
+            cells.append((r // n, g // n, b // n))
+    return columns, rows, cells
+
+
+def frame_problems(fresh: bytes, committed: bytes) -> list[str]:
+    """Compare the last frame of a fresh recording with the committed GIF's last frame."""
+    try:
+        new, old = frame_cells(fresh), frame_cells(committed)
+    except DemoError as exc:
+        return [f"could not compare the last frames: {exc}"]
+    if new[:2] != old[:2]:
+        return [f"{GIF.name}: the last frame is a different size from a fresh recording"]
+    changed = sum(
+        1
+        for a, b in zip(new[2], old[2], strict=True)
+        if max(abs(x - y) for x, y in zip(a, b, strict=True)) > FRAME_TOLERANCE
+    )
+    if changed:
+        return [f"{GIF.name}: {changed} cell(s) of the last frame differ from a fresh recording"]
+    return []
+
+
 # --------------------------------------------------------------------------- checks
 
 
@@ -158,7 +330,7 @@ def manifest_for(tape: bytes, recording: Recording) -> dict[str, Any]:
     return {
         "vhs": PINNED_VHS,
         "command": COMMAND_LINE,
-        "tape_sha256": sha256(tape),
+        "tape_sha256": tape_sha256(tape),
         "transcript_sha256": sha256(recording.transcript.encode("utf-8")),
         "gif_sha256": sha256(recording.gif),
         "gif_bytes": len(recording.gif),
@@ -295,6 +467,8 @@ def check_recording(recording: Recording) -> list[str]:
     committed = TRANSCRIPT.read_text(encoding="utf-8") if TRANSCRIPT.is_file() else ""
     if recording.transcript != committed:
         problems.append(f"{TRANSCRIPT.name} differs from a fresh recording")
+    if GIF.is_file():
+        problems += frame_problems(recording.gif, GIF.read_bytes())
     if MANIFEST.is_file():
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         _, seconds = gif_timing(recording.gif)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import shutil
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -108,6 +109,41 @@ def test_changed_gif_is_stale(copied: Path) -> None:
     data[20] ^= 0xFF  # a global color table byte: still a valid GIF
     demos.GIF.write_bytes(bytes(data))
     assert any("gif_sha256" in p for p in demos.static_problems())
+
+
+def test_crlf_tape_checkout_has_the_same_hash(copied: Path) -> None:
+    lf = demos.TAPE.read_bytes().replace(b"\r\n", b"\n")
+    demos.TAPE.write_bytes(lf.replace(b"\n", b"\r\n"))
+    assert demos.static_problems() == []
+    assert demos.tape_sha256(lf) == demos.tape_sha256(lf.replace(b"\n", b"\r\n"))
+
+
+def test_fresh_frame_matches_committed_frame() -> None:
+    gif = demos.GIF.read_bytes()
+    assert demos.frame_problems(gif, gif) == []
+    columns, rows, cells = demos.frame_cells(gif)
+    assert len(cells) == columns * rows > 1
+
+
+def test_changed_frame_is_caught_even_with_a_regenerated_manifest(copied: Path) -> None:
+    fresh = demos.GIF.read_bytes()
+    _, _, pixels = demos.gif_last_frame(fresh)
+    palette, _ = demos._color_table(fresh, 13, fresh[10])
+    background = palette.index(Counter(pixels).most_common(1)[0][0])
+    changed = bytearray(fresh)
+    changed[13 + 3 * background + 1] ^= 0xFF  # still a valid GIF, visibly a different color
+    demos.GIF.write_bytes(bytes(changed))
+    transcript = demos.TRANSCRIPT.read_text(encoding="utf-8")
+    recording = demos.Recording(fresh, transcript, demo_fixture.EXPECTED_REQUESTS)
+    manifest = demos.manifest_for(
+        demos.TAPE.read_bytes(),
+        demos.Recording(bytes(changed), transcript, demo_fixture.EXPECTED_REQUESTS),
+    )
+    demos.MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    assert demos.static_problems() == []
+    problems = demos.check_recording(recording)
+    assert len(problems) == 1
+    assert "cell(s) of the last frame differ" in problems[0]
 
 
 def test_missing_gif_is_reported(copied: Path) -> None:

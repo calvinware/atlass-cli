@@ -28,7 +28,8 @@ Generic Jira commands and the shared contract (#14):
 - Field, issue type, status, option, link type, and person names resolve case-insensitively from
   live Jira metadata, with candidates on ambiguity and a suggestion on a near miss.
 - Every write checks all required fields, rules, and permissions first, refuses with every problem
-  listed and nothing sent, and returns `details.retry`, the corrected command.
+  listed and nothing sent, and returns `details.retry`, the corrected command, when it can build
+  one.
 - A friendly terminal view of the same envelope; piped output and `--json` stay one-line JSON.
   `NO_COLOR` is honored.
 - `--base-url` works without `yojo.yaml`.

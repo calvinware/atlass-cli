@@ -40,8 +40,9 @@ confirms it:
 ```mermaid
 flowchart TD
     Call["One call<br/>yojo --json jira issue create ..."] --> Check{"Every rule, required field,<br/>and permission OK?"}
-    Check -->|"no"| Refused["Refused, exit 4<br/>nothing was sent<br/>every problem with its fix,<br/>plus the corrected retry"]
-    Refused -->|"supply the missing content,<br/>run retry once"| Call
+    Check -->|"no"| Refused["Refused, exit 4<br/>nothing was sent<br/>every problem with its fix"]
+    Refused -->|"details.retry given:<br/>fill any placeholder, run it once"| Call
+    Refused -->|"retry null or absent"| FixOnly["Follow each fix: edit the input<br/>or config, or use the item<br/>that already exists"]
     Check -->|"yes"| Write["Write sent once"]
     Write --> Confirm{"Server confirms<br/>the change?"}
     Confirm -->|"yes"| Done["Done, exit 0<br/>key, link, what changed"]
@@ -102,8 +103,8 @@ flowchart LR
   lists return `next_start` for the next page.
 - **Agent-ready.** `yojo agent install --target agents|claude|cursor|copilot|gemini` writes the
   instructions your tool reads; see the [agent guide](agents.md).
-- **All problems at once.** A refused write lists every problem with a concrete `fix` and a
-  `retry` line, and nothing is sent.
+- **All problems at once.** A refused write lists every problem with a concrete `fix`, and a
+  corrected `retry` line when `yojo` can build one; nothing is sent.
 - **Works without config.** `--base-url` and a keyring login are enough. `yojo.yaml` adds aliases,
   fields required on create, and transition rules.
 - **Offline discovery.** `yojo commands` and `yojo schema '<command>'` need no config or
