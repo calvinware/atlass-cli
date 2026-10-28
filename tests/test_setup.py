@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import sys
 import threading
@@ -36,10 +37,17 @@ Scenario = Callable[[Pilot[Any]], Awaitable[None]]
 
 
 def test_check_mark_has_an_ascii_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    utf8 = SimpleNamespace(encoding="utf-8")
     with monkeypatch.context() as patch:
-        patch.setattr(sys, "stdout", SimpleNamespace(encoding="ascii"))
+        patch.setattr(sys, "__stdout__", utf8)
+        patch.setattr(sys, "__stderr__", SimpleNamespace(encoding="ascii"))
         assert setup.check_mark() == "[x]"
-        patch.setattr(sys, "stdout", SimpleNamespace(encoding="utf-8"))
+        patch.setattr(sys, "__stdout__", SimpleNamespace(encoding="ascii"))
+        patch.setattr(sys, "__stderr__", utf8)
+        assert setup.check_mark() == "[x]"
+        # A redirected sys.stdout, as inside Textual, has no say in the terminal's encoding.
+        patch.setattr(sys, "__stdout__", utf8)
+        patch.setattr(sys, "stdout", SimpleNamespace())
         assert setup.check_mark() == "✓"
 
 
@@ -1137,6 +1145,69 @@ def test_uncertain_second_save_clears_prior_success_for_same_file(tmp_path: Path
     assert app.return_value["notes"][0].startswith("A save did not finish;")
 
 
+def test_save_after_an_uncertain_outcome_confirms_the_reviewed_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+    save = app.services.save
+    read_current = files.read_current
+    fail_reads = 0
+    reviewed: list[bytes] = []
+
+    def flaky_read(path: Path) -> bytes | None:
+        nonlocal fail_reads
+        if fail_reads:
+            fail_reads -= 1
+            raise YojoError("file_invalid", "cannot read", "Check permissions.")
+        return read_current(path)
+
+    def write_then_lose_the_check(candidate: Any) -> str:
+        nonlocal fail_reads
+        reviewed.append(candidate.data)
+        candidate.dest.write_bytes(candidate.data)
+        fail_reads = 1
+        raise YojoError("file_invalid", "read back failed", "Check permissions.")
+
+    monkeypatch.setattr(files, "read_current", flaky_read)
+    app.services.save = write_then_lose_the_check  # type: ignore[method-assign]
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await _to_review(pilot)
+        await press_button(pilot, "#save")
+        assert text(pilot, "#review-status").startswith("Save did not finish;")
+        assert app.query_one("#step-5", setup.ReviewStep).blocker() is not None
+        assert (tmp_path / "yojo.yaml").read_bytes() == reviewed[0]
+        await press_button(pilot, "#preview")
+        assert "already holds this preview. Press Save to confirm it." in text(
+            pilot, "#review-status"
+        )
+        assert not app.query_one("#save", Button).disabled
+        app.services.save = save  # type: ignore[method-assign]
+        await press_button(pilot, "#save")
+        assert text(pilot, "#review-status").startswith("Already up to date: ./yojo.yaml.")
+        assert app.draft.saved == (str(tmp_path / "yojo.yaml"), "unchanged")
+        assert app.draft.save_unknown is None
+        await press_button(pilot, "#preview")
+        assert "already matches. Nothing to save." in text(pilot, "#review-status")
+        assert app.query_one("#save", Button).disabled
+        await next_step(pilot)
+        await next_step(pilot)
+        assert app.step == 7
+        await press_button(pilot, "#run-try")
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+
+    world.drive(scenario, app)
+    assert (tmp_path / "yojo.yaml").read_bytes() == reviewed[0]
+    assert app.return_value is not None
+    assert app.return_value["status"] == "completed"
+    assert app.return_value["config"] == {
+        "path": str(tmp_path / "yojo.yaml"),
+        "action": "unchanged",
+    }
+
+
 def test_held_agent_install_is_reported_before_setup_finishes(tmp_path: Path) -> None:
     world = World(tmp_path)
     app = _ready(world)
@@ -1222,6 +1293,35 @@ def test_failed_try_retry_hides_earlier_success(tmp_path: Path) -> None:
         assert app.query_one("#step-7", setup.TryStep).blocker() is not None
 
     world.drive(scenario, app)
+
+
+def test_changed_file_clears_try_success_until_a_fresh_read(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+    path = tmp_path / "yojo.yaml"
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await _save_and_continue(pilot)
+        await next_step(pilot)
+        await press_button(pilot, "#run-try")
+        assert app.query_one("#step-7", setup.TryStep).blocker() is None
+        saved = path.read_bytes()
+        path.write_bytes(saved + b"# edited elsewhere\n")
+        await press_button(pilot, "#run-try")
+        assert "Save the current yojo.yaml before trying it." in text(pilot, "#try-status")
+        assert app.draft.try_revision is None
+        path.write_bytes(saved)
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+        assert app.is_running
+        assert "Run the read-only command successfully" in text(pilot, "#nav-hint")
+        await press_button(pilot, "#run-try")
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+
+    world.drive(scenario, app)
+    assert app.return_value is not None
+    assert app.return_value["status"] == "completed"
 
 
 @pytest.mark.parametrize(
@@ -1345,6 +1445,47 @@ def test_narrow_terminal_keeps_progress_and_right_aligned_navigation(tmp_path: P
     world.drive(scenario, size=(80, 24))
 
 
+@pytest.mark.parametrize("theme", ["textual-light", "textual-dark"])
+def test_narrow_terminal_rendering_of_focus_padding_and_scrollbars(
+    tmp_path: Path, theme: str
+) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+    app.theme = "yojo-light" if theme == "textual-light" else "yojo-dark"
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        check = app.query_one("#check", Button)
+        check.scroll_visible(animate=False)
+        await pilot.pause()
+        # One cell of padding on each side of the Check connection label.
+        assert check.content_region.x == check.region.x + 1
+        assert check.content_region.right == check.region.right - 1
+        assert check.content_region.width >= len(str(check.label))
+        step = app.query_one("#step-1")
+        assert step.show_vertical_scrollbar
+        assert step.vertical_scrollbar.region.width == 1
+
+        await _to_review(pilot)
+        await press_button(pilot, "#save")
+        panel = app.query_one("#diff-panel")
+        assert panel.show_vertical_scrollbar
+        assert panel.vertical_scrollbar.region.width == 1
+
+        await next_step(pilot)
+        await next_step(pilot)
+        run = app.query_one("#run-try", Button)
+        assert app.focused is run
+        focused = run.rich_style
+        assert focused.bold and not focused.reverse
+        # The filled primary button stays filled when focused; the generic reverse would invert it.
+        assert focused.bgcolor is not None
+        assert focused.bgcolor != app.screen.rich_style.bgcolor
+        assert focused.color != app.screen.rich_style.bgcolor
+        assert app.screen.region.contains_region(run.region)
+
+    world.drive(scenario, app, size=(80, 24))
+
+
 def test_light_dark_toggle_and_no_color(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
     world = World(tmp_path)
@@ -1364,6 +1505,27 @@ def test_light_dark_toggle_and_no_color(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 # ----------------------------------------------------------------- remote text and captures
+
+
+def test_ascii_terminal_sees_the_ascii_check_mark_inside_the_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("__stdout__", "__stderr__"):
+        monkeypatch.setattr(sys, name, io.TextIOWrapper(io.BytesIO(), encoding="ascii"))
+    world = World(tmp_path)
+    shown: dict[str, str] = {}
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await connect(pilot, "jira")
+        shown["probe"] = text(pilot, "#probe-jira")
+        await next_step(pilot)
+        shown["crumb"] = text(pilot, "#crumb-1")
+        shown["screen"] = pilot.app.export_screenshot()
+
+    world.drive(scenario)
+    assert shown["probe"].startswith("[x] Jira")
+    assert shown["crumb"].startswith("[x]")
+    assert "✓" not in shown["screen"]
 
 
 def test_remote_text_is_shown_literally_without_escapes() -> None:

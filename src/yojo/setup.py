@@ -99,11 +99,16 @@ KEPT_JIRA_KEYS = {"base_url", "ca_bundle", "fields", "projects"}
 
 
 def check_mark() -> str:
-    """Use the check glyph when the terminal encoding can represent it."""
-    try:
-        "✓".encode(getattr(sys.stdout, "encoding", None) or "utf-8")
-    except (LookupError, UnicodeEncodeError):
-        return "[x]"
+    """Use the check glyph when the terminal encoding can represent it.
+
+    Textual redirects ``sys.stdout`` while it runs and draws on the original streams (stderr on
+    macOS and Linux, stdout on Windows), so their encodings are the ones that count.
+    """
+    for stream in (sys.__stdout__, sys.__stderr__):
+        try:
+            "✓".encode(getattr(stream, "encoding", None) or "utf-8")
+        except (LookupError, UnicodeEncodeError):
+            return "[x]"
     return "✓"
 
 
@@ -1548,6 +1553,14 @@ class ReviewStep(StepView):
             self.say("review-status", f"Cannot save yet. {_error_text(error)}", "error")
             return
         self.candidate, self.reviewed_revision, self.stale = candidate, revision, False
+        # After an uncertain save the file may already hold these bytes; Save then re-checks
+        # it and records it as saved without writing.
+        saved = self.draft.saved
+        confirmed = (
+            saved is not None
+            and saved[0] == str(candidate.dest)
+            and self.setup.saved_snapshot_current()
+        )
         where = show_path(candidate.dest, self.setup.services.cwd)
         diff = unified_diff(candidate.current, candidate.text, where)
         text = Text()
@@ -1559,8 +1572,10 @@ class ReviewStep(StepView):
         self.query_one("#yaml", Static).update(Text(candidate.text))
         if candidate.current is None:
             status = f"{where} does not exist yet. Save creates it."
-        elif candidate.current == candidate.data:
+        elif candidate.current == candidate.data and confirmed:
             status = f"{where} already matches. Nothing to save."
+        elif candidate.current == candidate.data:
+            status = f"{where} already holds this preview. Press Save to confirm it."
         else:
             changed = sum(1 for line in diff if line[:1] in "+-" and line[:3] not in ("+++", "---"))
             status = f"Save replaces {where} ({changed} changed lines). Review the changes first."
@@ -1574,7 +1589,7 @@ class ReviewStep(StepView):
         if self.draft.policy() is None:
             notes.append("No team rules: yojo uses Jira's own required fields and checks.")
         self.query_one("#review-notes", Static).update(plain("\n".join(notes), 2000))
-        self.query_one("#save", Button).disabled = candidate.current == candidate.data
+        self.query_one("#save", Button).disabled = candidate.current == candidate.data and confirmed
 
     @on(Button.Pressed, "#save")
     def save(self) -> None:
@@ -1766,13 +1781,13 @@ class TryStep(StepView):
         self.query_one("#finish-message", Static).display = False
         self.query_one("#try-next", Static).display = False
         self.query_one("#try-table", DataTable).display = False
+        request = self.request = object()
+        self.draft.try_revision = None
         if not self.setup.saved_snapshot_current():
             self.say("try-status", "Save the current yojo.yaml before trying it.", "warn")
             return
         argv = self.setup.services.try_argv(self.draft)
         revision = self.draft.revision
-        request = self.request = object()
-        self.draft.try_revision = None
         self.say("try-status", "Running...", "busy")
         self.setup.background(
             "try",
