@@ -4,7 +4,9 @@ A release tag is accepted only when all of these hold:
 
 - the ref is exactly `refs/tags/v<project.version>` from pyproject.toml;
 - the tagged commit is on the first-parent history of `main`;
-- a `push` run of the CI workflow on `main` for that exact commit concluded `success`.
+- a `push` run of the CI workflow on `main` for that exact commit concluded `success`;
+- README.md, which becomes the PyPI page, loads every image from the `v<project.version>` tag and
+  installs with `pipx install yojo`, not a pre-release commit.
 
 The workflow collects the inputs (no network access happens here):
 
@@ -28,6 +30,8 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 SHA_RE = re.compile(r"[0-9a-f]{40}")
+RAW_REVISION_RE = re.compile(r"https://raw\.githubusercontent\.com/calvinware/yojo/([^/\s\"')]+)/")
+GIT_INSTALL_RE = re.compile(r"github\.com/calvinware/yojo\.git@")
 
 
 def project_version(pyproject: Path = ROOT / "pyproject.toml") -> str:
@@ -68,11 +72,30 @@ def ci_problems(sha: str, runs: Any) -> list[str]:
     return []
 
 
-def check(ref: str, sha: str, version: str, main_history: Iterable[str], runs: Any) -> list[str]:
+def readme_problems(version: str, readme: str) -> list[str]:
+    expected = f"v{version}"
+    revisions = set(RAW_REVISION_RE.findall(readme))
+    problems = [
+        f"README.md loads images from {rev!r}; pin them to the release tag {expected!r}"
+        for rev in sorted(revisions - {expected})
+    ]
+    if not revisions:
+        problems.append(f"README.md loads no images from the release tag {expected!r}")
+    if GIT_INSTALL_RE.search(readme):
+        problems.append("README.md still installs a pre-release commit; use `pipx install yojo`")
+    if "pipx install yojo" not in readme:
+        problems.append("README.md does not show `pipx install yojo`")
+    return problems
+
+
+def check(
+    ref: str, sha: str, version: str, main_history: Iterable[str], runs: Any, readme: str
+) -> list[str]:
     return [
         *tag_problems(ref, version),
         *main_history_problems(sha, main_history),
         *ci_problems(sha, runs),
+        *readme_problems(version, readme),
     ]
 
 
@@ -82,11 +105,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sha", required=True)
     parser.add_argument("--main-history", type=Path, required=True)
     parser.add_argument("--ci-runs", type=Path, required=True)
+    parser.add_argument("--readme", type=Path, default=ROOT / "README.md")
     args = parser.parse_args(argv)
     try:
         history = args.main_history.read_text(encoding="utf-8").splitlines()
         runs = json.loads(args.ci_runs.read_text(encoding="utf-8"))
-        problems = check(args.ref, args.sha, project_version(), history, runs)
+        readme = args.readme.read_text(encoding="utf-8")
+        problems = check(args.ref, args.sha, project_version(), history, runs, readme)
     except (OSError, ValueError, KeyError) as exc:
         problems = [f"release gate inputs are unreadable: {exc}"]
     if problems:

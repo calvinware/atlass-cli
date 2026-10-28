@@ -15,6 +15,7 @@ import yaml
 
 from scripts import capture_command_examples as capture
 from scripts import generate_command_reference as gen
+from scripts import release_gate
 from scripts.mkdocs_hooks import DocsRenderError, render_os_tabs, rewrite_external_links
 from tests.conftest import JIRA, Harness
 from yojo.cli import NO_SERVICE_OPTIONS, build_parser
@@ -572,7 +573,9 @@ def test_shared_markdown_has_no_site_only_syntax(path: Path) -> None:
 README_BLOB_URL = f"{REPO_URL}/blob/main/"
 # README images load from one pinned revision, so a PR shows its own assets and a PyPI page never
 # changes under a release. The pre-release install line pins the same revision.
-README_RAW_RE = re.compile(r"https://raw\.githubusercontent\.com/calvinware/yojo/([0-9a-f]{40})/")
+README_RAW_RE = re.compile(
+    r"https://raw\.githubusercontent\.com/calvinware/yojo/([0-9a-f]{40}|v\d+\.\d+\.\d+)/"
+)
 README_INSTALL_RE = re.compile(
     r"^pipx install git\+https://github\.com/calvinware/yojo\.git@([0-9a-f]{40})\b", re.M
 )
@@ -637,8 +640,12 @@ def test_readme_pins_one_revision_with_the_same_assets() -> None:
     revisions = {README_RAW_RE.match(t).group(1) for t in raw} | set(  # type: ignore[union-attr]
         README_INSTALL_RE.findall(text)
     )
-    assert len(raw) >= 5 and len(revisions) == 1, revisions
     assert "raw.githubusercontent.com/calvinware/yojo/main/" not in text
+    if any(README_RAW_RE.match(t).group(1).startswith("v") for t in raw):  # type: ignore[union-attr]
+        # Release form: the tag is pushed after merge, so the release gate checks it instead.
+        assert not release_gate.readme_problems(release_gate.project_version(), text)
+        return
+    assert len(raw) >= 5 and len(revisions) == 1, revisions
     (revision,) = revisions
     if shutil.which("git") is None or _git("cat-file", "-e", f"{revision}^{{commit}}").returncode:
         pytest.skip("the pinned revision is not in this checkout's history")

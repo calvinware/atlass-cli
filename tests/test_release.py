@@ -108,10 +108,41 @@ def test_release_actions_are_sha_pinned_and_use_no_secrets(release: dict[Any, An
 # --------------------------------------------------------------------------- release gate
 
 
+def _release_readme(revision: str, install: str = "pipx install yojo") -> str:
+    raw = f"https://raw.githubusercontent.com/calvinware/yojo/{revision}/docs/assets"
+    return f'<img src="{raw}/banner-light.svg">\n<img src="{raw}/demos/one-call.gif">\n{install}\n'
+
+
 def test_release_gate_accepts_ci_passing_main_commit() -> None:
     version = release_gate.project_version()
     runs = {"workflow_runs": [GOOD_RUN]}
-    assert release_gate.check(f"refs/tags/v{version}", SHA, version, [OTHER_SHA, SHA], runs) == []
+    readme = _release_readme(f"v{version}")
+    assert (
+        release_gate.check(f"refs/tags/v{version}", SHA, version, [OTHER_SHA, SHA], runs, readme)
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    "readme",
+    [
+        _release_readme(SHA),
+        _release_readme("main"),
+        _release_readme("v9.9.9"),
+        _release_readme("v1.0.0", f"pipx install git+https://github.com/calvinware/yojo.git@{SHA}"),
+        "pipx install yojo\n",
+    ],
+    ids=["commit-pin", "main", "other-tag", "git-install", "no-images"],
+)
+def test_release_gate_rejects_readme_not_pinned_to_the_release(readme: str) -> None:
+    assert release_gate.readme_problems("1.0.0", readme)
+
+
+def test_release_gate_reads_the_real_readme() -> None:
+    # Pre-release, README.md pins a commit; the gate must refuse to publish it as it stands.
+    text = (Path(release_gate.ROOT) / "README.md").read_text(encoding="utf-8")
+    if "pipx install git+" in text:
+        assert release_gate.readme_problems(release_gate.project_version(), text)
 
 
 @pytest.mark.parametrize(
@@ -151,12 +182,17 @@ def test_release_gate_cli_fails_closed(tmp_path: Path) -> None:
     runs = tmp_path / "runs.json"
     runs.write_text(json.dumps({"workflow_runs": [GOOD_RUN]}), encoding="utf-8")
     ref = f"refs/tags/v{release_gate.project_version()}"
-    args = ["--ref", ref, "--sha", SHA, "--main-history", str(history)]
+    readme = tmp_path / "README.md"
+    readme.write_text(_release_readme(f"v{release_gate.project_version()}"), encoding="utf-8")
+    args = ["--ref", ref, "--sha", SHA, "--main-history", str(history), "--readme", str(readme)]
     assert release_gate.main([*args, "--ci-runs", str(runs)]) == 0
+    stale = tmp_path / "stale.md"
+    stale.write_text(_release_readme(SHA), encoding="utf-8")
+    assert release_gate.main([*args[:-1], str(stale), "--ci-runs", str(runs)]) == 1
     assert release_gate.main([*args, "--ci-runs", str(tmp_path / "missing.json")]) == 1
     runs.write_text("not json", encoding="utf-8")
     assert release_gate.main([*args, "--ci-runs", str(runs)]) == 1
-    args[1] = "refs/tags/v0.0.0"
+    args[1] = "refs/tags/v0.0.0"  # --ref value
     runs.write_text(json.dumps({"workflow_runs": [GOOD_RUN]}), encoding="utf-8")
     assert release_gate.main([*args, "--ci-runs", str(runs)]) == 1
 

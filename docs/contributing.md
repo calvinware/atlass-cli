@@ -316,6 +316,10 @@ Each release:
    are allowed below 1.0 but are always listed), wait for CI to pass, get it reviewed, and merge
    it. The first release needs no bump: `pyproject.toml` already says `0.1.0`, so tag `v0.1.0` on
    the reviewed merge commit that contains it.
+   In the same pull request, point every README image at the release tag
+   (`https://raw.githubusercontent.com/calvinware/yojo/vX.Y.Z/...`) and change its install line to
+   `pipx install yojo`. README.md becomes the PyPI page and cannot change after publishing; the
+   release gate refuses a README that still pins a commit or installs from git.
 2. Find that exact merge commit on `main`, confirm the `CI` workflow passed for it, and tag that
    commit explicitly rather than whatever `main` points to now:
 
@@ -333,6 +337,5 @@ Each release:
 5. In a clean shell, run `pipx install yojo` (or `uv tool install yojo`), then
    `yojo --json commands` (check `data.version`) and `yojo schema 'jira issue create'`.
 6. After the first release only, once step 5 works: in a pull request, change the install section
-   of `docs/getting-started.md` to say the package is available on PyPI, change the README's
-   pinned pre-release install line to `pipx install yojo`, and recheck that the README's
+   of `docs/getting-started.md` to say the package is available on PyPI, and recheck that the README's
    package-first install steps work as written.

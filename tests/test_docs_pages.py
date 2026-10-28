@@ -22,7 +22,7 @@ README = ROOT / "README.md"
 PAGES_WORKFLOW = ROOT / ".github" / "workflows" / "pages.yml"
 SHARED_MARKDOWN = [README, ROOT / "AGENTS.md", *sorted(DOCS.rglob("*.md"))]
 RAW = re.search(  # the one pinned revision README images load from
-    r"https://raw\.githubusercontent\.com/calvinware/yojo/[0-9a-f]{40}/",
+    r"https://raw\.githubusercontent\.com/calvinware/yojo/(?:[0-9a-f]{40}|v\d+\.\d+\.\d+)/",
     README.read_text(encoding="utf-8"),
 ).group(0)  # type: ignore[union-attr]
 
