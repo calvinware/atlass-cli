@@ -5,7 +5,7 @@
 `yojo` defines **33 error codes**. Every failure prints `{"ok": false, "error": {"code", "message", "fix", "details"}}` and exits with the code below. `error.fix` in the real output is specific to the failing call; follow it first. This page explains each code and the general fix.
 
 > [!IMPORTANT]
-> `yojo` never retries a write. A refusal (`requirements_unmet`) sent nothing and carries a corrected `details.retry`. After `outcome_unknown` (exit 6) or `partial_transition` (exit 7) there is no retry: inspect the issue or page before running anything again. See [Writes and retries](../commands.md#writes-and-retries).
+> `yojo` never retries a write. A refusal (`requirements_unmet`) sent nothing; when a corrected command line would help, it carries one in `details.retry`, otherwise `retry` is `null` and each check's `fix` says what to do. After `outcome_unknown` (exit 6) or `partial_transition` (exit 7) there is no retry: inspect the issue, page, or pull request before running anything again. See [Writes and retries](../commands.md#writes-and-retries).
 
 ## Exit codes
 
@@ -287,7 +287,7 @@
 
 **Exit 6.** The process was interrupted (for example Ctrl+C) before it finished.
 
-**Fix:** If the command was a write, inspect the issue or page before running it again.
+**Fix:** If the command was a write, inspect the issue, page, or pull request before running it again.
 
 **Returned by:** every command.
 

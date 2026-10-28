@@ -34,7 +34,7 @@ MAX_DIFF_FILES = 10
 MAX_REVIEWERS = 10
 DIFF_CONTEXT_LINES = 3
 # Bitbucket accepts comments on open, merged, and declined pull requests alike.
-COMMENT_STATES = ("OPEN", "MERGED", "DECLINED")
+PR_STATES = ("OPEN", "MERGED", "DECLINED")
 SEGMENT_PREFIX = {"ADDED": "+", "REMOVED": "-", "CONTEXT": " "}
 # Separators str.splitlines() breaks on besides \n and \r (which a source line may not contain).
 LINE_BREAKS = re.compile("[\x0b\x0c\x1c-\x1e\x85\u2028\u2029]")
@@ -357,12 +357,15 @@ def _clone(raw: dict[str, Any], kind: str) -> str | None:
 
 
 def _default_branch(client: ServiceClient, repo: Repo) -> str | None:
+    """The configured default ref, which exists even before the first push; None when unset."""
     try:
-        raw = client.get(f"{repo.api}/branches/default")
+        raw = client.get(f"{repo.api}/default-branch")
     except YojoError as exc:
         if exc.code == "not_found":
             return None
         raise
+    if raw is None:
+        return None
     if not _branch_ok(raw):
         raise _invalid("default branch")
     return nested_str(raw, "displayId")
@@ -507,13 +510,20 @@ def _pr_row(raw: Any, titles: TextBudget | None = None) -> dict[str, Any]:
         title, trimmed = titles.fit(title[: MAX_LIST_TITLE - 3] if cut else title)
         if cut or trimmed:
             title += "..."
+    state = nested_str(raw, "state")
+    if state not in PR_STATES:
+        raise _invalid("pull request state")
+    source = _ref_id(raw, "fromRef")
+    target = _ref_id(raw, "toRef")
+    if not source or not target:
+        raise _invalid("pull request branches")
     author = raw.get("author")
     return {
         "id": pr_id,
         "title": title,
-        "state": nested_str(raw, "state"),
-        "source": _branch_name(_ref_id(raw, "fromRef")),
-        "target": _branch_name(_ref_id(raw, "toRef")),
+        "state": state,
+        "source": _branch_name(source),
+        "target": _branch_name(target),
         "author": _person(author.get("user") if isinstance(author, dict) else None),
         "updated": _when(raw.get("updatedDate")),
     }
@@ -1320,7 +1330,7 @@ def pr_comment(
         raise refusal(f"Commenting on pull request #{pr_id}", checks) from None
     repo = _ref_repo(pr, "toRef") or repo
     state = nested_str(pr, "state")
-    if state is None or state not in COMMENT_STATES:
+    if state is None or state not in PR_STATES:
         read = posix(_cmd(client, "pr", "get", str(pr_id), "--repo", repo.ref))
         checks.append(
             Check(

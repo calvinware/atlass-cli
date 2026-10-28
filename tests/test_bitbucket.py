@@ -35,7 +35,7 @@ RECENT = bitbucket_path("/profile/recent/repos")
 REPOS = bitbucket_path("/repos")
 PROJECT_REPOS = bitbucket_path("/projects/PROJ/repos")
 REPO = bitbucket_path("/projects/PROJ/repos/web")
-DEFAULT_BRANCH = REPO + "/branches/default"
+DEFAULT_BRANCH = REPO + "/default-branch"
 BRANCHES = REPO + "/branches"
 PRS = REPO + "/pull-requests"
 PR = PRS + "/42"
@@ -209,6 +209,37 @@ def test_login_needs_the_authenticated_endpoint_to_accept_the_token(harness: Har
     assert harness.stored("bitbucket") is None
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"errors": [{"context": None, "message": "Authentication failed"}]},
+        {"size": 0, "isLastPage": True, "start": 0, "values": "nope"},
+        {"size": 0, "isLastPage": True, "start": 0, "values": {}},
+        {"size": 0, "isLastPage": True, "start": 0, "values": None},
+    ],
+    ids=["empty", "errors", "values-string", "values-object", "values-null"],
+)
+def test_login_refuses_a_200_that_does_not_confirm_the_user(
+    harness: Harness, body: dict[str, Any]
+) -> None:
+    harness.server.add("GET", PROPS, fixture("bitbucket_application_properties.json"))
+    harness.server.add("GET", RECENT, body)
+    result = harness.run(
+        "login",
+        "--service",
+        "bitbucket",
+        "--base-url",
+        BITBUCKET,
+        "--token-stdin",
+        stdin=b"tok\n",
+    )
+    assert result.code == 3
+    assert result.error["code"] == "auth_failed"
+    assert harness.stored("bitbucket") is None
+    assert harness.server.paths() == [PROPS, RECENT]
+
+
 @pytest.mark.parametrize("extra", [["--auth", "basic", "--username", "u"], ["--password-stdin"]])
 def test_login_refuses_passwords_for_bitbucket(harness: Harness, extra: list[str]) -> None:
     result = harness.run("login", "--service", "bitbucket", "--base-url", BITBUCKET, *extra)
@@ -373,6 +404,29 @@ def test_repo_get(harness: Harness) -> None:
     assert data["content_trust"] == "untrusted"
 
 
+def test_repo_get_keeps_the_configured_default_of_an_empty_repository(harness: Harness) -> None:
+    # An empty repository has no branches yet, but its configured default ref still answers.
+    config(harness)
+    harness.server.add("GET", REPO, fixture("bitbucket_repo.json"))
+    harness.server.add("GET", BRANCHES, page([]))
+    harness.server.add(
+        "GET", DEFAULT_BRANCH, {"id": "refs/heads/main", "displayId": "main", "type": "BRANCH"}
+    )
+    result = harness.run("bitbucket", "repo", "get", "PROJ/web")
+    assert result.code == 0, result.out
+    assert result.data["default_branch"] == "main"
+    assert harness.server.paths() == [REPO, DEFAULT_BRANCH]
+
+
+def test_repo_get_with_no_default_branch_body(harness: Harness) -> None:
+    config(harness)
+    harness.server.add("GET", REPO, fixture("bitbucket_repo.json"))
+    harness.server.add("GET", DEFAULT_BRANCH, status=204)
+    result = harness.run("bitbucket", "repo", "get", "PROJ/web")
+    assert result.code == 0, result.out
+    assert result.data["default_branch"] is None
+
+
 @pytest.mark.parametrize(
     "branch", [{}, {"displayId": "main"}, {"displayId": "main", "id": "refs/heads/other"}]
 )
@@ -452,6 +506,68 @@ def test_pr_get_trims_description_unless_full(harness: Harness) -> None:
     assert result.nbytes <= READ_BUDGET
     full = harness.run("bitbucket", "pr", "get", "42", "--repo", "PROJ/web", "--full")
     assert full.data["description"] == "d" * 10_000
+
+
+def _drop(key: str) -> Any:
+    def edit(pr: dict[str, Any]) -> None:
+        del pr[key]
+
+    return edit
+
+
+def _put(key: str, value: Any) -> Any:
+    def edit(pr: dict[str, Any]) -> None:
+        pr[key] = value
+
+    return edit
+
+
+MALFORMED_PR = [
+    _drop("state"),
+    _put("state", None),
+    _put("state", "open"),
+    _put("state", "SUPERSEDED"),
+    _drop("fromRef"),
+    _put("fromRef", "refs/heads/feature/login"),
+    _put("fromRef", {"displayId": "feature/login"}),
+    _put("fromRef", {"id": ""}),
+    _drop("toRef"),
+    _put("toRef", {"id": 7}),
+]
+MALFORMED_PR_IDS = [
+    "no-state",
+    "null-state",
+    "lowercase-state",
+    "unknown-state",
+    "no-fromRef",
+    "fromRef-string",
+    "fromRef-no-id",
+    "fromRef-empty-id",
+    "no-toRef",
+    "toRef-id-not-string",
+]
+
+
+@pytest.mark.parametrize("edit", MALFORMED_PR, ids=MALFORMED_PR_IDS)
+def test_pr_list_refuses_malformed_pull_requests(harness: Harness, edit: Any) -> None:
+    config(harness)
+    pr = fixture("bitbucket_pull_request.json")
+    edit(pr)
+    harness.server.add("GET", PRS, page([pr]))
+    result = harness.run("bitbucket", "pr", "list", "--repo", "PROJ/web")
+    assert result.code == 6
+    assert result.error["code"] == "response_invalid"
+
+
+@pytest.mark.parametrize("edit", MALFORMED_PR, ids=MALFORMED_PR_IDS)
+def test_pr_get_refuses_malformed_pull_requests(harness: Harness, edit: Any) -> None:
+    config(harness)
+    pr = fixture("bitbucket_pull_request.json")
+    edit(pr)
+    harness.server.add("GET", PR, pr)
+    result = harness.run("bitbucket", "pr", "get", "42", "--repo", "PROJ/web")
+    assert result.code == 6
+    assert result.error["code"] == "response_invalid"
 
 
 def test_pr_get_rejects_another_pull_request(harness: Harness) -> None:
@@ -1236,6 +1352,25 @@ def test_uncertain_create_offers_inspection_not_a_retry(harness: Harness) -> Non
     assert result.nbytes <= WRITE_BUDGET
 
 
+@pytest.mark.parametrize("status", [302, 307])
+def test_redirected_create_is_outcome_unknown(harness: Harness, status: int) -> None:
+    setup_create(harness)
+    harness.server.routes[("POST", PRS)] = []
+    location = BITBUCKET + "/login?next=pull-requests"
+    harness.server.add("POST", PRS, status=status, headers={"location": location})
+    result = harness.run(*CREATE_ARGV)
+    assert result.code == 6
+    error = result.error
+    assert error["code"] == "outcome_unknown"
+    assert "retry" not in error["details"] and "retry_argv" not in error["details"]
+    assert error["details"]["recovery_argv"] == {
+        "list": ["yojo", "bitbucket", "pr", "list", "--repo", "PROJ/web", "--state", "ALL"]
+    }
+    assert "Do not retry yet" in error["fix"]
+    assert [r.method for r in harness.server.writes()] == ["POST"]
+    assert "/login" not in harness.server.paths()
+
+
 def test_unconfirmed_create_is_outcome_unknown(harness: Harness) -> None:
     setup_create(harness)
     wrong = fixture("bitbucket_pull_request.json")
@@ -1605,6 +1740,25 @@ def test_comment_timeout_offers_inspection_not_a_retry(harness: Harness) -> None
     assert "Do not retry yet" in error["fix"]
     assert len(harness.server.writes()) == 1
     assert result.nbytes <= WRITE_BUDGET
+
+
+@pytest.mark.parametrize("status", [302, 307])
+def test_redirected_comment_is_outcome_unknown(harness: Harness, status: int) -> None:
+    setup_comment(harness)
+    harness.server.routes[("POST", COMMENTS)] = []
+    location = BITBUCKET + "/login?next=comments"
+    harness.server.add("POST", COMMENTS, status=status, headers={"location": location})
+    result = harness.run(*COMMENT_ARGV, "--body", "Ready for review.")
+    assert result.code == 6
+    error = result.error
+    assert error["code"] == "outcome_unknown"
+    assert "retry" not in error["details"] and "retry_argv" not in error["details"]
+    assert error["details"]["recovery_argv"] == {
+        "pull_request": ["yojo", "bitbucket", "pr", "get", "42", "--repo", "PROJ/web"]
+    }
+    assert "Do not retry yet" in error["fix"]
+    assert [r.method for r in harness.server.writes()] == ["POST"]
+    assert "/login" not in harness.server.paths()
 
 
 def test_comment_response_with_changed_whitespace_is_outcome_unknown(harness: Harness) -> None:

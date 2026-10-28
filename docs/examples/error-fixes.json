@@ -133,7 +133,7 @@
     },
     "interrupted": {
       "meaning": "The process was interrupted (for example Ctrl+C) before it finished.",
-      "fix": "If the command was a write, inspect the issue or page before running it again."
+      "fix": "If the command was a write, inspect the issue, page, or pull request before running it again."
     },
     "internal_error": {
       "meaning": "An unexpected error inside `yojo`. Only the exception type is reported.",
