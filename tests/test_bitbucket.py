@@ -1368,7 +1368,7 @@ def test_redirected_create_is_outcome_unknown(harness: Harness, status: int) -> 
     }
     assert "Do not retry yet" in error["fix"]
     assert [r.method for r in harness.server.writes()] == ["POST"]
-    assert "/login" not in harness.server.paths()
+    assert not any(path.endswith("/login") for path in harness.server.paths())
 
 
 def test_unconfirmed_create_is_outcome_unknown(harness: Harness) -> None:
@@ -1758,7 +1758,7 @@ def test_redirected_comment_is_outcome_unknown(harness: Harness, status: int) ->
     }
     assert "Do not retry yet" in error["fix"]
     assert [r.method for r in harness.server.writes()] == ["POST"]
-    assert "/login" not in harness.server.paths()
+    assert not any(path.endswith("/login") for path in harness.server.paths())
 
 
 def test_comment_response_with_changed_whitespace_is_outcome_unknown(harness: Harness) -> None:
