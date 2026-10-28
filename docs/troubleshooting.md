@@ -18,7 +18,7 @@ exact call. The [error catalog](reference/errors.md) explains each code.
 | `redirect_refused` | `redirect_refused` | Set `base_url` to the final HTTPS URL with its context path. SSO redirects usually mean you need a PAT. |
 | TLS verification failed | `tls_error` | Check the host name. For an internal CA, set `ca_bundle` to its PEM file. Verification is never disabled. |
 | Every call returns `not_found` or `response_invalid` | `not_found`, `response_invalid` | The base URL is probably missing the context path (`/jira`, `/confluence`, `/bitbucket`). For Bitbucket, set `bitbucket.base_url: https://bitbucket.example.test/bitbucket`. |
-| `yojo setup` says `Save did not finish` | any | Setup could not confirm what the file holds: it matches neither the reviewed preview nor the file before it. Open the file named in the message and check it, then press Refresh preview and review the diff before you press Save again. If you leave setup, its summary says the save was not confirmed. |
+| `yojo setup` says `Save did not finish` | any | Setup could not confirm what the file holds: it may have changed or could not be read. Open the file named in the message and check it, then press Refresh preview and review the diff before you press Save again. If you leave setup, its summary says the save was not confirmed. |
 | `yojo setup` says a file was saved but a check after writing failed | any | The file holds exactly the preview you reviewed; a step after writing failed. Continue to the Try step, or run `yojo config check` to read the file back. |
 
 ## Config drift

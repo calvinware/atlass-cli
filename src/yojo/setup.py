@@ -1593,13 +1593,22 @@ class ReviewStep(StepView):
             if published is not True:
                 self.candidate, self.stale = None, True
                 self.draft.save_unknown = None if published is False else str(candidate.dest)
+                if (
+                    self.draft.save_unknown
+                    and self.draft.saved is not None
+                    and self.draft.saved[0] == str(candidate.dest)
+                ):
+                    self.draft.saved = None
+                    self.draft.saved_data = None
+                    self.draft.saved_revision = None
+                    self.draft.try_revision = None
                 self.say(
                     "review-status",
                     f"Not saved; nothing was written. {_error_text(error)}\n"
                     "Press Refresh preview to review the current state."
                     if published is False
-                    else f"Save did not finish, and {where} now matches neither the reviewed "
-                    f"preview nor the file it replaces. {_error_text(error)}\n"
+                    else f"Save did not finish; setup cannot confirm what {where} holds. "
+                    f"{_error_text(error)}\n"
                     f"Open {where} to check it, then press Refresh preview before saving again.",
                     "error",
                 )
@@ -2048,10 +2057,10 @@ class SetupApp(App[dict[str, Any]]):
     def leave_message(self) -> str:
         unknown = self.draft.save_unknown
         lines = [
-            f"yojo.yaml was saved ({self.draft.saved[1]})."
-            if self.draft.saved
-            else "yojo.yaml was not confirmed saved."
+            "yojo.yaml was not confirmed saved."
             if unknown
+            else f"yojo.yaml was saved ({self.draft.saved[1]})."
+            if self.draft.saved
             else "yojo.yaml was not changed."
         ]
         if unknown:

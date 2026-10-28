@@ -24,7 +24,7 @@ from tests.conftest import (
     jira_path,
 )
 from tests.setup_support import URLS, add_routes, bitbucket_page, repo, runtime
-from yojo import metadata, setup
+from yojo import files, metadata, setup
 from yojo.auth import Credential, CredentialStore
 from yojo.contracts import COMMANDS_BY_PATH, YojoError, command_schema
 from yojo.setup import Draft, Rule, Services, SetupApp
@@ -648,10 +648,7 @@ def test_failed_later_repository_page_keeps_rows_and_retries(
         assert str(more.label) == "Retry" and not more.disabled
         assert repos.option_count == 1
         assert app.draft.repos == ["PROJ/web"] and repos.selected == ["PROJ/web"]
-        more.focus()
-        await pilot.pause()
-        await pilot.press("enter")
-        await settle(pilot)
+        await press_button(pilot, "#more-repos")
         more = pilot.app.query_one("#more-repos", Button)
         assert str(more.label) == "Load more" and more.disabled
         assert repos.option_count == 2
@@ -1034,7 +1031,7 @@ def test_unconfirmed_save_asks_for_inspection_and_a_fresh_preview(tmp_path: Path
         await _to_review(pilot)
         await press_button(pilot, "#save")
         status = text(pilot, "#review-status")
-        assert status.startswith("Save did not finish, and ./yojo.yaml now matches neither")
+        assert status.startswith("Save did not finish; setup cannot confirm what ./yojo.yaml holds")
         assert "Open ./yojo.yaml to check it, then press Refresh preview" in status
         assert "nothing was written" not in status
         assert pilot.app.query_one("#save", Button).disabled
@@ -1047,6 +1044,70 @@ def test_unconfirmed_save_asks_for_inspection_and_a_fresh_preview(tmp_path: Path
     assert app.return_value is not None
     assert app.return_value["config"] is None
     assert app.return_value["notes"][0].startswith("A save did not finish; ./yojo.yaml may have")
+
+
+def test_unreadable_save_outcome_does_not_claim_to_know_file_contents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+    save = app.services.save
+
+    def save_then_lose_read_access(candidate: Any) -> str:
+        save(candidate)
+
+        def unreadable(path: Path) -> bytes | None:
+            raise YojoError("file_invalid", "cannot read", "Check permissions.")
+
+        monkeypatch.setattr(files, "read_current", unreadable)
+        raise YojoError("file_invalid", "read back failed", "Check permissions.")
+
+    app.services.save = save_then_lose_read_access  # type: ignore[method-assign]
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await _to_review(pilot)
+        await press_button(pilot, "#save")
+        status = text(pilot, "#review-status")
+        assert status.startswith("Save did not finish; setup cannot confirm what ./yojo.yaml holds")
+        assert "matches neither" not in status
+        await pilot.press("ctrl+q", "tab", "enter")
+        await pilot.pause()
+
+    world.drive(scenario, app)
+    assert (tmp_path / "yojo.yaml").exists()
+    assert app.return_value is not None
+    assert app.return_value["config"] is None
+
+
+def test_uncertain_second_save_clears_prior_success_for_same_file(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = _ready(world)
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await _to_review(pilot)
+        await press_button(pilot, "#save")
+        saved = app.draft.saved
+        assert saved is not None
+        app.draft.rules.append(Rule("alias", None, "points", {"id": "customfield_10002"}))
+        app.draft.touch()
+        await press_button(pilot, "#preview")
+        assert not app.query_one("#save", Button).disabled
+
+        def half_write(candidate: Any) -> str:
+            candidate.dest.write_bytes(candidate.data[:10])
+            raise YojoError("file_invalid", "write interrupted", "Check the disk.")
+
+        app.services.save = half_write  # type: ignore[method-assign]
+        await press_button(pilot, "#save")
+        assert app.draft.saved is None
+        assert app.leave_message().startswith("yojo.yaml was not confirmed saved.")
+        await pilot.press("ctrl+q", "tab", "enter")
+        await pilot.pause()
+
+    world.drive(scenario, app)
+    assert app.return_value is not None
+    assert app.return_value["config"] is None
+    assert app.return_value["notes"][0].startswith("A save did not finish;")
 
 
 def test_held_agent_install_is_reported_before_setup_finishes(tmp_path: Path) -> None:
