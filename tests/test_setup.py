@@ -67,8 +67,10 @@ class World:
 
 
 async def settle(pilot: Pilot[Any]) -> None:
-    await pilot.app.workers.wait_for_complete()
+    # Let the button event schedule its worker before waiting for completion.
     await pilot.pause()
+    await pilot.app.workers.wait_for_complete()
+    await pilot.pause(0.05)
 
 
 def app_of(pilot: Pilot[Any]) -> SetupApp:
