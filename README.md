@@ -53,6 +53,14 @@ Windows, macOS, and Linux steps without `pipx`.
    yojo jira issue get PROJ-123 --base-url https://jira.example.test/jira
    ```
 
+<p align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/calvinware/yojo/main/docs/assets/setup/step-5-dark.svg">
+  <img src="https://raw.githubusercontent.com/calvinware/yojo/main/docs/assets/setup/step-5-light.svg" width="760" alt="yojo setup, step 5 of 7: the exact yojo.yaml it will write, shown as a diff against the current file, with the note that nothing is written until you press Save.">
+</picture>
+<br><sub>Step 5 of <code>yojo setup</code>: review the exact file before anything is written.</sub>
+</p>
+
 `yojo commands` and `yojo schema 'jira issue create'` list every command and its exact contract
 offline, with no config or credentials.
 

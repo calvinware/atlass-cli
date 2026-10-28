@@ -171,8 +171,9 @@ SelectionList {
 }
 
 /* A checked box differs by weight as well as color. */
-SelectionList > .selection-list--button {
-    text-style: dim;
+SelectionList > .selection-list--button,
+SelectionList > .selection-list--button-highlighted {
+    color: $foreground 15%;
 }
 
 SelectionList > .selection-list--button-selected,
@@ -215,7 +216,7 @@ TabPane {
     color: $primary;
     text-style: bold;
     padding: 0 1;
-    dock: bottom;
+    margin-bottom: 1;
 }
 
 #retry-fields {

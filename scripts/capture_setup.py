@@ -37,7 +37,7 @@ from yojo.setup import ReviewStep, Services, SetupApp  # noqa: E402
 
 OUT = ROOT / "docs" / "assets" / "setup"
 THEMES = {"light": "textual-light", "dark": "textual-dark"}
-SIZE = (100, 36)
+SIZE = (100, 40)
 TOKENS = {"jira": JIRA_TOKEN, "confluence": CONFLUENCE_TOKEN, "bitbucket": BITBUCKET_TOKEN}
 
 
@@ -99,8 +99,11 @@ async def _capture(theme: str, cwd: Path) -> list[str]:
         search.value = "proj"
         search.focus()
         await pilot.press("enter", "space")
-        app.query_one("#repo-list", SelectionList).select("PROJ/web")
-        app.draft.repos.append("PROJ/web")
+        # Pick a repository the way a person does, so the status line follows the toggle.
+        repos = app.query_one("#repo-list", SelectionList)
+        repos.focus()
+        repos.highlighted = 0
+        await pilot.press("space")
         search.focus()
         await settle()
         await capture()

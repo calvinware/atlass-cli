@@ -1498,8 +1498,8 @@ class ReviewStep(StepView):
                 yield Static("", id="diff", markup=False)
             with TabPane("Full file", id="tab-yaml"):
                 yield Static("", id="yaml", markup=False)
-        yield Static("Nothing is written until you press Save.", id="save-note", markup=False)
         yield Static("", id="review-notes", classes="hint", markup=False)
+        yield Static("Nothing is written until you press Save.", id="save-note", markup=False)
         with Horizontal(classes="row"):
             yield Button("Refresh preview", id="preview")
             yield Button("Save yojo.yaml", id="save", variant="primary", disabled=True)
