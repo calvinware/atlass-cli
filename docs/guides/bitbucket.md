@@ -78,7 +78,16 @@ Read `complete` before you rely on the diff:
 |-------|---------|
 | `complete` | `true` only when nothing was cut. |
 | `truncated` | `yojo` shortened the output; `more` is the same command with `--full`. |
-| `server_truncated` | Bitbucket itself cut part of the diff. `truncated_files` names the files; `more` fetches the first of them with `--path FILE --full`. |
+| `server_truncated` | Bitbucket itself cut part of the diff. `truncated_files` names the files; `more` fetches the first of them with `--path FILE --full` (plus `--old-path OLD` for a renamed file). |
+| `inspect` | Set when Bitbucket cut something: a `git diff FROM TO -- FILE` command for a clone that has both commits. |
+
+`more` is a next step, not a promise. Bitbucket can still cut a file fetched alone, and a cut of
+the whole diff has no `yojo` continuation, so `more` can be `null` while `complete` is `false`. Use
+`inspect` in a local clone, or read the change in the pull request's diff view (`url`).
+
+For a renamed file, pass its new name with `--path` and its old name with `--old-path`. With
+`--path`, `yojo` checks that Bitbucket answered for that file: another file fails with
+`response_invalid`, and a file the pull request does not change is `not_found`.
 
 If a diff is too large to fetch at all, the error says so and gives the `--path` form; the changed
 files are listed in the pull request's diff view (`url`).
@@ -126,7 +135,9 @@ yojo bitbucket pr comment 42 --repo PROJ/web --body-file notes.txt
 ```
 
 The comment is plain text. `yojo` checks that the pull request exists and that it has no comment
-with exactly the same text, so running the same command twice never posts two copies.
+with exactly the same text, so running the same command again after the first one landed is
+refused. The check runs before posting, so two calls sent at the same time can both post; do not
+send the same comment concurrently.
 
 ## When the result is unknown
 
@@ -134,8 +145,11 @@ If a create or comment was sent but `yojo` cannot confirm it (a timeout, a serve
 response that does not match what was sent), the result is `outcome_unknown` (exit 6) and there is
 no `retry`. Do not run the command again yet:
 
-- After `pr create`, run `details.recovery_argv.list` and look for your branches and title.
+- After `pr create`, run `details.recovery_argv.list` (every state, `--state ALL`), follow
+  `next_start` through every page, and look for your branches and title. The pull request may
+  already be merged or declined, so missing from the first page of open pull requests does not
+  mean the create failed.
 - After `pr comment`, open the pull request link in `error.fix` and look for your comment.
 
-Because both writes refuse duplicates, running the same command again after you have checked is
-refused if the first one landed. See [Writes and retries](../commands.md#writes-and-retries).
+Run the command again only when that check finds nothing; if you are unsure, ask a person to look
+first. See [Writes and retries](../commands.md#writes-and-retries).

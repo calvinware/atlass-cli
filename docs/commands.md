@@ -261,7 +261,7 @@ always `PROJECT/slug`, in arguments and in results. See the
 | `yojo bitbucket branch list --repo PROJECT/slug` | `--filter TEXT`, `--start`, `--limit` | `branches[]` (`name`, `default`, `commit`), `next_start` |
 | `yojo bitbucket pr list --repo PROJECT/slug` | `--state OPEN\|MERGED\|DECLINED\|ALL` (any case, default OPEN), `--start`, `--limit` | `pull_requests[]` (`id`, `title`, `state`, `source`, `target`, `author`, `updated`), `next_start` |
 | `yojo bitbucket pr get ID --repo PROJECT/slug` | `--full` | `title`, `state`, `source`, `target`, `author`, `reviewers[]`, `description`, `truncated`, `more`, `url` |
-| `yojo bitbucket pr diff ID --repo PROJECT/slug` | `--path FILE`, `--full` | `files[]`, `diff` (unified), `truncated`, `server_truncated`, `truncated_files`, `complete`, `more`, `url` |
+| `yojo bitbucket pr diff ID --repo PROJECT/slug` | `--path FILE`, `--old-path FILE` (with `--path`, for a renamed file), `--full` | `files[]`, `diff` (unified), `truncated`, `server_truncated`, `truncated_files`, `complete`, `more`, `inspect`, `url` |
 | `yojo bitbucket pr create --repo PROJECT/slug --source BRANCH --target BRANCH --title TEXT` | `--description`, or `--input -` | `id`, `title`, `source`, `target`, `state`, `url` |
 | `yojo bitbucket pr comment ID --repo PROJECT/slug --body TEXT` | or `--body-file PATH\|-` (UTF-8 text, max 1 MiB) | `comment_id`, `url` |
 
@@ -274,8 +274,15 @@ small; `pr get` shows the full title.
 `pr diff` uses Bitbucket's structured diff and renders a unified diff. Without `--full` it keeps
 about 2000 characters, cut at a line end, and the first 10 changed files. `truncated` says `yojo`
 cut it; `server_truncated` and `truncated_files` say Bitbucket did. `complete` is `true` only when
-neither happened, and `more` is the command for the rest: `--full`, or `--path FILE --full` for a
-file Bitbucket cut. If a diff is too large to fetch at all, the error names the `--path` form.
+neither happened. `more`, when set, is a command that may show more: `--full`, or
+`--path FILE --full` (plus `--old-path OLD` for a renamed file) for the first file Bitbucket cut.
+A file can still be cut when fetched alone, and a cut of the whole diff has no `yojo` continuation,
+so `more` can be `null` while `complete` is `false`. Then `inspect` is a `git diff FROM TO -- FILE`
+command, using the two commits Bitbucket compared, for a clone that has both; the pull request's
+diff view (`url`) shows the same change. With `--path`, a response for a different file fails with
+`response_invalid`, and a file the pull request does not change is `not_found`. Header lines quote
+a file name containing a newline or control character the way Git does. If a diff is too large to
+fetch at all, the error names the `--path` form.
 
 `pr create` and `pr comment` check everything first and send nothing when a check fails or cannot
 be completed:
@@ -314,8 +321,8 @@ again, using the method for each write:
 | `jira transition` | Run `details.recovery_argv.inspect` (`yojo jira issue get KEY`) for the status, then `details.recovery_argv.requirements`. For a `pre_edit` edit, check the edited field values. |
 | `confluence page create` | Run the searches in `error.fix` (`details.recovery_argv`): first `space = "KEY" AND type = page AND (title = "<submitted>" OR title = "<trimmed>")`, then, if that finds nothing, the space's newest pages (`space = "KEY" AND type = page ORDER BY created DESC`), following `next_start` through every result page. Read each plausible candidate with `yojo confluence page read ID --full` and compare `title`, `space_key`, `ancestors`, and `body_storage` with what you sent. An empty exact-title search alone does not show the page was not created. Results can shift between pages, so a scan with no match does not establish absence either: ask a human to confirm the page does not exist before running the create again. |
 | `confluence page update` | `yojo confluence page read ID --full` and compare `version`, `title`, and `body_storage` with what you sent. |
-| `bitbucket pr create` | Run `details.recovery_argv.list` (`yojo bitbucket pr list --repo PROJECT/slug`) and look for your source, target, and title; if the response named an ID, also `details.recovery_argv.get`. Running the same create again is refused while an open pull request for that branch pair exists. |
-| `bitbucket pr comment` | Open the pull request link in `error.fix` and look for a comment matching what you sent. Running the same command again is refused while an identical comment is there. |
+| `bitbucket pr create` | Run `details.recovery_argv.list` (`yojo bitbucket pr list --repo PROJECT/slug --state ALL`), following `next_start` through every page, and look for your source, target, and title; if the response named an ID, also `details.recovery_argv.get`. A pull request may already be merged or declined, and absence from the first page does not show the create failed. If the full list has no match and you are still unsure, ask a human to check the repository before running the create again. |
+| `bitbucket pr comment` | Open the pull request link in `error.fix` and look for a comment matching what you sent. The duplicate check runs before posting, so never send the same comment from two calls at once. |
 
 Commands inside `error.fix` are quoted for POSIX shells (sh, bash, zsh) only. In `cmd.exe`,
 PowerShell, or a program, do not paste them; pass each list in `details.recovery_argv` (or

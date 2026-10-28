@@ -42,8 +42,9 @@ The response is one compact JSON object when piped or with `--json`. A terminal 
 says nothing was sent, and provides a corrected `retry` command. If the server cannot confirm a
 write, inspect the remote item before trying again. `yojo` never retries a write automatically.
 
-Opening a pull request is one call too; the branches are checked and an existing open pull
-request for the same branches is refused:
+Opening a pull request is one call too, after a person logs in to Bitbucket once with
+`yojo login --service bitbucket --base-url https://bitbucket.example.test/bitbucket`. The branches
+are checked and an existing open pull request for the same branches is refused:
 
 ```bash
 yojo --json bitbucket pr create --repo PROJ/web --source feature/login --target main \

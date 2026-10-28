@@ -18,6 +18,8 @@ First release under the name `yojo`. It replaces `atlass-cli` 1.0.0, which stays
 
 ### Added
 
+- Bitbucket Data Center repository, branch, and pull request reads; pull request creation and
+  comments with preflight checks, bounded diff output, and inspection steps for uncertain writes.
 - `jira issue create`, `get`, `update`, and `link`, with flags-first writes and repeatable
   `--set NAME=VALUE`. `--input -` stays available.
 - Field, issue type, status, option, link type, and person names resolve case-insensitively from

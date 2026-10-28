@@ -297,6 +297,8 @@ def _diff(data: Mapping[str, Any], style: Style) -> list[str]:
         lines += ["", style.yellow("Incomplete: " + "; ".join(cut) + ".")]
         if data.get("more"):
             lines.append(f"More: {clean(data['more'])}")
+        if data.get("inspect"):
+            lines.append(f"In a clone with both commits: {clean(data['inspect'])}")
     if data.get("url"):
         lines += ["", f"Open: {clean(data['url'], 2048)}"]
     return lines

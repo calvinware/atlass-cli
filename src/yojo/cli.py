@@ -368,6 +368,7 @@ def build_parser() -> _Parser:
     p.add_argument("id", type=_bounded(1, None), metavar="ID")
     repo_flag(p)
     p.add_argument("--path", type=_diff_path, metavar="FILE")
+    p.add_argument("--old-path", type=_diff_path, metavar="FILE")
     p.add_argument("--full", action="store_true")
     p = leaf(pr, "create", "bitbucket pr create")
     repo_flag(p, required=False)
@@ -1051,7 +1052,9 @@ def cmd_pr_get(args: argparse.Namespace, rt: Runtime) -> Any:
 
 def cmd_pr_diff(args: argparse.Namespace, rt: Runtime) -> Any:
     with _client(rt, "bitbucket", _bitbucket(rt, args)) as client:
-        return bitbucket.pr_diff(client, args.repo, args.id, args.path, args.full)
+        return bitbucket.pr_diff(
+            client, args.repo, args.id, args.path, args.full, args.old_path
+        )
 
 
 def cmd_pr_create(args: argparse.Namespace, rt: Runtime) -> Any:

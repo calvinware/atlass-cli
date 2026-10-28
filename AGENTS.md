@@ -86,8 +86,9 @@ yojo --json bitbucket pr comment 42 --repo PROJ/web --body "Ready for review."
 ```
 
 Bitbucket repositories are always `PROJECT/slug`. A diff result says `complete: false` whenever
-anything was cut; `more` is the command for the rest. Approving and merging pull requests are for
-people only; there is no command for them.
+anything was cut. `more`, when set, may show more; it can be `null` when Bitbucket will not return
+the rest, and then `inspect` is a `git diff` command for a local clone. Approving and merging pull
+requests are for people only; there is no command for them.
 
 Confluence pages are written from a JSON document (`confluence page create|update --input -`). An
 update needs the `expected_version` from a fresh `confluence page read`; a stale version is refused

@@ -172,12 +172,13 @@ yojo --json jira issue create PROJ --type Bug --summary "Login fails on Safari" 
 yojo --json jira issue link PROJ-43 PROJ-42 --type blocks
 ```
 
-Open a pull request, then tell reviewers:
+Open a pull request, then tell reviewers. Read `data.id` from the create response for the comment:
 
 ```bash
-yojo --json bitbucket pr create --repo PROJ/web --source feature/login --target main \
-  --title "Fix login on Safari"
-yojo --json bitbucket pr comment 42 --repo PROJ/web --body "Ready for review."
+pr_id=$(yojo --json bitbucket pr create --repo PROJ/web --source feature/login \
+  --target main --title "Fix login on Safari" | \
+  python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["ok"]; print(r["data"]["id"])') &&
+yojo --json bitbucket pr comment "$pr_id" --repo PROJ/web --body "Ready for review."
 ```
 
 More in [Jira workflows](guides/jira-workflows.md), [Confluence pages](guides/confluence.md), and

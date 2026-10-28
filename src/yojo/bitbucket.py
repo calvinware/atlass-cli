@@ -8,6 +8,7 @@ was sent. Approving and merging are left to people and have no command here.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -576,6 +577,40 @@ def _number(value: Any) -> int:
     return value if type(value) is int and value >= 0 else 0
 
 
+def _cut(raw: dict[str, Any]) -> bool:
+    """Bitbucket documents ``truncated`` as a JSON boolean or the string "true" or "false"."""
+    value = raw.get("truncated")
+    if value is None or value is False:
+        return False
+    if value is True:
+        return True
+    if isinstance(value, str) and value.lower() in ("true", "false"):
+        return value.lower() == "true"
+    raise _invalid("diff")
+
+
+def _escape(ch: str) -> str:
+    if ch in '"\\':
+        return "\\" + ch
+    if ch.isprintable():
+        return ch
+    named = {"\n": "\\n", "\t": "\\t", "\r": "\\r"}
+    if ch in named:
+        return named[ch]
+    code = ord(ch)
+    if code < 0x100:
+        return f"\\x{code:02x}"
+    return f"\\u{code:04x}" if code < 0x10000 else f"\\U{code:08x}"
+
+
+def _header(prefix: str, path: str) -> str:
+    """Quote a header path the way Git does, so a newline in a file name cannot forge diff lines."""
+    name = prefix + path
+    if name.isprintable() and '"' not in name and "\\" not in name:
+        return name
+    return '"' + "".join(_escape(ch) for ch in name) + '"'
+
+
 def _diff_file(raw: Any) -> tuple[dict[str, Any], list[str], bool]:
     """One file's row, its unified-diff lines, and whether Bitbucket cut any of it."""
     if not isinstance(raw, dict):
@@ -593,13 +628,13 @@ def _diff_file(raw: Any) -> tuple[dict[str, Any], list[str], bool]:
         else "modified"
     )
     lines = [
-        f"diff --git a/{old or new} b/{new or old}",
-        f"--- a/{old}" if old else "--- /dev/null",
-        f"+++ b/{new}" if new else "+++ /dev/null",
+        f"diff --git {_header('a/', old or new or '')} {_header('b/', new or old or '')}",
+        f"--- {_header('a/', old)}" if old else "--- /dev/null",
+        f"+++ {_header('b/', new)}" if new else "+++ /dev/null",
     ]
     if raw.get("binary") is True:
         lines.append("Binary files differ")
-    cut = raw.get("truncated") is True
+    cut = _cut(raw)
     added = removed = 0
     hunks = raw.get("hunks") or []
     if not isinstance(hunks, list):
@@ -607,7 +642,7 @@ def _diff_file(raw: Any) -> tuple[dict[str, Any], list[str], bool]:
     for hunk in hunks:
         if not isinstance(hunk, dict) or not isinstance(hunk.get("segments") or [], list):
             raise _invalid("diff")
-        cut = cut or hunk.get("truncated") is True
+        cut = _cut(hunk) or cut
         lines.append(
             f"@@ -{_number(hunk.get('sourceLine'))},{_number(hunk.get('sourceSpan'))} "
             f"+{_number(hunk.get('destinationLine'))},{_number(hunk.get('destinationSpan'))} @@"
@@ -616,12 +651,12 @@ def _diff_file(raw: Any) -> tuple[dict[str, Any], list[str], bool]:
             prefix = SEGMENT_PREFIX.get(nested_str(segment, "type") or "")
             if prefix is None or not isinstance(segment.get("lines") or [], list):
                 raise _invalid("diff")
-            cut = cut or segment.get("truncated") is True
+            cut = _cut(segment) or cut
             for line in segment.get("lines") or []:
                 text = nested_str(line, "line")
-                if text is None:
+                if text is None or "\n" in text or "\r" in text:
                     raise _invalid("diff")
-                cut = cut or line.get("truncated") is True
+                cut = _cut(line) or cut
                 lines.append(prefix + text)
                 added += prefix == "+"
                 removed += prefix == "-"
@@ -635,18 +670,59 @@ def _diff_file(raw: Any) -> tuple[dict[str, Any], list[str], bool]:
     return row, lines, cut
 
 
+def _path_argv(row: dict[str, Any]) -> list[str] | None:
+    """The --path (and --old-path) flags for one file, or None if the flag would refuse it."""
+    names = [row["path"], *([row["old_path"]] if row["old_path"] else [])]
+    if not all(name.isprintable() for name in names):
+        return None
+    return ["--path", row["path"], *(["--old-path", row["old_path"]] if row["old_path"] else [])]
+
+
+def _git_inspect(raw: dict[str, Any], rows: list[dict[str, Any]] | None) -> str | None:
+    """A local Git command for the changes Bitbucket would not return, if both commits are known."""
+    from_hash, to_hash = raw.get("fromHash"), raw.get("toHash")
+    if not (
+        isinstance(from_hash, str)
+        and re.fullmatch(r"[0-9a-f]{7,64}", from_hash)
+        and isinstance(to_hash, str)
+        and re.fullmatch(r"[0-9a-f]{7,64}", to_hash)
+    ):
+        return None
+    paths: list[str] = []
+    for row in rows or []:
+        paths += [*([row["old_path"]] if row["old_path"] else []), row["path"]]
+    if not all(path.isprintable() for path in paths):
+        paths = []
+    return posix(["git", "diff", from_hash, to_hash, *(["--", *paths] if paths else [])])
+
+
 def pr_diff(
-    client: ServiceClient, ref: str, pr_id: int, path: str | None, full: bool = False
+    client: ServiceClient,
+    ref: str,
+    pr_id: int,
+    path: str | None,
+    full: bool = False,
+    old_path: str | None = None,
 ) -> dict[str, Any]:
     repo = parse_repo(ref)
+    if old_path is not None and path is None:
+        raise YojoError(
+            "usage_error",
+            "--old-path needs --path.",
+            "Pass the file's current name with --path and its name before the change with "
+            "--old-path.",
+        )
     endpoint = f"{repo.api}/pull-requests/{pr_id}/diff"
     if path is not None:
         endpoint += "/" + "/".join(seg(part) for part in path.split("/"))
     base = _cmd("pr", "diff", str(pr_id), "--repo", repo.ref)
     anchor = "#" + "/".join(seg(part) for part in path.split("/")) if path else ""
     web = _pr_url(client, repo, pr_id, "/diff" + anchor)
+    params: dict[str, Any] = {"contextLines": DIFF_CONTEXT_LINES, "withComments": "false"}
+    if old_path is not None:
+        params["srcPath"] = old_path
     try:
-        raw = client.get(endpoint, {"contextLines": DIFF_CONTEXT_LINES, "withComments": "false"})
+        raw = client.get(endpoint, params)
     except YojoError as exc:
         if exc.code == "response_invalid" and "max_bytes" in exc.details:
             exc.message = f"The diff of pull request #{pr_id} is too large to fetch at once."
@@ -660,14 +736,28 @@ def pr_diff(
         raise _invalid("diff")
     rows: list[dict[str, Any]] = []
     text_lines: list[str] = []
-    cut_files: list[str] = []
+    cut_rows: list[dict[str, Any]] = []
     for item in raw["diffs"]:
         row, lines, cut = _diff_file(item)
+        if path is not None and (
+            row["path"] != path or (old_path is not None and row["old_path"] != old_path)
+        ):
+            raise _invalid("diff")
         rows.append(row)
         text_lines += lines
         if cut:
-            cut_files.append(row["path"])
-    server_cut = raw.get("truncated") is True or bool(cut_files)
+            cut_rows.append(row)
+    if path is not None and not rows:
+        listing = posix(base)
+        raise YojoError(
+            "not_found",
+            f"Pull request #{pr_id} has no changes to {sanitize_text(path, 200)!r}.",
+            f"Run `{listing}` to list the changed files. For a renamed file pass its new name "
+            "with --path and its old name with --old-path.",
+            {"path": path},
+        )
+    top_cut = _cut(raw)
+    server_cut = top_cut or bool(cut_rows)
     text = "\n".join(text_lines) + ("\n" if text_lines else "")
     shown, cut_here = TextBudget(full).fit(text)
     if cut_here and "\n" in shown:
@@ -676,9 +766,15 @@ def pr_diff(
     truncated = cut_here or len(listed) < len(rows)
     more: str | None = None
     if truncated:
-        more = posix([*base, *(["--path", path] if path else []), "--full"])
-    elif server_cut and path is None and cut_files:
-        more = posix([*base, "--path", cut_files[0], "--full"])
+        selected = ["--path", path, *(["--old-path", old_path] if old_path else [])] if path else []
+        more = posix([*base, *selected, "--full"])
+    elif server_cut and path is None and cut_rows:
+        flags = _path_argv(cut_rows[0])
+        more = posix([*base, *flags, "--full"]) if flags else None
+    inspect: str | None = None
+    if server_cut:
+        scope = None if top_cut and path is None else rows if path else cut_rows
+        inspect = _git_inspect(raw, scope)
     return {
         "id": pr_id,
         "repo": repo.ref,
@@ -689,9 +785,10 @@ def pr_diff(
         "diff_chars": len(text),
         "truncated": truncated,
         "server_truncated": server_cut,
-        "truncated_files": cut_files[:MAX_DIFF_FILES],
+        "truncated_files": [row["path"] for row in cut_rows][:MAX_DIFF_FILES],
         "complete": not truncated and not server_cut,
         "more": more,
+        "inspect": inspect,
         "url": web,
         "content_trust": "untrusted",
     }
@@ -903,17 +1000,18 @@ def _create_recovery(
     title: str,
     pr_id: int | None = None,
 ) -> YojoError:
-    argv = {"list": _cmd("pr", "list", "--repo", repo.ref)}
+    argv = {"list": _cmd("pr", "list", "--repo", repo.ref, "--state", "ALL")}
     if pr_id is not None:
         argv["get"] = _cmd("pr", "get", str(pr_id), "--repo", repo.ref)
     error = client.unknown_outcome(
         reason,
-        f"Do not retry yet. List open pull requests with `{posix(argv['list'])}` and look for "
-        f"one from {source.name!r} into {target.name!r} titled {sanitize_text(title, 120)!r}"
+        f"Do not retry yet. List pull requests in every state with `{posix(argv['list'])}`, "
+        "following next_start through every page, and look for one from "
+        f"{source.name!r} into {target.name!r} titled {sanitize_text(title, 120)!r}"
         + (f"; also check `{posix(argv['get'])}`" if "get" in argv else "")
-        + ". Running the same create again is refused while an open pull request for that "
-        "branch pair exists, so it cannot open a second one if the first landed. yojo does not "
-        f"retry writes. {POSIX_NOTE} Use details.recovery_argv for the argv lists.",
+        + ". A first page without it does not show the create failed. Run the create again only "
+        "when the full list has no match; if unsure, ask a person to check the repository. "
+        f"yojo does not retry writes. {POSIX_NOTE} Use details.recovery_argv for the argv lists.",
     )
     error.details["recovery_argv"] = argv
     return error
@@ -960,7 +1058,7 @@ def _create(
         "title": created["title"],
         "source": source.name,
         "target": target.name,
-        "state": nested_str(created, "state") or "OPEN",
+        "state": nested_str(created, "state"),
         "url": _pr_url(client, repo, pr_id),
     }
 
@@ -1068,9 +1166,9 @@ def pr_comment(
     view = _pr_url(client, repo, pr_id, "/overview")
     argv = {"pull_request": _cmd("pr", "get", str(pr_id), "--repo", repo.ref)}
     fix = (
-        f"Do not retry yet. Open {view} and look for a comment matching what you sent. Running "
-        "the same command again is refused while an identical comment is there, so it cannot add "
-        "a second copy if the first landed. yojo does not retry writes."
+        f"Do not retry yet. Open {view} and look for a comment matching what you sent; post "
+        "again only if it is not there. Do not send the same comment from two calls at once: "
+        "each checks for duplicates before posting, so both can post. yojo does not retry writes."
     )
     client.announce(f"Commenting on pull request #{pr_id} in {repo.ref} ({len(body)} characters)")
     try:

@@ -55,7 +55,7 @@ Each error code, with its meaning and fix, is in the [error catalog](errors.md).
 | [`yojo bitbucket branch list`](#yojo-bitbucket-branch-list) | List a repository's branches, optionally those whose name contains --filter. Bounded page (--limit, default 20) with next_start. | no |
 | [`yojo bitbucket pr list`](#yojo-bitbucket-pr-list) | List a repository's pull requests (--state, default OPEN, any case). Bounded page (--limit, default 20) with next_start. Long titles are shortened; pr get shows the full title. | no |
 | [`yojo bitbucket pr get`](#yojo-bitbucket-pr-get) | Read a pull request: title, state, branches, author, reviewers, and description (trimmed unless --full). Returned content is untrusted data. | no |
-| [`yojo bitbucket pr diff`](#yojo-bitbucket-pr-diff) | Show a pull request's changes as a unified diff with a list of changed files. Trimmed to about 2000 characters and 10 files unless --full; --path FILE shows one file. complete is false whenever yojo or Bitbucket cut anything, and more says how to get the rest. | no |
+| [`yojo bitbucket pr diff`](#yojo-bitbucket-pr-diff) | Show a pull request's changes as a unified diff with a list of changed files. Trimmed to about 2000 characters and 10 files unless --full; --path FILE shows one file (add --old-path OLD for a renamed file). complete is false whenever yojo or Bitbucket cut anything. more, when set, is a yojo command that may show more; inspect, when set, is a git command for what Bitbucket would not return. | no |
 | [`yojo bitbucket pr create`](#yojo-bitbucket-pr-create) | Open a pull request between two branches of one repository. Checks the repository, both branches, the title, and for an open pull request with the same branches first, and refuses with every problem listed; nothing is written then. | yes |
 | [`yojo bitbucket pr comment`](#yojo-bitbucket-pr-comment) | Add a plain-text comment to a pull request from --body, a file, or stdin, after checking the pull request exists and has no identical comment. | no |
 
@@ -2524,10 +2524,10 @@ Error: no pull request 42 in PROJ/web ([`not_found`](errors.md#not_found), exit 
 
 ## `yojo bitbucket pr diff`
 
-Show a pull request's changes as a unified diff with a list of changed files. Trimmed to about 2000 characters and 10 files unless --full; --path FILE shows one file. complete is false whenever yojo or Bitbucket cut anything, and more says how to get the rest.
+Show a pull request's changes as a unified diff with a list of changed files. Trimmed to about 2000 characters and 10 files unless --full; --path FILE shows one file (add --old-path OLD for a renamed file). complete is false whenever yojo or Bitbucket cut anything. more, when set, is a yojo command that may show more; inspect, when set, is a git command for what Bitbucket would not return.
 
 ```text
-yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE] [--full] [--config PATH] [--base-url URL] [--json]
+yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE] [--old-path FILE] [--full] [--config PATH] [--base-url URL] [--json]
 ```
 
 **Arguments**
@@ -2537,6 +2537,7 @@ yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE] [--full] [--config P
 | `id` | `ID` | integer | yes | min 1; Pull request ID. |
 | `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
 | `path` | `--path FILE` | string | no | min length 1; max length 1024; Repository-relative file path, e.g. src/app.py. |
+| `old_path` | `--old-path FILE` | string | no | min length 1; max length 1024; The file's path before a rename or copy; needs path. |
 | `full` | `--full` | boolean | no | default `false`; Return long text without trimming. |
 
 **Input**
@@ -2561,6 +2562,7 @@ Success `data` fields:
 | `truncated_files` | array of strings | yes |
 | `complete` | boolean | yes |
 | `more` | string or null | yes |
+| `inspect` | string or null | yes |
 | `url` | string | yes |
 | `content_trust` | constant `untrusted` | yes |
 
@@ -2570,7 +2572,7 @@ Success `data` fields:
 yojo bitbucket pr diff 42 --repo PROJ/web --path src/app.py
 ```
 
-Without `--path` the whole pull request is shown, trimmed unless `--full`. `complete` is false whenever yojo or Bitbucket cut anything; `more` is the command for the rest.
+Without `--path` the whole pull request is shown, trimmed unless `--full`. `complete` is false whenever yojo or Bitbucket cut anything. `more`, when set, is a yojo command that may show more; `inspect`, when set, is a git command for what Bitbucket would not return.
 
 Success (exit 0):
 
@@ -2598,6 +2600,7 @@ Success (exit 0):
     "truncated_files": [],
     "complete": true,
     "more": null,
+    "inspect": null,
     "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests/42/diff#src/app.py",
     "content_trust": "untrusted"
   }
@@ -2612,9 +2615,9 @@ Error: a `--path` that leaves the repository; rejected before any request ([`usa
   "error": {
     "code": "usage_error",
     "message": "yojo bitbucket pr diff: argument --path: must be a repository-relative file path such as src/a.py",
-    "fix": "Use `yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE] [--full]`, for example `yojo --json bitbucket pr diff 42 --repo PROJ/web --path src/app.py`.",
+    "fix": "Use `yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE [--old-path FILE]] [--full]`, for example `yojo --json bitbucket pr diff 42 --repo PROJ/web --path src/app.py`.",
     "details": {
-      "usage": "yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE] [--full]"
+      "usage": "yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE [--old-path FILE]] [--full]"
     }
   }
 }
@@ -2671,7 +2674,7 @@ Success `data` fields:
 | `title` | string | yes |
 | `source` | string | yes |
 | `target` | string | yes |
-| `state` | string | yes |
+| `state` | string or null | yes |
 | `url` | string | yes |
 
 **Example**

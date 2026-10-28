@@ -1065,10 +1065,14 @@ BITBUCKET_COMMANDS: list[CommandSpec] = [
         summary=(
             "Show a pull request's changes as a unified diff with a list of changed files. "
             "Trimmed to about 2000 characters and 10 files unless --full; --path FILE shows one "
-            "file. complete is false whenever yojo or Bitbucket cut anything, and more says how "
-            "to get the rest."
+            "file (add --old-path OLD for a renamed file). complete is false whenever yojo or "
+            "Bitbucket cut anything. more, when set, is a yojo command that may show more; "
+            "inspect, when set, is a git command for what Bitbucket would not return."
         ),
-        usage="yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE] [--full]",
+        usage=(
+            "yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE [--old-path FILE]] "
+            "[--full]"
+        ),
         example="yojo --json bitbucket pr diff 42 --repo PROJ/web --path src/app.py",
         arguments=_obj(
             {
@@ -1079,6 +1083,12 @@ BITBUCKET_COMMANDS: list[CommandSpec] = [
                     "minLength": 1,
                     "maxLength": 1024,
                     "description": "Repository-relative file path, e.g. src/app.py.",
+                },
+                "old_path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "description": "The file's path before a rename or copy; needs path.",
                 },
                 "full": FULL,
             },
@@ -1109,6 +1119,7 @@ BITBUCKET_COMMANDS: list[CommandSpec] = [
                 "truncated_files": _arr(STR),
                 "complete": BOOL,
                 "more": NULLABLE_STR,
+                "inspect": NULLABLE_STR,
                 "url": URL,
                 "content_trust": UNTRUSTED,
             },
@@ -1125,6 +1136,7 @@ BITBUCKET_COMMANDS: list[CommandSpec] = [
                 "truncated_files",
                 "complete",
                 "more",
+                "inspect",
                 "url",
                 "content_trust",
             ],
@@ -1164,7 +1176,7 @@ BITBUCKET_COMMANDS: list[CommandSpec] = [
                 "title": STR,
                 "source": STR,
                 "target": STR,
-                "state": STR,
+                "state": NULLABLE_STR,
                 "url": URL,
             },
             ["id", "repo", "title", "source", "target", "state", "url"],

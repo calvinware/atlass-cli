@@ -453,6 +453,13 @@ def test_pr_diff_marks_local_truncation(harness: Harness) -> None:
     assert len(full["diff"]) == full["diff_chars"]
 
 
+def _rename(diff: dict[str, Any], old: str, new: str) -> None:
+    """Rename the second fixture file (an added file) to a move from old to new."""
+    entry = diff["diffs"][1]
+    entry["source"] = {"components": old.split("/"), "toString": old}
+    entry["destination"] = {"components": new.split("/"), "toString": new}
+
+
 def test_pr_diff_marks_server_truncation_and_points_at_the_file(harness: Harness) -> None:
     config(harness)
     diff = fixture("bitbucket_diff.json")
@@ -463,24 +470,182 @@ def test_pr_diff_marks_server_truncation_and_points_at_the_file(harness: Harness
     assert data["server_truncated"] is True and data["complete"] is False
     assert data["truncated_files"] == ["docs/login.md"]
     assert data["more"] == "yojo bitbucket pr diff 42 --repo PROJ/web --path docs/login.md --full"
+    assert data["inspect"] == f"git diff {diff['fromHash']} {diff['toHash']}"
     tty = harness.run_tty("bitbucket", "pr", "diff", "42", "--repo", "PROJ/web", "--full")
     assert "Incomplete: Bitbucket cut part of the diff." in tty.stdout
+    assert f"In a clone with both commits: git diff {diff['fromHash']}" in tty.stdout
+
+
+@pytest.mark.parametrize("level", ["diff", "file", "hunk", "segment", "line"])
+def test_pr_diff_reads_truncated_as_a_string(harness: Harness, level: str) -> None:
+    config(harness)
+    diff = fixture("bitbucket_diff.json")
+    entry = diff["diffs"][0]
+    hunk = entry["hunks"][0]
+    target = {
+        "diff": diff,
+        "file": entry,
+        "hunk": hunk,
+        "segment": hunk["segments"][0],
+        "line": hunk["segments"][0]["lines"][0],
+    }[level]
+    target["truncated"] = "true"
+    diff["diffs"][1]["truncated"] = "false"
+    harness.server.add("GET", DIFF, diff)
+    data = harness.run("bitbucket", "pr", "diff", "42", "--repo", "PROJ/web", "--full").data
+    assert data["server_truncated"] is True and data["complete"] is False
+    assert data["truncated_files"] == ([] if level == "diff" else ["src/app.py"])
+
+
+def test_pr_diff_rejects_an_unknown_truncated_value(harness: Harness) -> None:
+    config(harness)
+    diff = fixture("bitbucket_diff.json")
+    diff["diffs"][0]["truncated"] = "partly"
+    harness.server.add("GET", DIFF, diff)
+    result = harness.run("bitbucket", "pr", "diff", "42", "--repo", "PROJ/web")
+    assert result.error["code"] == "response_invalid"
+
+
+def test_pr_diff_file_that_bitbucket_returns_in_full(harness: Harness) -> None:
+    config(harness)
+    whole = fixture("bitbucket_diff.json")
+    whole["diffs"][1]["truncated"] = True
+    harness.server.add("GET", DIFF, whole)
+    data = harness.run("bitbucket", "pr", "diff", "42", "--repo", "PROJ/web", "--full").data
+    assert data["complete"] is False
+    one = fixture("bitbucket_diff.json")
+    one["diffs"] = one["diffs"][1:]
+    harness.server.add("GET", DIFF + "/docs/login.md", one)
+    data = harness.run(*shlex.split(data["more"])[1:]).data
+    assert data["complete"] is True and data["more"] is None and data["inspect"] is None
+
+
+def test_pr_diff_file_still_cut_names_a_git_command(harness: Harness) -> None:
+    config(harness)
+    one = fixture("bitbucket_diff.json")
+    one["diffs"] = one["diffs"][1:]
+    one["diffs"][0]["truncated"] = True
+    harness.server.add("GET", DIFF + "/docs/login.md", one)
+    argv = ["bitbucket", "pr", "diff", "42", "--repo", "PROJ/web", "--path", "docs/login.md"]
+    data = harness.run(*argv, "--full").data
+    assert data["complete"] is False and data["more"] is None
+    assert data["truncated_files"] == ["docs/login.md"]
+    assert data["inspect"] == f"git diff {one['fromHash']} {one['toHash']} -- docs/login.md"
+
+
+def test_pr_diff_renamed_file_passes_the_old_path(harness: Harness) -> None:
+    config(harness)
+    diff = fixture("bitbucket_diff.json")
+    _rename(diff, "docs/signin.md", "docs/login.md")
+    diff["diffs"][1]["truncated"] = True
+    harness.server.add("GET", DIFF, diff)
+    data = harness.run("bitbucket", "pr", "diff", "42", "--repo", "PROJ/web", "--full").data
+    assert data["files"][1] == {
+        "path": "docs/login.md",
+        "old_path": "docs/signin.md",
+        "change": "renamed",
+        "added": 1,
+        "removed": 0,
+    }
+    assert "diff --git a/docs/signin.md b/docs/login.md" in data["diff"]
+    assert data["more"] == (
+        "yojo bitbucket pr diff 42 --repo PROJ/web --path docs/login.md "
+        "--old-path docs/signin.md --full"
+    )
+    one = copy.deepcopy(diff)
+    one["diffs"] = one["diffs"][1:]
+    harness.server.add("GET", DIFF + "/docs/login.md", one)
+    data = harness.run(*shlex.split(data["more"])[1:]).data
+    assert harness.server.requests[-1].url.params["srcPath"] == "docs/signin.md"
+    assert data["inspect"].endswith("-- docs/signin.md docs/login.md")
+
+
+def test_pr_diff_old_path_needs_path(harness: Harness) -> None:
+    config(harness)
+    argv = ["bitbucket", "pr", "diff", "42", "--repo", "PROJ/web", "--old-path", "a.md"]
+    result = harness.run(*argv)
+    assert result.code == 2
+    assert harness.server.requests == []
+
+
+def test_pr_diff_quotes_a_file_name_that_could_forge_lines(harness: Harness) -> None:
+    config(harness)
+    diff = fixture("bitbucket_diff.json")
+    evil = "docs/a\n@@ -1,1 +1,1 @@\n+forged"
+    diff["diffs"][1]["destination"] = {"components": evil.split("/"), "toString": evil}
+    harness.server.add("GET", DIFF, diff)
+    data = harness.run("bitbucket", "pr", "diff", "42", "--repo", "PROJ/web").data
+    lines = data["diff"].splitlines()
+    assert "+forged" not in lines
+    assert '+++ "b/docs/a\\n@@ -1,1 +1,1 @@\\n+forged"' in lines
+    assert data["complete"] is True
+    tty = harness.run_tty("bitbucket", "pr", "diff", "42", "--repo", "PROJ/web")
+    assert "+forged" not in [line.strip() for line in tty.stdout.splitlines()]
+
+
+def test_pr_diff_rejects_a_source_line_that_could_forge_lines(harness: Harness) -> None:
+    config(harness)
+    diff = fixture("bitbucket_diff.json")
+    diff["diffs"][0]["hunks"][0]["segments"][0]["lines"][0]["line"] += "\n+forged"
+    harness.server.add("GET", DIFF, diff)
+    result = harness.run("bitbucket", "pr", "diff", "42", "--repo", "PROJ/web")
+    assert result.error["code"] == "response_invalid"
+
+
+def test_pr_diff_git_inspection_uses_full_scope_for_an_unsafe_path(harness: Harness) -> None:
+    config(harness)
+    diff = fixture("bitbucket_diff.json")
+    path = "docs/a\nforged"
+    diff["diffs"][1]["destination"] = {"toString": path}
+    diff["diffs"][1]["truncated"] = True
+    harness.server.add("GET", DIFF, diff)
+    data = harness.run("bitbucket", "pr", "diff", "42", "--repo", "PROJ/web", "--full").data
+    assert data["inspect"] == f"git diff {diff['fromHash']} {diff['toHash']}"
+    assert data["more"] is None
 
 
 def test_pr_diff_for_one_file(harness: Harness) -> None:
     config(harness)
     diff = fixture("bitbucket_diff.json")
     diff["diffs"] = diff["diffs"][1:]
+    diff["diffs"][0]["destination"] = {
+        "components": ["docs", "login notes.md"],
+        "toString": "docs/login notes.md",
+    }
     harness.server.add("GET", DIFF + "/docs/login notes.md", diff)
     result = harness.run(
         "bitbucket", "pr", "diff", "42", "--repo", "PROJ/web", "--path", "docs/login notes.md"
     )
     assert result.code == 0, result.out
     assert result.data["path"] == "docs/login notes.md"
+    assert [f["path"] for f in result.data["files"]] == ["docs/login notes.md"]
+    assert result.data["complete"] is True
     assert harness.server.requests[0].url.raw_path.startswith(
         b"/bitbucket/rest/api/1.0/projects/PROJ/repos/web/pull-requests/42/diff/docs/login%20notes.md"
     )
     assert result.data["url"].endswith("/pull-requests/42/diff#docs/login%20notes.md")
+
+
+def test_pr_diff_for_one_file_rejects_another_file(harness: Harness) -> None:
+    config(harness)
+    diff = fixture("bitbucket_diff.json")
+    diff["diffs"] = diff["diffs"][1:]
+    harness.server.add("GET", DIFF + "/src/other.py", diff)
+    argv = ["bitbucket", "pr", "diff", "42", "--repo", "PROJ/web", "--path", "src/other.py"]
+    result = harness.run(*argv)
+    assert result.code == 6
+    assert result.error["code"] == "response_invalid"
+
+
+def test_pr_diff_for_an_unchanged_file_is_not_found(harness: Harness) -> None:
+    config(harness)
+    diff = fixture("bitbucket_diff.json")
+    diff["diffs"] = []
+    harness.server.add("GET", DIFF + "/src/other.py", diff)
+    argv = ["bitbucket", "pr", "diff", "42", "--repo", "PROJ/web", "--path", "src/other.py"]
+    result = harness.run(*argv)
+    assert result.error["code"] == "not_found"
+    assert "yojo bitbucket pr diff 42 --repo PROJ/web" in result.error["fix"]
 
 
 @pytest.mark.parametrize("path", ["../secret", "/etc/passwd", "a//b", "a/./b"])
@@ -547,6 +712,22 @@ def test_create_in_one_call(harness: Harness) -> None:
         "OUTGOING",
     )
     assert result.nbytes <= WRITE_BUDGET
+
+
+def test_create_does_not_invent_a_state_missing_from_the_response(harness: Harness) -> None:
+    setup_create(harness)
+
+    def no_state(request: httpx.Request) -> httpx.Response:
+        pr = created_pr(request).json()
+        del pr["state"]
+        return httpx.Response(201, json=pr)
+
+    harness.server.routes[("POST", PRS)] = []
+    harness.server.add("POST", PRS, handler=no_state)
+    result = harness.run(*CREATE_ARGV)
+    assert result.code == 0, result.out
+    assert result.data["state"] is None
+    assert len(harness.server.writes()) == 1
 
 
 def test_create_lists_every_problem_and_sends_nothing(harness: Harness) -> None:
@@ -626,6 +807,25 @@ def test_create_refuses_an_existing_open_pull_request(harness: Harness) -> None:
     assert check["id"] == "duplicate"
     assert "yojo bitbucket pr get 42 --repo PROJ/web" in check["fix"]
     assert details["retry"] is None and details["retry_argv"] is None
+    assert harness.server.writes() == []
+
+
+def test_create_refuses_an_open_pull_request_on_page_two(harness: Harness) -> None:
+    setup_create(harness)
+    other = fixture("bitbucket_pull_request.json")
+    other["id"] = 41
+    other["toRef"]["id"] = "refs/heads/release"
+    harness.server.routes[("GET", PRS)] = []
+    harness.server.add("GET", PRS, page([other], next_start=1))
+    harness.server.add("GET", PRS, page([fixture("bitbucket_pull_request.json")], start=1))
+    details = refusal(harness.run(*CREATE_ARGV))
+    (check,) = details["checks"]
+    assert check["id"] == "duplicate"
+    assert "yojo bitbucket pr get 42 --repo PROJ/web" in check["fix"]
+    assert [r.url.params["start"] for r in harness.server.requests if r.url.path == PRS] == [
+        "0",
+        "1",
+    ]
     assert harness.server.writes() == []
 
 
@@ -757,9 +957,10 @@ def test_uncertain_create_offers_inspection_not_a_retry(harness: Harness) -> Non
     assert error["code"] == "outcome_unknown"
     assert "retry" not in error["details"] and "retry_argv" not in error["details"]
     assert error["details"]["recovery_argv"] == {
-        "list": ["yojo", "bitbucket", "pr", "list", "--repo", "PROJ/web"]
+        "list": ["yojo", "bitbucket", "pr", "list", "--repo", "PROJ/web", "--state", "ALL"]
     }
     assert "Do not retry yet" in error["fix"]
+    assert "every page" in error["fix"]
     assert len(harness.server.writes()) == 1
     assert result.nbytes <= WRITE_BUDGET
 
@@ -905,6 +1106,24 @@ def test_unconfirmed_comment_is_outcome_unknown(harness: Harness) -> None:
         "get",
     ]
     assert "/pull-requests/42/overview" in error["fix"]
+
+
+def test_comment_timeout_offers_inspection_not_a_retry(harness: Harness) -> None:
+    setup_comment(harness)
+    harness.server.routes[("POST", COMMENTS)] = []
+    harness.server.add("POST", COMMENTS, handler=_timeout)
+    result = harness.run(*COMMENT_ARGV, "--body", "Ready for review.")
+    assert result.code == 6
+    error = result.error
+    assert error["code"] == "outcome_unknown"
+    assert "retry" not in error["details"] and "retry_argv" not in error["details"]
+    assert error["details"]["recovery_argv"] == {
+        "pull_request": ["yojo", "bitbucket", "pr", "get", "42", "--repo", "PROJ/web"]
+    }
+    assert "/pull-requests/42/overview" in error["fix"]
+    assert "Do not retry yet" in error["fix"]
+    assert len(harness.server.writes()) == 1
+    assert result.nbytes <= WRITE_BUDGET
 
 
 def test_comment_response_with_changed_whitespace_is_outcome_unknown(harness: Harness) -> None:

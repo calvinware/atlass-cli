@@ -1479,7 +1479,7 @@
         "path": "src/app.py"
       },
       "input": null,
-      "note": "Without `--path` the whole pull request is shown, trimmed unless `--full`. `complete` is false whenever yojo or Bitbucket cut anything; `more` is the command for the rest.",
+      "note": "Without `--path` the whole pull request is shown, trimmed unless `--full`. `complete` is false whenever yojo or Bitbucket cut anything. `more`, when set, is a yojo command that may show more; `inspect`, when set, is a git command for what Bitbucket would not return.",
       "success": {
         "ok": true,
         "data": {
@@ -1503,6 +1503,7 @@
           "truncated_files": [],
           "complete": true,
           "more": null,
+          "inspect": null,
           "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests/42/diff#src/app.py",
           "content_trust": "untrusted"
         }
@@ -1513,9 +1514,9 @@
         "error": {
           "code": "usage_error",
           "message": "yojo bitbucket pr diff: argument --path: must be a repository-relative file path such as src/a.py",
-          "fix": "Use `yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE] [--full]`, for example `yojo --json bitbucket pr diff 42 --repo PROJ/web --path src/app.py`.",
+          "fix": "Use `yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE [--old-path FILE]] [--full]`, for example `yojo --json bitbucket pr diff 42 --repo PROJ/web --path src/app.py`.",
           "details": {
-            "usage": "yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE] [--full]"
+            "usage": "yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE [--old-path FILE]] [--full]"
           }
         }
       }
