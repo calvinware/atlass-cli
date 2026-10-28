@@ -108,10 +108,41 @@ def test_release_actions_are_sha_pinned_and_use_no_secrets(release: dict[Any, An
 # --------------------------------------------------------------------------- release gate
 
 
+def _release_readme(revision: str, install: str = "pipx install yojo") -> str:
+    raw = f"https://raw.githubusercontent.com/calvinware/yojo/{revision}/docs/assets"
+    return f'<img src="{raw}/banner-light.svg">\n<img src="{raw}/demos/one-call.gif">\n{install}\n'
+
+
 def test_release_gate_accepts_ci_passing_main_commit() -> None:
     version = release_gate.project_version()
     runs = {"workflow_runs": [GOOD_RUN]}
-    assert release_gate.check(f"refs/tags/v{version}", SHA, version, [OTHER_SHA, SHA], runs) == []
+    readme = _release_readme(f"v{version}")
+    assert (
+        release_gate.check(f"refs/tags/v{version}", SHA, version, [OTHER_SHA, SHA], runs, readme)
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    "readme",
+    [
+        _release_readme(SHA),
+        _release_readme("main"),
+        _release_readme("v9.9.9"),
+        _release_readme("v1.0.0", f"pipx install git+https://github.com/calvinware/yojo.git@{SHA}"),
+        "pipx install yojo\n",
+    ],
+    ids=["commit-pin", "main", "other-tag", "git-install", "no-images"],
+)
+def test_release_gate_rejects_readme_not_pinned_to_the_release(readme: str) -> None:
+    assert release_gate.readme_problems("1.0.0", readme)
+
+
+def test_release_gate_reads_the_real_readme() -> None:
+    # Pre-release, README.md pins a commit; the gate must refuse to publish it as it stands.
+    text = (Path(release_gate.ROOT) / "README.md").read_text(encoding="utf-8")
+    if "pipx install git+" in text:
+        assert release_gate.readme_problems(release_gate.project_version(), text)
 
 
 @pytest.mark.parametrize(
@@ -151,12 +182,17 @@ def test_release_gate_cli_fails_closed(tmp_path: Path) -> None:
     runs = tmp_path / "runs.json"
     runs.write_text(json.dumps({"workflow_runs": [GOOD_RUN]}), encoding="utf-8")
     ref = f"refs/tags/v{release_gate.project_version()}"
-    args = ["--ref", ref, "--sha", SHA, "--main-history", str(history)]
+    readme = tmp_path / "README.md"
+    readme.write_text(_release_readme(f"v{release_gate.project_version()}"), encoding="utf-8")
+    args = ["--ref", ref, "--sha", SHA, "--main-history", str(history), "--readme", str(readme)]
     assert release_gate.main([*args, "--ci-runs", str(runs)]) == 0
+    stale = tmp_path / "stale.md"
+    stale.write_text(_release_readme(SHA), encoding="utf-8")
+    assert release_gate.main([*args[:-1], str(stale), "--ci-runs", str(runs)]) == 1
     assert release_gate.main([*args, "--ci-runs", str(tmp_path / "missing.json")]) == 1
     runs.write_text("not json", encoding="utf-8")
     assert release_gate.main([*args, "--ci-runs", str(runs)]) == 1
-    args[1] = "refs/tags/v0.0.0"
+    args[1] = "refs/tags/v0.0.0"  # --ref value
     runs.write_text(json.dumps({"workflow_runs": [GOOD_RUN]}), encoding="utf-8")
     assert release_gate.main([*args, "--ci-runs", str(runs)]) == 1
 
@@ -164,9 +200,18 @@ def test_release_gate_cli_fails_closed(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- package license
 
 LICENSE_TEXT = (ROOT / "LICENSE").read_text(encoding="utf-8")
+VERSION = check_package.project_version()
 METADATA = "\n".join(
-    ["Metadata-Version: 2.4", "Name: atlass-cli", *check_package.EXPECTED_METADATA, "", "body"]
+    [
+        "Metadata-Version: 2.4",
+        "Name: yojo",
+        f"Version: {VERSION}",
+        *check_package.EXPECTED_METADATA,
+        "",
+        "body",
+    ]
 )
+ENTRY_POINTS = "[console_scripts]\nyojo = yojo.cli:main\n"
 
 
 def test_source_license_is_the_complete_mit_text() -> None:
@@ -185,14 +230,26 @@ def test_title_only_license_fails() -> None:
     assert len(check_package.license_problems("MIT License\n")) == 4
 
 
-def _write_dists(dist: Path, license_bytes: bytes, metadata: str = METADATA) -> None:
+def _write_dists(
+    dist: Path,
+    license_bytes: bytes,
+    metadata: str = METADATA,
+    *,
+    entry_points: str = ENTRY_POINTS,
+    extra: tuple[str, ...] = (),
+) -> None:
     dist.mkdir()
-    with zipfile.ZipFile(dist / "atlass_cli-1.0.0-py3-none-any.whl", "w") as zf:
-        zf.writestr("atlass_cli-1.0.0.dist-info/METADATA", metadata)
-        zf.writestr("atlass_cli-1.0.0.dist-info/licenses/LICENSE", license_bytes)
-    with tarfile.open(dist / "atlass_cli-1.0.0.tar.gz", "w:gz") as tf:
+    info_dir = f"yojo-{VERSION}.dist-info"
+    with zipfile.ZipFile(dist / f"yojo-{VERSION}-py3-none-any.whl", "w") as zf:
+        zf.writestr("yojo/__init__.py", "")
+        for name in extra:
+            zf.writestr(name, "")
+        zf.writestr(f"{info_dir}/METADATA", metadata)
+        zf.writestr(f"{info_dir}/entry_points.txt", entry_points)
+        zf.writestr(f"{info_dir}/licenses/LICENSE", license_bytes)
+    with tarfile.open(dist / f"yojo-{VERSION}.tar.gz", "w:gz") as tf:
         for name, data in (("PKG-INFO", metadata.encode()), ("LICENSE", license_bytes)):
-            info = tarfile.TarInfo(f"atlass_cli-1.0.0/{name}")
+            info = tarfile.TarInfo(f"yojo-{VERSION}/{name}")
             info.size = len(data)
             tf.addfile(info, io.BytesIO(data))
 
@@ -228,3 +285,35 @@ def test_package_check_rejects_bad_metadata_and_missing_archives(tmp_path: Path)
     assert "sdist metadata has a legacy License field" in problems
     (tmp_path / "empty").mkdir()
     assert check_package.check(tmp_path / "empty")
+
+
+def test_project_is_yojo_below_one() -> None:
+    assert VERSION == "0.1.0"
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    assert "url: https://pypi.org/project/yojo/" in release
+    assert "atlass" not in release
+
+
+@pytest.mark.parametrize(
+    ("change", "problem"),
+    [
+        ({"metadata": METADATA.replace("Name: yojo", "Name: atlass-cli")}, "'Name: yojo'"),
+        ({"metadata": METADATA.replace(f"Version: {VERSION}", "Version: 1.0.0")}, "'Version: "),
+        ({"extra": ("atlass_cli/__init__.py",)}, "still contains the atlass_cli package"),
+        (
+            {"entry_points": ENTRY_POINTS + "atl = atlass_cli.cli:main\n"},
+            "still installs the 'atl' command",
+        ),
+        ({"entry_points": "[console_scripts]\n"}, "console_scripts is missing"),
+        (
+            {"entry_points": "[gui_scripts]\nyojo = yojo.cli:main\n"},
+            "console_scripts is missing",
+        ),
+    ],
+)
+def test_package_check_rejects_wrong_identity(
+    tmp_path: Path, change: dict[str, Any], problem: str
+) -> None:
+    _write_dists(tmp_path / "dist", (ROOT / "LICENSE").read_bytes(), **change)
+    problems = check_package.check(tmp_path / "dist")
+    assert any(problem in p for p in problems), problems

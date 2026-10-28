@@ -1,0 +1,38 @@
+{
+  "size": 3,
+  "limit": 100,
+  "isLastPage": true,
+  "start": 0,
+  "values": [
+    {
+      "id": 9003,
+      "createdDate": 1793195611000,
+      "user": {"name": "example-reviewer", "displayName": "Example Reviewer"},
+      "action": "COMMENTED",
+      "commentAction": "ADDED",
+      "comment": {
+        "id": 501,
+        "version": 0,
+        "text": "Looks good overall.",
+        "author": {"name": "example-reviewer", "displayName": "Example Reviewer"},
+        "createdDate": 1793195611000,
+        "updatedDate": 1793195611000,
+        "comments": []
+      }
+    },
+    {
+      "id": 9002,
+      "createdDate": 1793192011000,
+      "user": {"name": "example-user", "displayName": "Example User"},
+      "action": "RESCOPED",
+      "fromHash": "0a943a29376f2336b78312d99e65da17048951db",
+      "previousFromHash": "4b6d2a0e8e3a0bb8cf6c66d9e4a9e2a1c3d4e5f6"
+    },
+    {
+      "id": 9001,
+      "createdDate": 1793188411000,
+      "user": {"name": "example-user", "displayName": "Example User"},
+      "action": "OPENED"
+    }
+  ]
+}

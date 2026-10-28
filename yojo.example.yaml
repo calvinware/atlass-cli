@@ -1,0 +1,39 @@
+# yojo team configuration (version 1). Optional: yojo works without it when you pass --base-url.
+# Copy to yojo.yaml in the repository root and replace the placeholder values with your team's
+# URLs, field names, and statuses. Field names are the ones Jira shows; any case works.
+# Never put credentials in this file; `yojo login` stores them in the OS keyring.
+version: 1
+jira:
+  base_url: https://jira.example.test/jira
+  # ca_bundle: /path/to/team-ca.pem
+  max_attachment_bytes: 52428800
+  # Friendly aliases usable anywhere a field name is accepted (--set, --fields, rules).
+  fields:
+    points: {jira_name: Story Points}
+    team: {id: customfield_10400}
+  projects:
+    - key: EXAMPLE
+      # Extra required fields per issue type, on top of what Jira itself requires.
+      create:
+        Bug:
+          required: [Environment]
+      # Rules checked inside `yojo jira transition` before anything is written.
+      transitions:
+        start:
+          from: [To Do]
+          to: In Progress
+          auto_set: {Review Flag: "Yes"}
+        finish:
+          from: [In Progress]
+          to: Done
+          require:
+            - kind: field_set
+              field: Resolution
+            - kind: attachment_filename
+              pattern: "{key}_Evidence_*"
+confluence:
+  base_url: https://confluence.example.test/confluence
+  # ca_bundle: /path/to/team-ca.pem
+bitbucket:
+  base_url: https://bitbucket.example.test/bitbucket
+  # ca_bundle: /path/to/team-ca.pem

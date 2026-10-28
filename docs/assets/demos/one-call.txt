@@ -1,0 +1,15 @@
+$ yojo jira issue create PROJ --type Bug --summary "Fix example sign-in" --base-url https://jira.example.test/jira
+Sending: Creating a Bug in PROJ: 'Fix example sign-in'
+Created PROJ-128
+Status      To Do
+Issue type  Bug
+Project     PROJ
+
+Changed
+Field    Id
+Summary  summary
+
+Open: https://jira.example.test/jira/browse/PROJ-128
+$
+
+────────────────────────────────────────────────────────────────────────────────

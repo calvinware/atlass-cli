@@ -1,7 +1,7 @@
-site_name: atl documentation
+site_name: yojo documentation
 site_description: Agent-first JSON CLI for Jira and Confluence Data Center with team-defined workflow rules.
-repo_url: https://github.com/calvinware/atlass-cli
-repo_name: calvinware/atlass-cli
+repo_url: https://github.com/calvinware/yojo
+repo_name: calvinware/yojo
 edit_uri: edit/main/docs/
 docs_dir: docs
 strict: true
@@ -80,14 +80,16 @@ nav:
       - Getting started: getting-started.md
       - Jira workflows: guides/jira-workflows.md
       - Confluence pages: guides/confluence.md
+      - Bitbucket pull requests: guides/bitbucket.md
       - Troubleshooting: troubleshooting.md
   - AI agents:
       - Agent guide: agents.md
   - Admins:
-      - atl.yaml cookbook: admin-cookbook.md
+      - yojo.yaml cookbook: admin-cookbook.md
       - Configuration reference: configuration.md
   - Contributors:
       - Contributing: contributing.md
+      - 0.1.0 release notes (draft): release-notes-0.1.0.md
   - Reference:
       - Commands: reference/commands.md
       - Errors: reference/errors.md

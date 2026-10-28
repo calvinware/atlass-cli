@@ -11,19 +11,21 @@ from typing import Any
 import pytest
 from jsonschema import Draft202012Validator
 
-from atlass_cli import cli
-from atlass_cli.contracts import (
+from tests.conftest import Harness
+from yojo import cli
+from yojo.contracts import (
+    BITBUCKET_PROJECT_PATTERN,
     COMMANDS,
     COMMANDS_BY_PATH,
     ERROR_CODES,
     ISSUE_KEY_PATTERN,
     PAGE_ID_PATTERN,
     PROJECT_KEY_PATTERN,
+    REPO_PATTERN,
     SPACE_KEY_PATTERN,
     ExitCode,
     command_schema,
 )
-from tests.conftest import Harness
 
 
 def _leaf_paths(parser: argparse.ArgumentParser, prefix: str = "") -> set[str]:
@@ -51,11 +53,15 @@ def test_commands_lists_every_command_offline(harness: Harness) -> None:
     for expected in (
         "login",
         "config check",
-        "jira story create",
+        "init",
+        "agent print",
+        "agent install",
+        "jira issue create",
+        "jira issue get",
+        "jira issue update",
+        "jira issue link",
         "jira requirements",
         "jira transition",
-        "jira feature find",
-        "jira feature create",
         "jira attachment add",
         "jira comment add",
         "jira search",
@@ -63,8 +69,19 @@ def test_commands_lists_every_command_offline(harness: Harness) -> None:
         "confluence page search",
         "confluence page create",
         "confluence page update",
+        "bitbucket repo list",
+        "bitbucket repo get",
+        "bitbucket branch list",
+        "bitbucket pr list",
+        "bitbucket pr get",
+        "bitbucket pr diff",
+        "bitbucket pr create",
+        "bitbucket pr comment",
     ):
         assert expected in COMMANDS_BY_PATH
+    assert len(result.data["commands"]) == len(COMMANDS_BY_PATH)
+    for command in result.data["commands"]:
+        assert command["usage"].startswith("yojo ")
 
 
 @pytest.mark.parametrize("path", [c.path for c in COMMANDS])
@@ -80,11 +97,12 @@ def test_schema_is_valid_and_offline(harness: Harness, path: str) -> None:
         Draft202012Validator.check_schema(data["input"])
     assert set(data["error_codes"]) <= set(ERROR_CODES)
     assert harness.server.requests == []
-    assert not (harness.tmp_path / "atl.yaml").exists()
+    assert not (harness.tmp_path / "yojo.yaml").exists()
+    assert data["usage"].startswith("yojo ") and data["example"].startswith("yojo ")
 
 
 def test_schema_accepts_unquoted_words(harness: Harness) -> None:
-    assert harness.run("schema", "jira", "story", "create").data["command"] == "jira story create"
+    assert harness.run("schema", "jira", "issue", "create").data["command"] == "jira issue create"
 
 
 def test_schema_unknown_command(harness: Harness) -> None:
@@ -99,7 +117,7 @@ def test_schema_unknown_command(harness: Harness) -> None:
         ["--help"],
         ["-h"],
         ["jira", "--help"],
-        ["jira", "story", "create", "--help"],
+        ["jira", "issue", "create", "--help"],
         ["--config", "x", "login", "-h"],
     ],
 )
@@ -115,20 +133,34 @@ def test_help_for_leaf_has_summary(harness: Harness) -> None:
     assert help_["summary"] == COMMANDS_BY_PATH["jira transition"].summary
 
 
+def test_bare_yojo_returns_a_usage_envelope(harness: Harness) -> None:
+    result = harness.run()
+    assert result.code == ExitCode.INPUT
+    assert result.error["code"] == "usage_error"
+    assert "yojo commands" in result.error["fix"]
+    assert harness.server.requests == []
+
+
 @pytest.mark.parametrize(
     "argv",
     [
-        [],
         ["bogus"],
         ["jira"],
         ["jira", "search"],
         ["jira", "requirements", "not-a-key", "--to", "Done"],
         ["jira", "search", "--jql", "x", "--limit", "101"],
         ["jira", "search", "--jql", "x", "--limit", "abc"],
-        ["jira", "feature", "find"],
-        ["jira", "feature", "find", "--issue", "EXAMPLE-1", "--text", "x"],
+        ["jira", "widget", "create"],
+        ["jira", "widget", "find", "--text", "x"],
+        ["jira", "issue", "link", "EXAMPLE-1", "EXAMPLE-2"],
+        ["jira", "issue", "create", "EXAMPLE", "--set", "no-equals-sign"],
+        ["jira", "comment", "add", "EXAMPLE-1"],
+        ["jira", "comment", "add", "EXAMPLE-1", "--body", "x", "--body-file", "-"],
         ["confluence", "page", "read", "abc"],
         ["login", "--service", "jira", "--token", "secret-in-argv"],
+        ["init", "--token", "secret-in-argv"],
+        ["agent", "install", "--target", "notepad"],
+        ["agent", "print", "--target", "agents"],
     ],
 )
 def test_parser_errors_are_json_exit_2(harness: Harness, argv: list[str]) -> None:
@@ -150,6 +182,7 @@ SECRET_SENTINEL = "s3cr3t-SENTINEL-value"
         ["login", "--service", SECRET_SENTINEL],
         ["jira", "search", "--jql", "x", "--limit", SECRET_SENTINEL],
         ["jira", "requirements", SECRET_SENTINEL, "--to", "Done"],
+        ["jira", "issue", "create", "EXAMPLE", "--set", SECRET_SENTINEL],
         [SECRET_SENTINEL],
     ],
 )
@@ -166,31 +199,31 @@ def test_schema_errors_omit_rejected_values(harness: Harness) -> None:
     doc = {
         "project": SECRET_SENTINEL,
         "summary": ["x"],
-        "fields": {"work_started": {"v": SECRET_SENTINEL}},
+        "fields": {"review_flag": {"v": SECRET_SENTINEL}},
         "unexpected": SECRET_SENTINEL,
     }
-    result = harness.run("jira", "story", "create", "--input", "-", stdin=json.dumps(doc).encode())
+    result = harness.run("jira", "issue", "create", "--input", "-", stdin=json.dumps(doc).encode())
     assert result.error["code"] == "input_invalid"
     assert SECRET_SENTINEL not in result.stdout
     assert result.stderr == ""
     problems = {p["path"]: p for p in result.error["details"]["errors"]}
     assert problems["/summary"] == {"path": "/summary", "validator": "type", "expected": "string"}
     assert problems["/project"]["validator"] == "pattern"
-    assert problems["/fields/work_started"]["validator"] == "oneOf"
+    assert problems["/fields/<field>"]["validator"] == "oneOf"
     assert "summary" in problems["/"]["allowed"]
 
     doc["fields"] = {SECRET_SENTINEL: {"v": "invalid"}}
-    result = harness.run("jira", "story", "create", "--input", "-", stdin=json.dumps(doc).encode())
+    result = harness.run("jira", "issue", "create", "--input", "-", stdin=json.dumps(doc).encode())
     assert result.error["code"] == "input_invalid"
     assert SECRET_SENTINEL not in result.stdout
     assert "/fields/<field>" in {problem["path"] for problem in result.error["details"]["errors"]}
 
-    result = harness.run("jira", "story", "create", "--input", "-", stdin=b"{}")
-    assert result.error["details"]["errors"][0]["missing"] == ["project", "summary"]
+    result = harness.run("jira", "issue", "create", "--input", "-", stdin=b"[]")
+    assert result.error["details"]["errors"][0]["expected"] == "object"
 
     duplicate = json.dumps({"project": "EXAMPLE", "summary": "ok"})[:-1]
     duplicate += f', "{SECRET_SENTINEL}": 1, "{SECRET_SENTINEL}": 2}}'
-    result = harness.run("jira", "story", "create", "--input", "-", stdin=duplicate.encode())
+    result = harness.run("jira", "issue", "create", "--input", "-", stdin=duplicate.encode())
     assert result.error["code"] == "input_invalid"
     assert SECRET_SENTINEL not in result.stdout
 
@@ -230,23 +263,67 @@ def test_every_schema_lists_universal_errors() -> None:
         assert {"usage_error", "internal_error"} <= set(codes)
 
 
-def test_config_not_found(harness: Harness) -> None:
+def test_no_config_and_no_base_url(harness: Harness) -> None:
     result = harness.run("jira", "search", "--jql", "project = X")
     assert result.code == 2
+    assert result.error["code"] == "service_not_configured"
+    assert "--base-url" in result.error["fix"] and "yojo.yaml" in result.error["fix"]
+
+
+def test_explicit_missing_config_is_config_not_found(harness: Harness) -> None:
+    result = harness.run("--config", "missing.yaml", "jira", "search", "--jql", "x")
+    assert result.code == 2
     assert result.error["code"] == "config_not_found"
-    assert "atl.example.yaml" in result.error["fix"]
+
+
+def test_create_without_project_is_refused_before_config(harness: Harness) -> None:
+    result = harness.run("jira", "issue", "create", "--summary", "x")
+    assert result.code == 2
+    assert result.error["code"] == "usage_error"
+    assert harness.server.requests == []
+
+
+def test_flag_and_input_disagreeing_is_refused(harness: Harness) -> None:
+    harness.write_config()
+    harness.store()
+    doc = json.dumps({"project": "EXAMPLE", "summary": "from input"}).encode()
+    result = harness.run(
+        "jira", "issue", "create", "--summary", "from flag", "--input", "-", stdin=doc
+    )
+    assert result.error["code"] == "input_invalid"
+    assert result.error["details"]["conflicts"] == ["summary"]
+    assert harness.server.requests == []
+
+
+def test_set_repeated_with_different_values_is_refused(harness: Harness) -> None:
+    harness.write_config()
+    harness.store()
+    result = harness.run(
+        "jira", "issue", "update", "EXAMPLE-1", "--set", "Priority=High", "--set", "priority=Low"
+    )
+    assert result.error["code"] == "input_invalid"
+    assert result.error["details"]["conflicts"] == ["priority"]
+    assert harness.server.requests == []
+
+
+def test_set_splits_at_the_first_equals_sign() -> None:
+    args = cli.build_parser().parse_args(
+        ["jira", "issue", "update", "EXAMPLE-1", "--set", "Environment=a=b", "--set=X= y "]
+    )
+    names = [(a.name, a.value) for a in cli._assignments(args, {})]
+    assert names == [("Environment", "a=b"), ("X", " y ")]
 
 
 def test_input_rejects_duplicate_keys_and_schema_errors(harness: Harness) -> None:
     harness.write_config()
     harness.store()
     dup = b'{"project": "EXAMPLE", "project": "OTHER", "summary": "x"}'
-    result = harness.run("jira", "story", "create", "--input", "-", stdin=dup)
+    result = harness.run("jira", "issue", "create", "--input", "-", stdin=dup)
     assert result.error["code"] == "input_invalid"
     assert "duplicate" in result.error["message"]
 
     bad = json.dumps({"project": "EXAMPLE", "summary": "x", "unexpected": 1}).encode()
-    result = harness.run("jira", "story", "create", "--input", "-", stdin=bad)
+    result = harness.run("jira", "issue", "create", "--input", "-", stdin=bad)
     assert result.error["code"] == "input_invalid"
     assert result.error["details"]["errors"]
     assert harness.server.requests == []
@@ -271,7 +348,7 @@ def test_input_file_relative_to_cwd(harness: Harness) -> None:
 
 def test_installed_entry_point_emits_single_json(tmp_path: Path) -> None:
     proc = subprocess.run(
-        [sys.executable, "-m", "atlass_cli", "jira", "search"],
+        [sys.executable, "-m", "yojo", "jira", "search"],
         capture_output=True,
         text=True,
         cwd=tmp_path,
@@ -288,7 +365,8 @@ def test_installed_entry_point_emits_single_json(tmp_path: Path) -> None:
     "argv",
     [
         ["jira", "requirements", "EXAMPLE-1\n", "--to", "Done"],
-        ["jira", "feature", "find", "--issue", "EXAMPLE-1\n"],
+        ["jira", "issue", "get", "EXAMPLE-1\n"],
+        ["jira", "issue", "link", "EXAMPLE-1", "EXAMPLE-2\n", "--type", "blocks"],
         ["confluence", "page", "read", "123456\n"],
     ],
 )
@@ -304,8 +382,7 @@ def test_key_and_id_arguments_reject_trailing_newline(harness: Harness, argv: li
 @pytest.mark.parametrize(
     ("path", "doc"),
     [
-        ("jira story create", {"project": "EXAMPLE\n", "summary": "x"}),
-        ("jira feature create", {"project": "EXAMPLE\n", "summary": "x"}),
+        ("jira issue create", {"project": "EXAMPLE\n", "summary": "x"}),
         ("confluence page create", {"space_key": "ENG\n", "title": "T", "body_storage": ""}),
         (
             "confluence page create",
@@ -335,6 +412,8 @@ def test_input_schemas_reject_trailing_newline(
         (PROJECT_KEY_PATTERN, "ABC"),
         (PAGE_ID_PATTERN, "123456"),
         (SPACE_KEY_PATTERN, "~user"),
+        (REPO_PATTERN, "PROJ/web"),
+        (BITBUCKET_PROJECT_PATTERN, "~example.user"),
     ],
 )
 def test_key_patterns_have_portable_absolute_end(pattern: str, valid: str) -> None:

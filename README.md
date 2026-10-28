@@ -1,222 +1,241 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/calvinware/atlass-cli/main/docs/assets/banner-dark.svg">
-  <img src="https://raw.githubusercontent.com/calvinware/atlass-cli/main/docs/assets/banner-light.svg" width="800" alt="atl: agent-first JSON CLI for Jira and Confluence Data Center. Team rules in atl.yaml; judgment stays with you.">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/calvinware/yojo/e54a1c55d8d93250aa7a8e974c1586e3b1a8a257/docs/assets/banner-dark.svg">
+  <img src="https://raw.githubusercontent.com/calvinware/yojo/e54a1c55d8d93250aa7a8e974c1586e3b1a8a257/docs/assets/banner-light.svg" width="800" alt="yojo: command line for Jira, Confluence, and Bitbucket Data Center">
 </picture>
 
-[![CI](https://github.com/calvinware/atlass-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/calvinware/atlass-cli/actions/workflows/ci.yml)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://github.com/calvinware/atlass-cli/blob/main/pyproject.toml)
-[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-555)](https://github.com/calvinware/atlass-cli/blob/main/docs/getting-started.md)
-[![Data Center](https://img.shields.io/badge/Jira%209%2B%20%7C%20Confluence%207.9%2B-Data%20Center-0052CC?logo=atlassian&logoColor=white)](#compatibility)
+**One call per task for Jira, Confluence, and Bitbucket Data Center: Jira's own words in, every
+rule checked before the write, one JSON object out.**
+
+```bash
+pipx install git+https://github.com/calvinware/yojo.git@e54a1c55d8d93250aa7a8e974c1586e3b1a8a257   # pre-release; from 0.1.0: pipx install yojo
+```
+
+<img src="https://raw.githubusercontent.com/calvinware/yojo/e54a1c55d8d93250aa7a8e974c1586e3b1a8a257/docs/assets/demos/one-call.gif" width="800" alt="Terminal recording: the command yojo jira issue create PROJ --type Bug --summary 'Fix example sign-in' --base-url https://jira.example.test/jira is typed once; yojo checks the project's create screen, creates the Bug, and prints its key, status, and link.">
+
+<sub>Recorded with <a href="https://github.com/calvinware/yojo/blob/main/docs/demos/one-call.tape">a VHS tape</a> against yojo's test fixture server (<code>jira.example.test</code>), not a live instance.</sub>
+
+[![CI](https://github.com/calvinware/yojo/actions/workflows/ci.yml/badge.svg)](https://github.com/calvinware/yojo/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://github.com/calvinware/yojo/blob/main/pyproject.toml)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-555)](https://github.com/calvinware/yojo/blob/main/docs/getting-started.md)
 
 </div>
 
-# atlass-cli
+# yojo
 
-`atl` gives AI coding agents and developers one JSON interface to Jira and Confluence Data Center.
-The fixed rules live in the CLI and in a team-owned `atl.yaml`: field IDs, required fields, what
-each workflow step needs, and required attachments. Judgment calls stay with the caller. Writing
-acceptance criteria and choosing a parent feature are examples. `atl` supplies checklists and
-ranked candidates, but never makes those decisions.
+`yojo` accepts the field names, statuses, option labels, and people you see in Jira, resolves the
+IDs itself, and checks every rule before it writes. It works with no config file. A `yojo.yaml`
+adds your team's friendly names and rules on top.
 
-## Why atl
+`yojo` is not on PyPI yet. Until the first release, the install line above builds it from this
+repository; afterwards, `pipx install yojo` or `uv tool install yojo` (Python 3.11+). See
+[Install](https://github.com/calvinware/yojo/blob/main/docs/getting-started.md#install) for
+Windows, macOS, and Linux steps without `pipx`.
 
-| Without `atl` | With `atl` |
-|---------------|-----------|
-| Agents scrape web pages or hand-build REST calls with guessed `customfield_*` IDs | Friendly field names from `atl.yaml`, resolved against live metadata |
-| A transition fails on a hidden required field or a missing attachment, after a partial write | `atl jira requirements` lists every check and its `fix` before anything is written |
-| A timeout leaves you guessing whether the issue was created | Success only when the server confirms it; otherwise `outcome_unknown` with how to inspect |
-| Tokens pasted into scripts, env files, or chat | A human logs in once; the secret lives only in the OS keyring |
-| Error text to parse | One JSON object, a fixed exit code, and a concrete `fix` |
+## Five minutes: log in, set up, read
 
-## Story lifecycle
+1. **Log in** (a person, once per instance). The token goes from a hidden prompt straight to the
+   OS keyring:
+
+   ```bash
+   yojo login --service jira --base-url https://jira.example.test/jira
+   ```
+
+2. **Set up** (optional). In a terminal, `yojo setup` opens a seven-step app: connect, log in,
+   choose projects and repositories, map fields and rules, review and save `yojo.yaml`, connect
+   your agent, and try a read. Every step has a plain command too; see the
+   [setup guide](https://github.com/calvinware/yojo/blob/main/docs/getting-started.md#set-up-in-a-terminal-yojo-setup).
+
+3. **Read** something. No config is needed:
+
+   ```bash
+   yojo jira issue get PROJ-123 --base-url https://jira.example.test/jira
+   ```
+
+<p align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/calvinware/yojo/e54a1c55d8d93250aa7a8e974c1586e3b1a8a257/docs/assets/setup/step-5-dark.svg">
+  <img src="https://raw.githubusercontent.com/calvinware/yojo/e54a1c55d8d93250aa7a8e974c1586e3b1a8a257/docs/assets/setup/step-5-light.svg" width="760" alt="yojo setup, step 5 of 7: the exact yojo.yaml it will write, shown as a diff against the current file, with the note that nothing is written until you press Save.">
+</picture>
+<br><sub>Step 5 of <code>yojo setup</code>: review the exact file before anything is written.</sub>
+</p>
+
+`yojo commands` and `yojo schema 'jira issue create'` list every command and its exact contract
+offline, with no config or credentials.
+
+## Every write: check, fix, write, confirm
+
+A write is one command line. Fields go in by the names Jira shows, in any case:
+
+```bash
+yojo --json jira issue create PROJ --type Bug --summary "Fix example sign-in" \
+  --set Severity=Major --set "Story Points=3" --base-url https://jira.example.test/jira
+```
 
 ```mermaid
 flowchart TD
-    AC["Write acceptance criteria<br/>(caller)"] --> Feature["Find or create feature<br/>(caller chooses)"]
-    Feature --> Story["Story create<br/>(atl preflight)"]
-    Story --> StartCheck["atl jira requirements --to In Progress"]
-    StartCheck --> Start["Transition to In Progress"]
-    Start --> Attach["Attach test results"]
-    Attach --> DoneCheck["atl jira requirements --to Done"]
-    DoneCheck --> Done["Transition to Done"]
+    Call["One call<br/>yojo --json jira issue create ..."] --> Check{"Every rule, required field,<br/>and permission OK?"}
+    Check -->|"no"| Refused["Refused, exit 4<br/>nothing was sent<br/>every problem with its fix"]
+    Refused -->|"details.retry given:<br/>fill any placeholder, run it once"| Call
+    Refused -->|"retry null or absent"| FixOnly["Follow each fix: edit the input<br/>or config, or use the item<br/>that already exists"]
+    Check -->|"yes"| Write["Write sent once"]
+    Write --> Confirm{"Server confirms<br/>the change?"}
+    Confirm -->|"yes"| Done["Done, exit 0<br/>key, link, what changed"]
+    Confirm -->|"cannot tell"| Unknown["outcome_unknown, exit 6<br/>or partial_transition, exit 7<br/>no retry is offered"]
+    Unknown --> Inspect["Inspect the issue, page,<br/>or pull request first"]
+    Inspect -->|"not applied"| Call
+    Inspect -->|"applied, or unsure"| Stop["Stop: use what is there,<br/>or ask a person"]
 ```
 
-Feature creation runs its own preflight, and a human confirms it first when the project's policy
-requires it. Transition only after `atl jira requirements` reports `ready: true`. The status names
-and the test-results attachment rule are example values from `atl.example.yaml`; your team's
-`atl.yaml` defines its own.
+- **Refused** means nothing was sent. The result lists every problem at once, each with a `fix`.
+  When `yojo` can correct the command itself, `details.retry` is your command with the fixes
+  applied; a `<placeholder>` marks content only you can supply, and `yojo` never invents a value.
+  When `retry` is `null` or absent (a value came from `--input`, the pull request or comment
+  already exists, or the config has drifted), follow each `fix` instead.
+- **Done** only when the server confirms it. The result names the key, the link, and what
+  changed.
+- **Unknown** means the write may have happened. `yojo` never retries a write. `error.fix` names
+  the commands to inspect remote state; run the write again only if it was not applied.
 
-## 60-second quickstart
+## Two faces, one result
 
-1. **Install** from PyPI (Python 3.11+) with [pipx](https://pipx.pypa.io/) or
-   [uv](https://docs.astral.sh/uv/):
+In a terminal, `yojo` shows aligned tables, plain-language status, and a link after each write.
+When stdout is piped, or with `--json`, it prints exactly one compact JSON object:
+`{"ok":true,"data":...}` or `{"ok":false,"error":{"code","message","fix","details"}}`. Exit codes
+are the same in both modes, and `NO_COLOR` turns color off. The
+[command reference](https://github.com/calvinware/yojo/blob/main/docs/reference/commands.md)
+shows each command's exact terminal and JSON output, captured from the test fixtures.
 
-   ```bash
-   pipx install atlass-cli
-   # or
-   uv tool install atlass-cli
-   ```
+Reads stay small: `jira issue get` returns the fields that matter, `--fields "Story Points,description"`
+asks for more, long text is trimmed with a `more` command for the rest, and lists return
+`next_start` to pass as `--start` for the next page.
 
-   With only Python and pip, install into a virtual environment instead (macOS/Linux shown;
-   Windows and from-source installs are in
-   [Getting started](https://github.com/calvinware/atlass-cli/blob/main/docs/getting-started.md)):
+## Use it from your agent
 
-   ```bash
-   python3 -m venv ~/.local/share/atl/venv
-   ~/.local/share/atl/venv/bin/python -m pip install atlass-cli
-   export PATH="$PATH:$HOME/.local/share/atl/venv/bin"   # add to your shell profile to keep it
-   ```
-
-2. **Discover** offline, with no config and no credentials:
-
-   ```bash
-   atl commands
-   atl schema 'jira story create'
-   ```
-
-3. **Configure and log in**. An admin copies
-   [`atl.example.yaml`](https://github.com/calvinware/atlass-cli/blob/main/atl.example.yaml) to
-   `atl.yaml` with your team's values. Then a person (never an agent) runs:
-
-   ```bash
-   atl login --service jira          # hidden prompt; the token goes to the OS keyring
-   atl login --service confluence
-   atl config check --issue EXAMPLE-123
-   ```
-
-4. **Work**:
-
-   ```bash
-   atl jira feature find --text "single sign-on"
-   atl jira requirements EXAMPLE-42 --to "In Progress"
-   atl jira transition EXAMPLE-42 --to "In Progress"
-   ```
-
-Every command prints one object: `{"ok": true, "data": ...}` or
-`{"ok": false, "error": {"code", "message", "fix", "details"}}`.
-
-<details>
-<summary><strong>Exit codes</strong></summary>
-
-| Exit | Meaning |
-|------|---------|
-| 0 | success |
-| 2 | input or config error |
-| 3 | authentication or keyring error |
-| 4 | unmet workflow requirement, approval required, or config drift |
-| 5 | remote validation, not found, or conflict |
-| 6 | transport/TLS/service failure, or unknown write outcome |
-| 7 | confirmed partial write |
-
-Every error code and its fix: [docs/reference/errors.md](https://github.com/calvinware/atlass-cli/blob/main/docs/reference/errors.md).
-
-</details>
-
-<details>
-<summary><strong>A full story, from creation to Done</strong></summary>
+`yojo agent install` writes compact instructions where your tool looks for them. They carry every
+command's signature and a `--json` example in under 12 KiB, so the agent can act in one call with
+no lookup first. Pick your tool:
 
 ```bash
-atl jira feature find --text "single sign-on"
-atl jira story create --input - <<'JSON'
-{"project": "EXAMPLE", "summary": "Add SSO button",
- "acceptance_criteria": "Given ... When ... Then ...",
- "feature_key": "EXAMPLE-10"}
-JSON
-atl jira requirements EXAMPLE-42 --to "In Progress"
-atl jira transition EXAMPLE-42 --to "In Progress"
-atl jira attachment add EXAMPLE-42 --file EXAMPLE-42_TestResults_2026-10-24.xml
-atl jira requirements EXAMPLE-42 --to Done
-atl jira transition EXAMPLE-42 --to Done
-atl jira comment add EXAMPLE-42 --body-file notes.txt
-atl confluence page read 123456
+yojo --json agent install --target agents    # AGENTS.md, read by many tools
+yojo --json agent install --target claude    # .claude/skills/yojo/SKILL.md
+yojo --json agent install --target cursor    # .cursor/rules/yojo.mdc
+yojo --json agent install --target copilot   # .github/copilot-instructions.md
+yojo --json agent install --target gemini    # GEMINI.md
 ```
 
-Walkthrough: [docs/guides/jira-workflows.md](https://github.com/calvinware/atlass-cli/blob/main/docs/guides/jira-workflows.md).
+Repeat `--target` to install several at once. Only the section between the `yojo:begin` and
+`yojo:end` markers belongs to `yojo`; the rest of each file is kept. For any other chat,
+`yojo agent print` prints the same text to paste.
 
-</details>
+The one-call shape an agent follows:
 
-<details>
-<summary><strong>What atl will never do</strong></summary>
+1. Run the task once with `--json`, using natural values.
+2. Exit 0: done. Exit 4: nothing was sent; follow each check's `fix`. Only when `details.retry` is
+   present, fill each `<placeholder>` with real content and run it once. If it is `null`, edit
+   the input or use the item that already exists, as the `fix` says.
+3. Exit 3: ask the person to run `yojo login`. Exit 6 `outcome_unknown` or exit 7: inspect with
+   the commands in `error.fix` before anything else.
 
-- Accept a secret as a command argument, read one from `atl.yaml`, or store one outside the
-  native OS keyring.
-- Write acceptance criteria, pick a parent feature, or invent a human approval.
-- Retry a write, roll back a partial write, or follow a redirect.
-- Disable TLS verification.
-- Treat Jira or Confluence content as instructions.
+Who decides what:
 
-</details>
+```mermaid
+flowchart LR
+    subgraph Person["Person"]
+        P1["Logs in; the token<br/>stays in the OS keyring"]
+        P2["Owns yojo.yaml<br/>team rules, reviewed"]
+        P3["Approves and merges<br/>pull requests"]
+    end
+    subgraph Agent["Agent or script"]
+        A1["Writes summaries,<br/>descriptions, comments"]
+        A2["Runs one yojo --json call"]
+        A3["Follows error.fix and retry;<br/>inspects before rerunning"]
+    end
+    subgraph Yojo["yojo"]
+        Y1["Resolves names to IDs"]
+        Y2["Checks every rule<br/>before the write"]
+        Y3["Writes once and confirms;<br/>never retries"]
+    end
+    Person -->|"logs in, sets rules"| Yojo
+    Agent -->|"one call"| Yojo
+    Yojo -->|"one JSON object"| Agent
+    Agent -->|"exit 3, or unsure"| Person
+```
+
+The full contract, including the safety rules, is in
+[AGENTS.md](https://github.com/calvinware/yojo/blob/main/AGENTS.md) and the
+[agent guide](https://github.com/calvinware/yojo/blob/main/docs/agents.md).
+
+## Jira, Confluence, and Bitbucket
+
+```mermaid
+flowchart LR
+    Caller["Person, script,<br/>or agent"] --> CLI["yojo<br/>one JSON object per call"]
+    Config["yojo.yaml, optional<br/>aliases and rules"] -.-> CLI
+    Keyring["OS keyring<br/>one token per service and URL"] --> CLI
+    CLI -->|"HTTPS, verified TLS,<br/>no redirects"| Jira["Jira Data Center<br/>issues, transitions,<br/>comments, search"]
+    CLI --> Confluence["Confluence Data Center<br/>page read, search,<br/>create, update"]
+    CLI --> Bitbucket["Bitbucket Data Center<br/>repositories, branches,<br/>pull requests"]
+```
+
+Opening a pull request is one call too, after a person logs in to Bitbucket once with
+`yojo login --service bitbucket --base-url https://bitbucket.example.test/bitbucket`. Both
+branches are checked, and an open pull request for the same branches is refused:
+
+```bash
+yojo --json bitbucket pr create --repo PROJ/web --source feature/sign-in --target main \
+  --title "Fix example sign-in" --base-url https://bitbucket.example.test/bitbucket
+```
+
+Agents may list, read, diff, create, and comment on pull requests. Approving and merging are for
+people; there is no command for them.
+
+## Coming from `atl`
+
+`yojo` replaces the `atl` command. It does not read an old `atl.yaml`: when it finds one without
+a `yojo.yaml`, it stops with `config_legacy`, changes nothing, and says what to rename and remove.
+See [Moving from `atl.yaml`](https://github.com/calvinware/yojo/blob/main/docs/configuration.md#moving-from-atlyaml)
+and the [changelog](https://github.com/calvinware/yojo/blob/main/CHANGELOG.md) for every breaking
+change. Run `yojo login` again; old logins are not reused.
 
 ## Documentation
 
 | Audience | Start here |
-|----------|-----------|
-| Developers | [Getting started](https://github.com/calvinware/atlass-cli/blob/main/docs/getting-started.md) (Windows, macOS, Linux), [Jira workflows](https://github.com/calvinware/atlass-cli/blob/main/docs/guides/jira-workflows.md), [Confluence pages](https://github.com/calvinware/atlass-cli/blob/main/docs/guides/confluence.md), [Troubleshooting](https://github.com/calvinware/atlass-cli/blob/main/docs/troubleshooting.md) |
-| AI agents | [AGENTS.md](https://github.com/calvinware/atlass-cli/blob/main/AGENTS.md) (the contract), [Agent guide](https://github.com/calvinware/atlass-cli/blob/main/docs/agents.md) |
-| Team admins | [`atl.yaml` cookbook](https://github.com/calvinware/atlass-cli/blob/main/docs/admin-cookbook.md), [Configuration reference](https://github.com/calvinware/atlass-cli/blob/main/docs/configuration.md) |
-| Contributors | [Contributing](https://github.com/calvinware/atlass-cli/blob/main/docs/contributing.md): architecture, test harness, adding commands and encodings |
-| Everyone | [Command reference](https://github.com/calvinware/atlass-cli/blob/main/docs/reference/commands.md), [Error catalog](https://github.com/calvinware/atlass-cli/blob/main/docs/reference/errors.md), [Command behavior](https://github.com/calvinware/atlass-cli/blob/main/docs/commands.md), [Security](https://github.com/calvinware/atlass-cli/blob/main/docs/security.md), [FAQ](https://github.com/calvinware/atlass-cli/blob/main/docs/faq.md), [Glossary](https://github.com/calvinware/atlass-cli/blob/main/docs/glossary.md) |
-
-The same Markdown builds a [MkDocs Material](https://squidfunk.github.io/mkdocs-material/) site:
-`python -m pip install -e '.[docs]'` then `python -m mkdocs serve`.
+|----------|------------|
+| Developers | [Getting started](https://github.com/calvinware/yojo/blob/main/docs/getting-started.md), [Jira workflows](https://github.com/calvinware/yojo/blob/main/docs/guides/jira-workflows.md), [Confluence pages](https://github.com/calvinware/yojo/blob/main/docs/guides/confluence.md), [Bitbucket pull requests](https://github.com/calvinware/yojo/blob/main/docs/guides/bitbucket.md) |
+| AI agents | [AGENTS.md](https://github.com/calvinware/yojo/blob/main/AGENTS.md), [Agent guide](https://github.com/calvinware/yojo/blob/main/docs/agents.md) |
+| Admins | [Configuration](https://github.com/calvinware/yojo/blob/main/docs/configuration.md), [Cookbook](https://github.com/calvinware/yojo/blob/main/docs/admin-cookbook.md) |
+| Contributors | [Contributing](https://github.com/calvinware/yojo/blob/main/docs/contributing.md), [Security](https://github.com/calvinware/yojo/blob/main/docs/security.md), [0.1.0 release notes (draft)](https://github.com/calvinware/yojo/blob/main/docs/release-notes-0.1.0.md) |
+| Everyone | [Command reference](https://github.com/calvinware/yojo/blob/main/docs/reference/commands.md), [Error catalog](https://github.com/calvinware/yojo/blob/main/docs/reference/errors.md), [FAQ](https://github.com/calvinware/yojo/blob/main/docs/faq.md), [Troubleshooting](https://github.com/calvinware/yojo/blob/main/docs/troubleshooting.md) |
 
 ## Compatibility
 
-`atl` targets **Jira Data Center 9+** and **Confluence Data Center 7.9+**. It uses only Data Center
-REST endpoints:
-
-- PATs: Jira 8.14+ and Confluence 7.9+
-- Targeted, paginated create metadata (`/rest/api/2/issue/createmeta/{project}/issuetypes`):
-  Jira 8.4+, required on Jira 9+
-- `/rest/api/content` for Confluence
-
-Atlassian Cloud is not supported.
-
-`atl` requires **Python 3.11 or later**. CI tests Python 3.11, 3.13, 3.14, and 3.15 on Ubuntu,
-Windows, and macOS. Python 3.12 falls inside that range but is not a CI matrix entry.
-
-> [!IMPORTANT]
-> The fixture-based tests model documented Data Center responses. **They do not prove live
-> compatibility.** Live status is recorded in the checklist below, which is run against a
-> disposable instance, never a production project.
+`yojo` targets Jira Data Center 9+, Confluence Data Center 7.9+, and Bitbucket Data Center (REST
+1.0) on Windows, macOS, and Linux. Atlassian Cloud is not supported for any of the three.
+Its fixture tests do not establish live compatibility with every server version. The
+[security guide](https://github.com/calvinware/yojo/blob/main/docs/security.md) describes TLS,
+keyring, permissions, and uncertain-write handling.
 
 ### Live compatibility checklist
 
-| Check | Jira DC version | Confluence DC version | Status |
-|-------|-----------------|-----------------------|--------|
-| PAT login (Bearer) and basic login | — | — | unverified |
-| Custom CA bundle and reverse-proxy context path (`/jira`, `/confluence`) | — | — | unverified |
-| Redirect refusal (SSO-fronted instance) | — | — | unverified |
-| Story create with targeted createmeta and custom fields (text, Parent Link) | — | n/a | unverified |
-| `config check` pass/drift/unverified on real metadata | — | n/a | unverified |
-| Description required on the story and feature create screens: `config check` drift, create refused without top-level `description` | — | n/a | unverified |
-| Transition with on-screen `auto_set` (single option) | — | n/a | unverified |
-| Transition with `pre_edit: true` (PUT then POST) and a forced partial failure | — | n/a | unverified |
-| Attachment at the size limit and over a lower server limit; filename pattern on Done | — | n/a | unverified |
-| Feature find / feature create under both policies | — | n/a | unverified |
-| JQL / CQL pagination | — | — | unverified |
-| Confluence create, update, stale version, and concurrent-edit 409 | n/a | — | unverified |
+Record the exact server version when each path is checked against a disposable instance.
+The fixture suite does not substitute for that check.
 
-Record the exact product version for each row as it passes. Do not assume later versions pass.
+| Check | Jira version | Confluence version | Status |
+|-------|--------------|--------------------|--------|
+| PAT and basic login | — | — | unverified |
+| Custom CA, context path, and redirect refusal | — | — | unverified |
+| Issue create with live fields and required values | — | n/a | unverified |
+| Issue update, link, and read-back confirmation | — | n/a | unverified |
+| Transition with on-screen and `pre_edit` fields | — | n/a | unverified |
+| Attachment permissions and size limits | — | n/a | unverified |
+| JQL and CQL pagination | — | — | unverified |
+| Confluence create, update, and stale-version conflict | n/a | — | unverified |
 
-## Development
-
-```bash
-python3.11 -m venv .venv
-.venv/bin/python -m pip install -e '.[dev,docs]'
-.venv/bin/python -m pytest -q
-.venv/bin/python -m mypy
-.venv/bin/python -m ruff check .
-.venv/bin/python -m build
-.venv/bin/python -m twine check --strict dist/*
-.venv/bin/python -m pip_audit --skip-editable
-.venv/bin/python scripts/generate_command_reference.py --check
-.venv/bin/python -m mkdocs build --strict
-```
-
-On Windows, use `.venv\Scripts\python.exe`. CI runs lint, type checks, tests, and the build on
-Ubuntu, Windows, and macOS with Python 3.11, 3.13, 3.14, and 3.15, plus a dependency audit and a
-docs job (reference freshness, strict site build, and link check) on Ubuntu with Python 3.11,
-3.14, and 3.15. See [Contributing](https://github.com/calvinware/atlass-cli/blob/main/docs/contributing.md).
+| Bitbucket check | Bitbucket version | Status |
+|-----------------|-------------------|--------|
+| Token login (application identity and signed-in check) | — | unverified |
+| Repository, branch, and pull request list cursors | — | unverified |
+| Pull request diff, including server-side truncation | — | unverified |
+| Pull request create and comment, including duplicate refusal | — | unverified |

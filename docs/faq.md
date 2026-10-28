@@ -1,69 +1,95 @@
 # FAQ
 
 <details>
-<summary><strong>Why JSON only?</strong></summary>
+<summary><strong>Is the output JSON or text?</strong></summary>
 
-`atl` is built for AI coding agents first. One JSON object on stdout, fixed exit codes, and a
-concrete `fix` for every error mean an agent never scrapes text. People can pipe the output
-through `jq` or read it directly.
+Both, from the same result. In a terminal, `yojo` shows a readable view: tables, plain-language
+status, and a link after a write. When stdout is piped, or with `--json`, it prints exactly one
+compact JSON object, so scripts and agents never scrape text. Exit codes are the same either way.
+`NO_COLOR` turns color off.
 
 </details>
 
 <details>
-<summary><strong>Does <code>atl</code> work with Atlassian Cloud?</strong></summary>
+<summary><strong>Do I need a <code>yojo.yaml</code>?</strong></summary>
 
-No. It targets Jira Data Center 9+ and Confluence Data Center 7.9+ and uses only Data Center REST
-endpoints.
+No. Pass `--base-url` with your instance root and `yojo` uses Jira's own metadata for required
+fields, screens, and allowed values. A `yojo.yaml` adds friendly field names, fields your team
+requires on create, and transition rules. See [Configuration](configuration.md).
+
+</details>
+
+<details>
+<summary><strong>I have an old <code>atl.yaml</code>. Will <code>yojo</code> read it?</strong></summary>
+
+No. `yojo` stops with `config_legacy` and changes nothing. Rename the file to `yojo.yaml` and
+review it as described in [Moving from `atl.yaml`](configuration.md#moving-from-atlyaml).
+
+</details>
+
+<details>
+<summary><strong>Does <code>yojo</code> work with Atlassian Cloud?</strong></summary>
+
+No, for none of the three products. `yojo` targets Jira Data Center 9+, Confluence Data Center
+7.9+, and Bitbucket Data Center (REST 1.0, token login), and uses only Data Center REST endpoints.
+Jira Cloud, Confluence Cloud, and Bitbucket Cloud are out of scope.
 
 </details>
 
 <details>
 <summary><strong>Has it been tested against a live Data Center instance?</strong></summary>
 
-Not yet. The automated tests use fixtures that model documented Data Center responses. They do not
-prove live compatibility. The README's live compatibility checklist records each check as
-`unverified` until someone runs it against a disposable instance.
+Not yet. The automated tests, the command reference output, the setup screenshots, and the README
+demo all run against a fixture server that models documented Data Center responses for Jira,
+Confluence, and Bitbucket. They show what `yojo` does with those responses; they do not prove
+live compatibility with any server version. The README's
+[live compatibility checklist](../README.md#live-compatibility-checklist) records each check as
+`unverified` until someone runs it against a disposable instance and records the version.
 
 </details>
 
 <details>
 <summary><strong>Can an agent log in for me?</strong></summary>
 
-No. A human runs `atl login`. Secrets come only from a hidden prompt or stdin and go straight into
+No. A human runs `yojo login`. Secrets come only from a hidden prompt or stdin and go straight into
 the OS keyring. An agent must never see, store, or pass your token.
 
 </details>
 
 <details>
-<summary><strong>Why does story create refuse my story without acceptance criteria?</strong></summary>
+<summary><strong>Why was my write refused when I only made one mistake?</strong></summary>
 
-Acceptance criteria are a judgment call, so the caller writes them. `atl` checks that they are
-present and never generates them.
-
-</details>
-
-<details>
-<summary><strong>Why won't <code>atl</code> pick the parent feature?</strong></summary>
-
-Choosing a feature is a judgment call. `atl jira feature find` ranks candidates with reasons and
-always returns `"selection": "caller"`. You, or a human, choose.
+It was refused for every problem at once, so you can fix them together. Nothing was sent. Follow
+each problem's `fix`. When `details.retry` (`Retry:` in a terminal) is present, it is your command
+with each fix applied; replace any `<placeholder>` with real content and run it once. When it is
+`null` or absent, the `fix` says what to do instead: edit the `--input` document, fix the config,
+or use the pull request or comment that already exists.
 
 </details>
 
 <details>
-<summary><strong>Who is "confirmed_by" in a feature attestation? Is it verified?</strong></summary>
+<summary><strong>Will <code>yojo</code> fill in a summary, description, or required value for me?</strong></summary>
 
-It is whatever the caller supplies. `atl` records it and states `"identity_verified": false`.
-It is an accountability record, not proof of identity, so an agent must never invent it.
+No. Content is yours to write. When a required value is missing, the retry line has a
+`<placeholder>` in its place, and `yojo` never invents one.
+
+</details>
+
+<details>
+<summary><strong>I typed a field or status slightly wrong. Will <code>yojo</code> guess?</strong></summary>
+
+No. It refuses and says "Did you mean ...?". The suggestion goes into the retry line so you can run
+it on purpose. When a name matches more than one field, the candidates are listed with their IDs.
 
 </details>
 
 <details>
 <summary><strong>A write timed out. Can I just run it again?</strong></summary>
 
-Not until you inspect. `outcome_unknown` means the write may already have happened. Check the
-issue or page as described in [Writes and retries](commands.md#writes-and-retries), and retry only
-if the write was not applied.
+Not until you inspect. `outcome_unknown` means the write may already have happened, so there is no
+retry line. Check the issue or page as described in
+[Writes and retries](commands.md#writes-and-retries), and run it again only if the write was not
+applied.
 
 </details>
 
@@ -77,9 +103,9 @@ stays. See [`pre_edit` (non-atomic)](configuration.md#pre_edit-non-atomic).
 </details>
 
 <details>
-<summary><strong>Why does <code>atl</code> refuse my plaintext keyring?</strong></summary>
+<summary><strong>Why does <code>yojo</code> refuse my plaintext keyring?</strong></summary>
 
-Credentials must be encrypted at rest by the operating system. `atl` accepts only macOS Keychain,
+Credentials must be encrypted at rest by the operating system. `yojo` accepts only macOS Keychain,
 Windows Credential Manager, and Linux Secret Service or KWallet, and never falls back to a file.
 
 </details>
@@ -94,7 +120,8 @@ No. Point `ca_bundle` at your internal CA's PEM file instead.
 <details>
 <summary><strong>How do I see everything a command accepts and returns?</strong></summary>
 
-Run `atl schema '<command path>'`, for example `atl schema 'jira story create'`. It works
-offline. The [command reference](reference/commands.md) renders the same schemas with examples.
+Run `yojo commands` for every command's usage line and an example, or
+`yojo schema '<command path>'` for the exact JSON Schemas, for example
+`yojo schema 'jira issue create'`. Both work offline. The [command reference](reference/commands.md) renders the same schemas with examples.
 
 </details>

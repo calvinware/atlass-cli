@@ -1,594 +1,722 @@
 {
   "commands": {
     "commands": {
-      "argv": ["commands"],
+      "argv": [
+        "commands"
+      ],
       "arguments": {},
       "input": null,
-      "note": "The `commands` list is shortened to two entries here; the real output lists every command.",
-      "success": {
-        "ok": true,
-        "data": {
-          "version": "1.0.0",
-          "schema_version": 1,
-          "commands": [
-            {
-              "path": "commands",
-              "summary": "List every command with a one-line summary. Offline.",
-              "schema": "atl schema 'commands'"
-            },
-            {
-              "path": "jira story create",
-              "summary": "Create a story after preflight against create.story.required and live create metadata. Caller supplies acceptance criteria and the chosen feature key.",
-              "schema": "atl schema 'jira story create'"
-            }
-          ],
-          "exit_codes": {
-            "0": "success",
-            "2": "input or configuration error",
-            "3": "authentication or keyring error",
-            "4": "unmet workflow requirement, approval required, or config drift/unverified",
-            "5": "remote validation error, not found, or conflict",
-            "6": "transport, TLS, or service failure, or unknown write outcome",
-            "7": "confirmed partial write"
-          }
-        }
-      },
-      "error_scenario": "an unknown option, `atl commands --bogus`",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "usage_error",
-          "message": "atl: unrecognized arguments",
-          "fix": "Run `atl commands` to see valid arguments.",
-          "details": {"usage": "usage: atl [--config PATH] COMMAND ..."}
-        }
-      }
+      "error_scenario": "an unknown option, `yojo commands --bogus`",
+      "error_argv": [
+        "commands",
+        "--bogus"
+      ]
     },
     "schema": {
-      "argv": ["schema", "jira comment add"],
-      "arguments": {"command": "jira comment add"},
-      "input": null,
-      "note": "The `error` schema is abbreviated here; the real output contains the full error envelope schema shared by every command.",
-      "success": {
-        "ok": true,
-        "data": {
-          "schema_version": 1,
-          "command": "jira comment add",
-          "summary": "Add a plain-text comment read from a file or stdin.",
-          "arguments": {
-            "type": "object",
-            "properties": {
-              "key": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*-[1-9][0-9]*(?![\\s\\S])"},
-              "body_file": {
-                "type": "string",
-                "minLength": 1,
-                "description": "Path to a plain UTF-8 text file (not JSON, max 1 MiB), or '-' for stdin."
-              }
-            },
-            "additionalProperties": false,
-            "required": ["key", "body_file"]
-          },
-          "input": null,
-          "success": {
-            "type": "object",
-            "properties": {
-              "ok": {"const": true},
-              "data": {
-                "type": "object",
-                "properties": {"key": {"type": "string"}, "comment_id": {"type": "string"}},
-                "additionalProperties": false,
-                "required": ["key", "comment_id"]
-              }
-            },
-            "additionalProperties": false,
-            "required": ["ok", "data"]
-          },
-          "error": {"type": "object", "description": "Error envelope schema (abbreviated)."},
-          "error_codes": [
-            "auth_failed", "auth_missing", "config_invalid", "config_not_found", "forbidden",
-            "input_invalid", "internal_error", "interrupted", "keyring_unavailable", "not_found",
-            "outcome_unknown", "rate_limited", "redirect_refused", "remote_limit_exceeded",
-            "remote_validation", "response_invalid", "service_error", "service_not_configured",
-            "tls_error", "transport_error", "usage_error"
-          ],
-          "exit_codes": {
-            "0": "success",
-            "2": "input or configuration error",
-            "3": "authentication or keyring error",
-            "4": "unmet workflow requirement, approval required, or config drift/unverified",
-            "5": "remote validation error, not found, or conflict",
-            "6": "transport, TLS, or service failure, or unknown write outcome",
-            "7": "confirmed partial write"
-          }
-        }
+      "argv": [
+        "schema",
+        "jira comment add"
+      ],
+      "arguments": {
+        "command": "jira comment add"
       },
-      "error_scenario": "no command path, `atl schema`",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "usage_error",
-          "message": "atl schema: the following arguments are required: COMMAND",
-          "fix": "Run `atl schema 'schema'` to see valid arguments.",
-          "details": {"usage": "usage: atl schema [--config PATH] COMMAND [COMMAND ...]"}
-        }
-      }
+      "input": null,
+      "error_scenario": "a command path that does not exist",
+      "error_argv": [
+        "schema",
+        "jira delete"
+      ]
     },
     "login": {
-      "argv": ["login", "--service", "jira"],
-      "arguments": {"service": "jira"},
-      "input": null,
-      "note": "A human runs this. `atl` writes a JSON prompt to stderr and reads the personal access token with no echo. In automation, a human pipes the secret on stdin with `--token-stdin`; a secret is never an argument.",
-      "success": {
-        "ok": true,
-        "data": {
-          "services": [
-            {
-              "service": "jira",
-              "auth": "pat",
-              "base_url": "https://jira.example.test/jira",
-              "user": "jdoe",
-              "status": "stored"
-            }
-          ]
-        }
+      "argv": [
+        "login",
+        "--service",
+        "jira"
+      ],
+      "arguments": {
+        "service": "jira"
       },
+      "input": null,
+      "note": "A human runs this. On a terminal, `yojo` prompts on stderr and reads the personal access token with no echo. In automation, a human pipes the secret on stdin with `--token-stdin`; a secret is never an argument, file, or environment variable. The credential is stored per base URL, so `--base-url` alone can reuse it later.",
       "error_scenario": "the only keyring backend is a plaintext file store",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "keyring_unavailable",
-          "message": "No secure OS keyring backend is available.",
-          "fix": "Use a native OS keyring: macOS Keychain, Windows Credential Manager, or a running Linux Secret Service (GNOME Keyring/KWallet) with an unlocked session. Do not configure a plaintext keyring backend.",
-          "details": {"backends": ["keyrings.alt.file.PlaintextKeyring"]}
-        }
-      }
+      "error_argv": [
+        "login",
+        "--service",
+        "jira"
+      ]
     },
     "config check": {
-      "argv": ["config", "check", "--issue", "EXAMPLE-41"],
-      "arguments": {"issue": "EXAMPLE-41"},
+      "argv": [
+        "config",
+        "check"
+      ],
+      "arguments": {},
       "input": null,
-      "success": {
-        "ok": true,
-        "data": {
-          "status": "pass",
-          "summary": {"pass": 9},
-          "checks": [
-            {"id": "EXAMPLE:issue_type:Story", "status": "pass", "message": "'Story' is creatable.", "fix": null},
-            {"id": "EXAMPLE:issue_type:Feature", "status": "pass", "message": "'Feature' is creatable.", "fix": null},
-            {"id": "EXAMPLE:Story:field:acceptance_criteria", "status": "pass", "message": "'Acceptance Criteria' (customfield_10100) matches encoding 'text'.", "fix": null},
-            {"id": "EXAMPLE:Story:field:feature_link", "status": "pass", "message": "'Parent Link' (customfield_10200) matches encoding 'issue_key_string'.", "fix": null},
-            {"id": "EXAMPLE:transition:in_progress:To Do:source_status", "status": "pass", "message": "EXAMPLE-41 is in 'To Do'.", "fix": null, "details": {"sample_issue": "EXAMPLE-41"}},
-            {"id": "EXAMPLE:transition:in_progress:To Do:transition_available", "status": "pass", "message": "Jira offers transition 'Start Progress' (id 21) to 'In Progress'.", "fix": null, "details": {"sample_issue": "EXAMPLE-41"}},
-            {"id": "EXAMPLE:transition:in_progress:To Do:auto_set:work_started", "status": "pass", "message": "'Work Started' will be set to 'Yes' in the transition request.", "fix": null, "details": {"placement": "transition", "field_id": "customfield_10300", "sample_issue": "EXAMPLE-41"}},
-            {"id": "EXAMPLE:transition:done:In Progress:source_status", "status": "pass", "message": "EXAMPLE-42 is in 'In Progress'.", "fix": null, "details": {"sample_issue": "EXAMPLE-42"}},
-            {"id": "EXAMPLE:transition:done:In Progress:transition_available", "status": "pass", "message": "Jira offers transition 'Done' (id 31) to 'Done'.", "fix": null, "details": {"sample_issue": "EXAMPLE-42"}}
-          ]
-        }
-      },
-      "error_scenario": "no accessible issue is in `In Progress`, so the `done` transition cannot be probed (`details.checks` shortened to the unverified check)",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "config_unverified",
-          "message": "1 check(s) could not be verified against live Jira.",
-          "fix": "Apply each unverified check's fix (for transitions, pass --issue KEY for an issue in the listed status), then re-run `atl config check`.",
-          "details": {
-            "status": "unverified",
-            "summary": {"pass": 7, "unverified": 1},
-            "checks": [
-              {
-                "id": "EXAMPLE:transition:done:In Progress",
-                "status": "unverified",
-                "message": "No accessible EXAMPLE issue is in 'In Progress', so transition 'done' could not be probed.",
-                "fix": "Re-run with `atl config check --issue KEY` using a EXAMPLE issue currently in 'In Progress'."
-              }
-            ]
-          }
-        }
-      }
+      "error_scenario": "an alias in yojo.yaml names a field Jira does not have (a typo)",
+      "error_argv": [
+        "config",
+        "check"
+      ]
     },
-    "jira story create": {
-      "argv": ["jira", "story", "create", "--input", "-"],
-      "arguments": {"input": "-"},
-      "input": {
-        "project": "EXAMPLE",
-        "summary": "Add a single sign-on button to the login page",
-        "acceptance_criteria": "Given a signed-out user on the login page\nWhen they choose \"Sign in with SSO\"\nThen they are signed in through the company identity provider",
-        "feature_key": "EXAMPLE-10"
+    "init": {
+      "argv": [
+        "init",
+        "--jira-url",
+        "https://jira.example.test/jira",
+        "--project",
+        "PROJ"
+      ],
+      "arguments": {
+        "jira_url": "https://jira.example.test/jira",
+        "project": [
+          "PROJ"
+        ]
       },
+      "input": null,
+      "note": "A preview: nothing is written. Add `--save` to create yojo.yaml, which never overwrites a file. To replace an existing file, add `--save --replace --expected-sha256 HEX` with the preview's `existing_sha256`, and keep other editors off the file while it is replaced. Team aliases and rules come only from `--input`.",
+      "error_scenario": "no Jira login is stored for that URL yet",
+      "error_argv": [
+        "init",
+        "--jira-url",
+        "https://jira.example.test/jira",
+        "--project",
+        "PROJ"
+      ]
+    },
+    "setup": {
+      "argv": [
+        "setup"
+      ],
+      "arguments": {},
+      "input": null,
+      "note": "Run by a person in a terminal. Completion means the reviewed config was saved and a read-only Try succeeded on that saved file. Piped or --json setup returns the error below. Cancelling may leave a previously saved config in place.",
       "success": {
         "ok": true,
         "data": {
-          "key": "EXAMPLE-42",
-          "id": "10642",
-          "url": "https://jira.example.test/jira/browse/EXAMPLE-42",
-          "project": "EXAMPLE",
-          "issue_type": "Story",
-          "checks": [
-            {"id": "acceptance_criteria", "status": "pass", "message": "Acceptance criteria supplied.", "fix": null},
-            {"id": "feature_key", "status": "pass", "message": "EXAMPLE-10 is a Feature: Single sign-on for internal tools", "fix": null},
-            {"id": "issue_type", "status": "pass", "message": "'Story' is creatable in EXAMPLE.", "fix": null},
-            {"id": "field:acceptance_criteria", "status": "pass", "message": "'Acceptance Criteria' (customfield_10100) is valid.", "fix": null},
-            {"id": "field:feature_link", "status": "pass", "message": "'Parent Link' (customfield_10200) is valid.", "fix": null}
+          "status": "completed",
+          "config": {
+            "path": "/work/repo/yojo.yaml",
+            "action": "created"
+          },
+          "logins_stored": [
+            "jira"
+          ],
+          "agent_files": [
+            {
+              "target": "agents",
+              "path": "AGENTS.md",
+              "action": "created"
+            }
+          ],
+          "notes": [],
+          "next": [
+            "yojo --json config check",
+            "yojo --json jira search --jql 'project = PROJ ORDER BY updated DESC' --limit 5"
           ]
         }
       },
-      "error_scenario": "the same input without `acceptance_criteria`; nothing is sent to Jira",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "requirements_unmet",
-          "message": "Story create preflight failed (1 check(s)); nothing was sent to Jira.",
-          "fix": "Resolve each failed check using its fix, then retry.",
-          "details": {
-            "checks": [
-              {"id": "acceptance_criteria", "status": "fail", "message": "acceptance_criteria is missing or blank.", "fix": "Write the acceptance criteria for this story and pass them as acceptance_criteria. atl never generates acceptance criteria."},
-              {"id": "feature_key", "status": "pass", "message": "EXAMPLE-10 is a Feature: Single sign-on for internal tools", "fix": null},
-              {"id": "issue_type", "status": "pass", "message": "'Story' is creatable in EXAMPLE.", "fix": null},
-              {"id": "field:feature_link", "status": "pass", "message": "'Parent Link' (customfield_10200) is valid.", "fix": null}
-            ]
-          }
-        }
-      }
+      "error_scenario": "stdout is piped, --json is given, stdin is not a terminal, or TERM=dumb, so no terminal app can open",
+      "error_argv": [
+        "setup"
+      ]
+    },
+    "agent print": {
+      "argv": [
+        "agent",
+        "print"
+      ],
+      "arguments": {},
+      "input": null,
+      "error_scenario": "an option the command does not take",
+      "error_argv": [
+        "agent",
+        "print",
+        "--target",
+        "agents"
+      ]
+    },
+    "agent install": {
+      "argv": [
+        "agent",
+        "install",
+        "--target",
+        "agents",
+        "--target",
+        "claude"
+      ],
+      "arguments": {
+        "target": [
+          "agents",
+          "claude"
+        ]
+      },
+      "input": null,
+      "note": "Running it again changes nothing: an unchanged file is reported as `unchanged` and not rewritten. Text outside the marked yojo section is kept.",
+      "error_scenario": "AGENTS.md has a yojo:end marker line without a yojo:begin line",
+      "error_argv": [
+        "agent",
+        "install",
+        "--target",
+        "agents",
+        "--target",
+        "claude"
+      ]
+    },
+    "jira issue create": {
+      "argv": [
+        "jira",
+        "issue",
+        "create",
+        "EXAMPLE",
+        "--type",
+        "Bug",
+        "--summary",
+        "Login button misaligned",
+        "--set",
+        "Severity=Major",
+        "--set",
+        "Environment=Firefox 131 on Linux",
+        "--set",
+        "Priority=High"
+      ],
+      "arguments": {
+        "project": "EXAMPLE",
+        "type": "Bug",
+        "summary": "Login button misaligned",
+        "set": [
+          "Severity=Major",
+          "Environment=Firefox 131 on Linux",
+          "Priority=High"
+        ]
+      },
+      "input": null,
+      "note": "Field names are the ones Jira shows (any case), yojo.yaml aliases, or raw IDs. The same call works with `--input -` and a JSON object instead of flags.",
+      "error_scenario": "two fields Jira requires for a Bug are missing; both are reported in one response and nothing is sent",
+      "error_argv": [
+        "jira",
+        "issue",
+        "create",
+        "EXAMPLE",
+        "--type",
+        "Bug",
+        "--summary",
+        "Login button misaligned"
+      ]
+    },
+    "jira issue get": {
+      "argv": [
+        "jira",
+        "issue",
+        "get",
+        "EXAMPLE-42",
+        "--fields",
+        "Story Points,priority"
+      ],
+      "arguments": {
+        "key": "EXAMPLE-42",
+        "fields": "Story Points,priority"
+      },
+      "input": null,
+      "error_scenario": "a misspelled field name; the closest match is suggested and nothing is read",
+      "error_argv": [
+        "jira",
+        "issue",
+        "get",
+        "EXAMPLE-42",
+        "--fields",
+        "Story Pionts,priority"
+      ]
+    },
+    "jira issue update": {
+      "argv": [
+        "jira",
+        "issue",
+        "update",
+        "EXAMPLE-42",
+        "--set",
+        "Priority=Highest",
+        "--set",
+        "Labels=login, ui"
+      ],
+      "arguments": {
+        "key": "EXAMPLE-42",
+        "set": [
+          "Priority=Highest",
+          "Labels=login, ui"
+        ]
+      },
+      "input": null,
+      "note": "Values are plain text: option, priority, and version names; usernames, display names, or emails; numbers; and comma-separated lists for multi-value fields. Every change is read back after the write.",
+      "error_scenario": "a value Jira does not allow for Priority; the allowed values are listed and nothing is sent",
+      "error_argv": [
+        "jira",
+        "issue",
+        "update",
+        "EXAMPLE-42",
+        "--set",
+        "Priority=Urgent"
+      ]
+    },
+    "jira issue link": {
+      "argv": [
+        "jira",
+        "issue",
+        "link",
+        "EXAMPLE-42",
+        "EXAMPLE-43",
+        "--type",
+        "blocks"
+      ],
+      "arguments": {
+        "key": "EXAMPLE-42",
+        "other": "EXAMPLE-43",
+        "type": "blocks"
+      },
+      "input": null,
+      "error_scenario": "a link type that does not exist; the closest one is suggested and `details.retry` carries it",
+      "error_argv": [
+        "jira",
+        "issue",
+        "link",
+        "EXAMPLE-42",
+        "EXAMPLE-43",
+        "--type",
+        "blocker"
+      ]
     },
     "jira requirements": {
-      "argv": ["jira", "requirements", "EXAMPLE-42", "--to", "In Progress"],
-      "arguments": {"key": "EXAMPLE-42", "to": "In Progress"},
-      "input": null,
-      "success": {
-        "ok": true,
-        "data": {
-          "key": "EXAMPLE-42",
-          "to": "In Progress",
-          "from_status": "To Do",
-          "transition_name": "in_progress",
-          "ready": true,
-          "transition": {"id": "21", "name": "Start Progress"},
-          "checks": [
-            {"id": "source_status", "status": "pass", "message": "EXAMPLE-42 is in 'To Do'.", "fix": null},
-            {"id": "transition_available", "status": "pass", "message": "Jira offers transition 'Start Progress' (id 21) to 'In Progress'.", "fix": null},
-            {"id": "auto_set:work_started", "status": "pass", "message": "'Work Started' will be set to 'Yes' in the transition request.", "fix": null, "details": {"placement": "transition", "field_id": "customfield_10300"}}
-          ],
-          "plan": {
-            "atomic": true,
-            "operations": [
-              {
-                "op": "transition",
-                "method": "POST",
-                "status": "planned",
-                "fields": [{"friendly": "work_started", "id": "customfield_10300", "name": "Work Started"}],
-                "transition_id": "21"
-              }
-            ]
-          },
-          "notice": "This checklist covers configured rules and requirements Jira exposes over REST. Workflow validators that Jira does not expose can still reject the transition; such a rejection is reported as remote_validation."
-        }
+      "argv": [
+        "jira",
+        "requirements",
+        "EXAMPLE-42",
+        "--to",
+        "In Progress"
+      ],
+      "arguments": {
+        "key": "EXAMPLE-42",
+        "to": "In Progress"
       },
-      "error_scenario": "a destination that atl.yaml does not configure, `--to Review`",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "transition_not_configured",
-          "message": "No transition to 'Review' is configured for project EXAMPLE.",
-          "fix": "Use one of the configured destinations: Done, In Progress; or add the transition to atl.yaml.",
-          "details": {"project": "EXAMPLE", "to": "Review", "configured": ["Done", "In Progress"]}
-        }
-      }
+      "input": null,
+      "note": "Read-only. `--to` takes the destination status or the transition name, in any case.",
+      "error_scenario": "an issue key that does not exist or that you cannot see",
+      "error_argv": [
+        "jira",
+        "requirements",
+        "EXAMPLE-404",
+        "--to",
+        "In Progress"
+      ]
     },
     "jira transition": {
-      "argv": ["jira", "transition", "EXAMPLE-42", "--to", "Done"],
-      "arguments": {"key": "EXAMPLE-42", "to": "Done"},
+      "argv": [
+        "jira",
+        "transition",
+        "EXAMPLE-42",
+        "--to",
+        "Done"
+      ],
+      "arguments": {
+        "key": "EXAMPLE-42",
+        "to": "Done"
+      },
       "input": null,
-      "success": {
-        "ok": true,
-        "data": {
-          "key": "EXAMPLE-42",
-          "from_status": "In Progress",
-          "to": "Done",
-          "transition_id": "31",
-          "atomic": true,
-          "operations": [
-            {"op": "transition", "method": "POST", "status": "succeeded", "fields": [], "transition_id": "31"}
-          ]
-        }
-      },
-      "error_scenario": "no attachment matches the `{key}_TestResults_*` rule for Done; nothing is written",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "requirements_unmet",
-          "message": "EXAMPLE-42 does not meet the requirements to move to 'Done'; nothing was written.",
-          "fix": "Resolve each failed check using its fix, then retry.",
-          "details": {
-            "checklist": {
-              "key": "EXAMPLE-42",
-              "to": "Done",
-              "from_status": "In Progress",
-              "transition_name": "done",
-              "ready": false,
-              "transition": {"id": "31", "name": "Done"},
-              "checks": [
-                {"id": "source_status", "status": "pass", "message": "EXAMPLE-42 is in 'In Progress'.", "fix": null},
-                {"id": "transition_available", "status": "pass", "message": "Jira offers transition 'Done' (id 31) to 'Done'.", "fix": null},
-                {
-                  "id": "attachment:{key}_TestResults_*",
-                  "status": "fail",
-                  "message": "No attachment on EXAMPLE-42 matches 'EXAMPLE-42_TestResults_*'.",
-                  "fix": "Attach a file whose name matches 'EXAMPLE-42_TestResults_*' with `atl jira attachment add EXAMPLE-42 --file PATH`, then retry.",
-                  "details": {"pattern": "EXAMPLE-42_TestResults_*", "attachments": ["screenshot.png"]}
-                }
-              ],
-              "plan": {
-                "atomic": true,
-                "operations": [
-                  {"op": "transition", "method": "POST", "status": "planned", "fields": [], "transition_id": "31"}
-                ]
-              },
-              "notice": "This checklist covers configured rules and requirements Jira exposes over REST. Workflow validators that Jira does not expose can still reject the transition; such a rejection is reported as remote_validation."
-            }
-          }
-        }
-      }
-    },
-    "jira feature find": {
-      "argv": ["jira", "feature", "find", "--text", "single sign-on login"],
-      "arguments": {"text": "single sign-on login"},
-      "input": null,
-      "success": {
-        "ok": true,
-        "data": {
-          "mode": "text",
-          "query": "single sign-on login",
-          "candidates": [
-            {"key": "EXAMPLE-10", "project": "EXAMPLE", "summary": "Single sign-on for internal tools", "status": "In Progress", "score": 20, "reasons": ["summary shares 2 word(s): single, sign"]},
-            {"key": "EXAMPLE-7", "project": "EXAMPLE", "summary": "Login audit trail", "status": "To Do", "score": 10, "reasons": ["summary shares 1 word(s): login"]}
-          ],
-          "candidate_pool_limit": 100,
-          "truncated": false,
-          "selection": "caller"
-        }
-      },
-      "error_scenario": "text with no searchable words, `--text 'on the to-do'`",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "usage_error",
-          "message": "The query has no searchable words (3+ letters, not stop words).",
-          "fix": "Pass more descriptive --text, or an --issue whose summary has meaningful words.",
-          "details": {"mode": "text"}
-        }
-      }
-    },
-    "jira feature create": {
-      "argv": ["jira", "feature", "create", "--input", "-"],
-      "arguments": {"input": "-"},
-      "input": {
-        "project": "EXAMPLE",
-        "summary": "Audit log export",
-        "description": "Let administrators export audit logs as CSV.",
-        "human_confirmation": {
-          "confirmed_by": "Jordan Lee",
-          "statement": "Approved creating the audit log export feature in planning on 2026-10-24."
-        }
-      },
-      "success": {
-        "ok": true,
-        "data": {
-          "key": "EXAMPLE-55",
-          "id": "10655",
-          "url": "https://jira.example.test/jira/browse/EXAMPLE-55",
-          "project": "EXAMPLE",
-          "issue_type": "Feature",
-          "policy": "human_confirmed",
-          "attestation": {
-            "confirmed_by": "Jordan Lee",
-            "statement": "Approved creating the audit log export feature in planning on 2026-10-24.",
-            "identity_verified": false,
-            "note": "The human_confirmation attestation is caller-supplied text recorded for accountability. atl does not verify the identity of the person named."
-          },
-          "checks": [
-            {"id": "issue_type", "status": "pass", "message": "'Feature' is creatable in EXAMPLE.", "fix": null}
-          ]
-        }
-      },
-      "error_scenario": "the same input without `human_confirmation` under the `human_confirmed` policy; nothing is sent",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "approval_required",
-          "message": "Project EXAMPLE requires human confirmation before creating a feature; nothing was sent to Jira.",
-          "fix": "Ask a human to approve creating this feature, then add human_confirmation {\"confirmed_by\": \"<name>\", \"statement\": \"<what they approved>\"} to the input. The human_confirmation attestation is caller-supplied text recorded for accountability. atl does not verify the identity of the person named.",
-          "details": {"policy": "human_confirmed", "identity_verified": false}
-        }
-      }
+      "error_scenario": "no attachment matches the team's `{key}_Evidence_*` rule for Done; nothing is sent",
+      "error_argv": [
+        "jira",
+        "transition",
+        "EXAMPLE-42",
+        "--to",
+        "Done"
+      ]
     },
     "jira attachment add": {
-      "argv": ["jira", "attachment", "add", "EXAMPLE-42", "--file", "EXAMPLE-42_TestResults_2026-10-24.xml"],
-      "arguments": {"key": "EXAMPLE-42", "file": "EXAMPLE-42_TestResults_2026-10-24.xml"},
-      "input": null,
-      "success": {
-        "ok": true,
-        "data": {
-          "key": "EXAMPLE-42",
-          "attachments": [
-            {"id": "10500", "filename": "EXAMPLE-42_TestResults_2026-10-24.xml", "size": 18324}
-          ]
-        }
+      "argv": [
+        "jira",
+        "attachment",
+        "add",
+        "EXAMPLE-42",
+        "--file",
+        "EXAMPLE-42_Evidence_2026-10-24.xml"
+      ],
+      "arguments": {
+        "key": "EXAMPLE-42",
+        "file": "EXAMPLE-42_Evidence_2026-10-24.xml"
       },
+      "input": null,
       "error_scenario": "a file larger than `jira.max_attachment_bytes`; nothing is sent",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "attachment_too_large",
-          "message": "EXAMPLE-42_TestResults_2026-10-24.zip is 73400320 bytes; jira.max_attachment_bytes is 52428800.",
-          "fix": "Attach a smaller file (compress or split it), or raise jira.max_attachment_bytes in atl.yaml if the team agrees.",
-          "details": {"size": 73400320, "limit": 52428800}
-        }
-      }
+      "error_argv": [
+        "jira",
+        "attachment",
+        "add",
+        "EXAMPLE-42",
+        "--file",
+        "EXAMPLE-42_Evidence_2026-10-24.xml"
+      ]
     },
     "jira comment add": {
-      "argv": ["jira", "comment", "add", "EXAMPLE-42", "--body-file", "-"],
-      "arguments": {"key": "EXAMPLE-42", "body_file": "-"},
-      "input": null,
-      "stdin": "Test results attached: EXAMPLE-42_TestResults_2026-10-24.xml (128 passed, 0 failed).\n",
-      "note": "The comment body is plain UTF-8 text (max 1 MiB), not JSON.",
-      "success": {
-        "ok": true,
-        "data": {"key": "EXAMPLE-42", "comment_id": "10234"}
+      "argv": [
+        "jira",
+        "comment",
+        "add",
+        "EXAMPLE-42",
+        "--body",
+        "Fixed in build 2026.10.24; ready for review."
+      ],
+      "arguments": {
+        "key": "EXAMPLE-42",
+        "body": "Fixed in build 2026.10.24; ready for review."
       },
-      "error_scenario": "Jira answers the POST with 502, so the comment may or may not exist",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "outcome_unknown",
-          "message": "The jira write was dispatched but its outcome is unknown.",
-          "fix": "Inspect the remote item to see whether the change was applied before retrying; see 'Writes and retries' in docs/commands.md for how to inspect each write (comments and attachments need the issue view). atl does not retry writes.",
-          "details": {"service": "jira", "reason": "server error 502", "fields": {}, "messages": []}
-        }
-      }
+      "input": null,
+      "note": "Use `--body` for short text, or `--body-file FILE` (`-` for stdin) for longer plain text.",
+      "error_scenario": "your account lacks the Add Comments permission on the issue; nothing is sent",
+      "error_argv": [
+        "jira",
+        "comment",
+        "add",
+        "EXAMPLE-42",
+        "--body",
+        "Fixed in build 2026.10.24; ready for review."
+      ]
     },
     "jira search": {
-      "argv": ["jira", "search", "--jql", "project = EXAMPLE AND status = \"In Progress\"", "--limit", "20"],
-      "arguments": {"jql": "project = EXAMPLE AND status = \"In Progress\"", "limit": 20},
-      "input": null,
-      "success": {
-        "ok": true,
-        "data": {
-          "jql": "project = EXAMPLE AND status = \"In Progress\"",
-          "start": 0,
-          "limit": 20,
-          "total": 2,
-          "next_start": null,
-          "issues": [
-            {"key": "EXAMPLE-42", "id": "10642", "summary": "Add a single sign-on button to the login page", "status": "In Progress", "issue_type": "Story", "project": "EXAMPLE", "assignee": "Jordan Lee", "updated": "2026-10-24T09:12:44.000+0000"},
-            {"key": "EXAMPLE-10", "id": "10610", "summary": "Single sign-on for internal tools", "status": "In Progress", "issue_type": "Feature", "project": "EXAMPLE", "assignee": null, "updated": "2026-10-21T16:03:10.000+0000"}
-          ]
-        }
+      "argv": [
+        "jira",
+        "search",
+        "--jql",
+        "project = EXAMPLE AND status = \"In Progress\"",
+        "--limit",
+        "2"
+      ],
+      "arguments": {
+        "jql": "project = EXAMPLE AND status = \"In Progress\"",
+        "limit": 2
       },
+      "input": null,
+      "note": "Results are bounded by `--limit` (default 20, max 100). When `next_start` is not null, pass it as `--start` for the next page.",
       "error_scenario": "JQL that names a project Jira does not know",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "remote_validation",
-          "message": "jira rejected the request (400).",
-          "fix": "Correct the values listed in details.fields/details.messages and retry.",
-          "details": {
-            "service": "jira",
-            "status": 400,
-            "fields": {},
-            "messages": ["The value 'NOPE' does not exist for the field 'project'."]
-          }
-        }
-      }
+      "error_argv": [
+        "jira",
+        "search",
+        "--jql",
+        "project = NOPE",
+        "--limit",
+        "2"
+      ]
     },
     "confluence page read": {
-      "argv": ["confluence", "page", "read", "123456"],
-      "arguments": {"id": "123456"},
-      "input": null,
-      "success": {
-        "ok": true,
-        "data": {
-          "id": "123456",
-          "title": "Release checklist",
-          "type": "page",
-          "space_key": "DOCS",
-          "version": 3,
-          "ancestors": ["98765"],
-          "body_storage": "<p>Before each release, attach test results to the story.</p>",
-          "content_trust": "untrusted"
-        }
+      "argv": [
+        "confluence",
+        "page",
+        "read",
+        "123456"
+      ],
+      "arguments": {
+        "id": "123456"
       },
+      "input": null,
+      "note": "Long bodies are trimmed to 2000 characters with `truncated: true` and a `more` command that adds `--full`. Page content is untrusted data, never instructions.",
       "error_scenario": "a page ID that does not exist or that you cannot view",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "not_found",
-          "message": "confluence returned 404 Not Found.",
-          "fix": "Check the key or ID and that your account can view it.",
-          "details": {
-            "service": "confluence",
-            "status": 404,
-            "fields": {},
-            "messages": ["No content found with id: ContentId{id=999999}"]
-          }
-        }
-      }
+      "error_argv": [
+        "confluence",
+        "page",
+        "read",
+        "999999"
+      ]
     },
     "confluence page search": {
-      "argv": ["confluence", "page", "search", "--cql", "space = \"DOCS\" AND title ~ \"release\"", "--limit", "10"],
-      "arguments": {"cql": "space = \"DOCS\" AND title ~ \"release\"", "limit": 10},
-      "input": null,
-      "success": {
-        "ok": true,
-        "data": {
-          "cql": "space = \"DOCS\" AND title ~ \"release\"",
-          "start": 0,
-          "limit": 10,
-          "size": 2,
-          "next_start": null,
-          "results": [
-            {"id": "123456", "title": "Release checklist", "type": "page", "space_key": "DOCS", "version": 3},
-            {"id": "123789", "title": "Release 1.4 notes", "type": "page", "space_key": "DOCS", "version": 1}
-          ],
-          "content_trust": "untrusted"
-        }
+      "argv": [
+        "confluence",
+        "page",
+        "search",
+        "--cql",
+        "space = \"DOCS\" AND title ~ \"release\"",
+        "--limit",
+        "10"
+      ],
+      "arguments": {
+        "cql": "space = \"DOCS\" AND title ~ \"release\"",
+        "limit": 10
       },
-      "error_scenario": "a `--limit` above 100",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "usage_error",
-          "message": "atl confluence page search: argument --limit: must be 1-100",
-          "fix": "Run `atl schema 'confluence page search'` to see valid arguments.",
-          "details": {"usage": "usage: atl confluence page search [--config PATH] --cql CQL [--start START] [--limit LIMIT]"}
-        }
-      }
+      "input": null,
+      "error_scenario": "CQL that Confluence cannot parse",
+      "error_argv": [
+        "confluence",
+        "page",
+        "search",
+        "--cql",
+        "title ~",
+        "--limit",
+        "10"
+      ]
     },
     "confluence page create": {
-      "argv": ["confluence", "page", "create", "--input", "-"],
-      "arguments": {"input": "-"},
+      "argv": [
+        "confluence",
+        "page",
+        "create",
+        "--input",
+        "-"
+      ],
+      "arguments": {
+        "input": "-"
+      },
       "input": {
         "space_key": "DOCS",
         "title": "Release 1.4 notes",
         "body_storage": "<p>Release 1.4 adds single sign-on.</p>",
-        "parent_id": "98765"
-      },
-      "success": {
-        "ok": true,
-        "data": {"id": "123789", "title": "Release 1.4 notes", "space_key": "DOCS", "version": 1}
+        "parent_id": "123456"
       },
       "error_scenario": "input without `body_storage`; rejected before any request",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "input_invalid",
-          "message": "The input does not match the confluence page create input schema.",
-          "fix": "Correct the listed problems; see `atl schema 'confluence page create'` (input).",
-          "details": {"errors": [{"path": "/", "validator": "required", "missing": ["body_storage"]}]}
-        }
+      "error_argv": [
+        "confluence",
+        "page",
+        "create",
+        "--input",
+        "-"
+      ],
+      "error_input": {
+        "space_key": "DOCS",
+        "title": "Release 1.4 notes",
+        "parent_id": "123456"
       }
     },
     "confluence page update": {
-      "argv": ["confluence", "page", "update", "123456", "--input", "-"],
-      "arguments": {"id": "123456", "input": "-"},
+      "argv": [
+        "confluence",
+        "page",
+        "update",
+        "123456",
+        "--input",
+        "-"
+      ],
+      "arguments": {
+        "id": "123456",
+        "input": "-"
+      },
       "input": {
         "expected_version": 3,
-        "body_storage": "<p>Before each release, attach test results and link the release notes.</p>"
-      },
-      "success": {
-        "ok": true,
-        "data": {"id": "123456", "title": "Release checklist", "version": 4, "previous_version": 3}
+        "body_storage": "<p>Keep related decisions and links together.</p>"
       },
       "error_scenario": "someone else saved version 4 after your `page read`; nothing is written",
-      "error": {
-        "ok": false,
-        "error": {
-          "code": "version_conflict",
-          "message": "Page 123456 is at version 4, not the expected version 3.",
-          "fix": "Re-read the page with `atl confluence page read 123456`, merge your changes into the current content, and resubmit with expected_version 4.",
-          "details": {"id": "123456", "expected_version": 3, "current_version": 4}
-        }
+      "error_argv": [
+        "confluence",
+        "page",
+        "update",
+        "123456",
+        "--input",
+        "-"
+      ],
+      "error_input": {
+        "expected_version": 3,
+        "body_storage": "<p>Keep related decisions and links together.</p>"
       }
+    },
+    "bitbucket repo list": {
+      "argv": [
+        "bitbucket",
+        "repo",
+        "list",
+        "--project",
+        "PROJ"
+      ],
+      "arguments": {
+        "project": "PROJ"
+      },
+      "input": null,
+      "error_scenario": "Bitbucket answers a page that is not the last one without a usable `nextPageStart`; yojo refuses to guess the next cursor",
+      "error_argv": [
+        "bitbucket",
+        "repo",
+        "list",
+        "--project",
+        "PROJ"
+      ]
+    },
+    "bitbucket repo get": {
+      "argv": [
+        "bitbucket",
+        "repo",
+        "get",
+        "PROJ/web"
+      ],
+      "arguments": {
+        "repo": "PROJ/web"
+      },
+      "input": null,
+      "error_scenario": "the repository does not exist or your account cannot see it",
+      "error_argv": [
+        "bitbucket",
+        "repo",
+        "get",
+        "PROJ/missing"
+      ]
+    },
+    "bitbucket branch list": {
+      "argv": [
+        "bitbucket",
+        "branch",
+        "list",
+        "--repo",
+        "PROJ/web",
+        "--filter",
+        "feature/"
+      ],
+      "arguments": {
+        "repo": "PROJ/web",
+        "filter": "feature/"
+      },
+      "input": null,
+      "error_scenario": "`--repo web` without the project key; rejected before any request",
+      "error_argv": [
+        "bitbucket",
+        "branch",
+        "list",
+        "--repo",
+        "web"
+      ]
+    },
+    "bitbucket pr list": {
+      "argv": [
+        "bitbucket",
+        "pr",
+        "list",
+        "--repo",
+        "PROJ/web",
+        "--state",
+        "open"
+      ],
+      "arguments": {
+        "repo": "PROJ/web",
+        "state": "OPEN"
+      },
+      "input": null,
+      "note": "`--state` takes OPEN, MERGED, DECLINED, or ALL in any case.",
+      "error_scenario": "`--state closed`, which Bitbucket does not have; rejected before any request",
+      "error_argv": [
+        "bitbucket",
+        "pr",
+        "list",
+        "--repo",
+        "PROJ/web",
+        "--state",
+        "closed"
+      ]
+    },
+    "bitbucket pr get": {
+      "argv": [
+        "bitbucket",
+        "pr",
+        "get",
+        "42",
+        "--repo",
+        "PROJ/web"
+      ],
+      "arguments": {
+        "id": 42,
+        "repo": "PROJ/web"
+      },
+      "input": null,
+      "error_scenario": "no pull request 42 in PROJ/web",
+      "error_argv": [
+        "bitbucket",
+        "pr",
+        "get",
+        "43",
+        "--repo",
+        "PROJ/web"
+      ]
+    },
+    "bitbucket pr diff": {
+      "argv": [
+        "bitbucket",
+        "pr",
+        "diff",
+        "42",
+        "--repo",
+        "PROJ/web",
+        "--path",
+        "src/app.py"
+      ],
+      "arguments": {
+        "id": 42,
+        "repo": "PROJ/web",
+        "path": "src/app.py"
+      },
+      "input": null,
+      "note": "Without `--path` the whole pull request is shown, trimmed unless `--full`. `complete` is false whenever yojo or Bitbucket cut anything. `more`, when set, is a yojo command that may show more; `inspect`, when set, is a git command for what Bitbucket would not return.",
+      "error_scenario": "a `--path` that leaves the repository; rejected before any request",
+      "error_argv": [
+        "bitbucket",
+        "pr",
+        "diff",
+        "42",
+        "--repo",
+        "PROJ/web",
+        "--path",
+        "../secrets.txt"
+      ]
+    },
+    "bitbucket pr create": {
+      "argv": [
+        "bitbucket",
+        "pr",
+        "create",
+        "--input",
+        "-"
+      ],
+      "arguments": {
+        "input": "-"
+      },
+      "input": {
+        "repo": "PROJ/web",
+        "source": "feature/login",
+        "target": "main",
+        "title": "Fix login on Safari",
+        "description": "Handles an empty user before the credential check."
+      },
+      "note": "Flags are the usual form: `yojo bitbucket pr create --repo PROJ/web --source feature/login --target main --title '...'`. `--input -` reads the same names as JSON, useful for a long description; a value given both ways must match.",
+      "error_scenario": "a misspelled source branch and no title, given as flags; every problem is listed and nothing is sent",
+      "error_argv": [
+        "bitbucket",
+        "pr",
+        "create",
+        "--repo",
+        "PROJ/web",
+        "--source",
+        "feature/logn",
+        "--target",
+        "main"
+      ]
+    },
+    "bitbucket pr comment": {
+      "argv": [
+        "bitbucket",
+        "pr",
+        "comment",
+        "42",
+        "--repo",
+        "PROJ/web",
+        "--body",
+        "Ready for review."
+      ],
+      "arguments": {
+        "id": 42,
+        "repo": "PROJ/web",
+        "body": "Ready for review."
+      },
+      "input": null,
+      "note": "Use `--body` for short text, or `--body-file FILE` (`-` for stdin) for longer plain text.",
+      "error_scenario": "the pull request already has a comment with exactly this text; nothing is sent",
+      "error_argv": [
+        "bitbucket",
+        "pr",
+        "comment",
+        "42",
+        "--repo",
+        "PROJ/web",
+        "--body",
+        "Ready for review."
+      ]
     }
   }
 }
