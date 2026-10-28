@@ -103,9 +103,11 @@ yojo bitbucket pr create --repo PROJ/web --source feature/login --target main \
 
 This is one call. Before anything is sent, `yojo` checks the title, that the repository is visible
 to you, that both branches exist, that they differ, and that no open pull request already goes from
-that source to that target. If anything fails, it lists every problem, sends nothing, and gives
-`retry`, the corrected command, with a placeholder such as `<title>` only where you must supply
-text. A misspelled branch is suggested and used in `retry`:
+that source to that target. If anything fails, it lists every problem and sends nothing. When the
+problems can be fixed in the command line, it gives `retry`, the corrected command, with a
+placeholder such as `<title>` only where you must supply text. When an open pull request already
+exists, `retry` is `null`: use that pull request instead of running the command again. A misspelled
+branch is suggested and used in `retry`:
 
 Repository visibility confirms only that the token can read it. It does not establish that the
 token has permission for pull request actions; Bitbucket enforces that when it receives the POST.

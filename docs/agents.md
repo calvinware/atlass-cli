@@ -9,7 +9,7 @@ agent or automation that drives `yojo`. If the two ever disagree, `AGENTS.md` wi
 flowchart LR
     Write["1. Run the command once<br/>with --json"] --> Verify{"2. Read the envelope<br/>ok? exit code?"}
     Verify -->|"exit 0"| Done(["Continue"])
-    Verify -->|"exit 4 requirements_unmet<br/>nothing was sent"| Fix["Apply each check's fix,<br/>fill placeholders,<br/>run details.retry once"] --> Verify
+    Verify -->|"exit 4 requirements_unmet<br/>nothing was sent"| Fix["Apply each check's fix,<br/>fill placeholders,<br/>run details.retry once<br/>only if it is present"] --> Verify
     Verify -->|"exit 2, 5"| Input["Follow error.fix"]
     Verify -->|"exit 3"| Human["Ask the human<br/>to run yojo login"]
     Verify -->|"exit 6 outcome_unknown<br/>or exit 7"| Inspect["Inspect remote state<br/>before anything else"]
@@ -23,7 +23,8 @@ flowchart LR
    problem at once, each with its own `fix`. When `details.retry` is present it is the corrected
    command: supply real content for any `<placeholder>` and run it once. When it is `null` (for
    example, a duplicate that already exists, or a value that came from `--input`), follow each
-   check's `fix` instead; there is no command to rerun as is.
+   check's `fix` instead; there is no command to rerun as is. When the duplicate check found an
+   existing pull request or comment, use that one and never send the write again.
 
 `yojo --json commands` and `yojo --json schema '<command path>'` work offline, with no config or
 credentials, when you need the exact JSON Schemas. You should rarely need them: every command's
@@ -103,7 +104,7 @@ After `outcome_unknown` or `partial_transition`, follow
 | 0 | success | continue |
 | 2 | input or config error | fix the arguments or input JSON, or ask about `yojo.yaml` |
 | 3 | auth or keyring error | ask the human to run `yojo login`; never handle their secret |
-| 4 | a write was refused before sending, or config drift | apply each failed check's `fix`, then run `details.retry` |
+| 4 | a write was refused before sending, or config drift | apply each failed check's `fix`; run `details.retry` once only when it is present. If it is `null` (an existing PR or comment, or a value from `--input`) or absent (`config_drift`, `config_unverified`), do not rerun |
 | 5 | Jira, Confluence, or Bitbucket rejected the request | read `details.fields` and `details.messages` |
 | 6 | network, TLS, or service failure, or unknown write outcome | if `outcome_unknown`, inspect remote state before anything else |
 | 7 | confirmed partial write (`partial_transition`) | do not roll back; follow `fix` |

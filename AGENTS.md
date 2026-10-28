@@ -31,7 +31,7 @@ itself requires.
 | 0 | success | continue |
 | 2 | input or config error | fix the arguments, input JSON, or `yojo.yaml` |
 | 3 | auth or keyring error | ask the human to run `yojo login` (you must never handle their secret) |
-| 4 | a write was refused before sending (`requirements_unmet`), or config drift | apply each failed check's `fix`, then run `details.retry` |
+| 4 | a write was refused before sending (`requirements_unmet`), or config drift (`config_drift`, `config_unverified`) | apply each failed check's `fix`; run `details.retry` once only when it is present. When it is `null` (the PR or comment already exists, or the value came from `--input`) or absent (config drift), do not rerun: use the existing item or follow the `fix` |
 | 5 | Jira, Confluence, or Bitbucket rejected the request (validation, not found, conflict) | read `details.fields` / `details.messages` |
 | 6 | network/TLS/service failure, or a write whose **outcome is unknown** | if `outcome_unknown`, inspect remote state; never retry blind |
 | 7 | confirmed **partial** write (`partial_transition`) | do not roll back; follow `fix` |

@@ -1174,7 +1174,7 @@ def _create(
         "title": created["title"],
         "source": source.name,
         "target": target.name,
-        "state": nested_str(created, "state"),
+        "state": created["state"],
         "url": _pr_url(client, repo, pr_id),
     }
 
@@ -1204,6 +1204,8 @@ def _create_mismatch(
         return "create response did not confirm the target branch and repository"
     if not _text_confirmed(title, created.get("title")):
         return "create response did not confirm the submitted title"
+    if created.get("state") != "OPEN":
+        return "create response did not confirm the pull request is open"
     returned = created.get("description")
     if description == "" and returned in (None, ""):
         return None

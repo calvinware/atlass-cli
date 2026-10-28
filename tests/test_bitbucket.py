@@ -867,19 +867,28 @@ def test_create_in_one_call(harness: Harness) -> None:
     assert result.nbytes <= WRITE_BUDGET
 
 
-def test_create_does_not_invent_a_state_missing_from_the_response(harness: Harness) -> None:
+@pytest.mark.parametrize("state", [None, "DECLINED", "MERGED", "open", 1])
+def test_create_response_that_is_not_open_is_outcome_unknown(harness: Harness, state: Any) -> None:
     setup_create(harness)
 
-    def no_state(request: httpx.Request) -> httpx.Response:
+    def not_open(request: httpx.Request) -> httpx.Response:
         pr = created_pr(request).json()
-        del pr["state"]
+        if state is None:
+            del pr["state"]
+        else:
+            pr["state"] = state
         return httpx.Response(201, json=pr)
 
     harness.server.routes[("POST", PRS)] = []
-    harness.server.add("POST", PRS, handler=no_state)
+    harness.server.add("POST", PRS, handler=not_open)
     result = harness.run(*CREATE_ARGV)
-    assert result.code == 0, result.out
-    assert result.data["state"] is None
+    assert result.code == 6
+    error = result.error
+    assert error["code"] == "outcome_unknown"
+    assert "open" in error["details"]["reason"]
+    assert "retry" not in error["details"] and "retry_argv" not in error["details"]
+    assert error["details"]["recovery_argv"]["get"][4] == "42"
+    assert "yojo bitbucket pr get 42 --repo PROJ/web --full" in error["fix"]
     assert len(harness.server.writes()) == 1
 
 
