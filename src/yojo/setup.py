@@ -678,6 +678,10 @@ class ConnectStep(StepView):
 class LoginStep(StepView):
     number = 2
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.inflight: set[str] = set()
+
     def compose(self) -> ComposeResult:
         yield self.lead(
             "Log in with a personal access token. yojo checks who you are, then keeps the token "
@@ -709,6 +713,9 @@ class LoginStep(StepView):
                 continue
             title = card.query_one(".card-title", Static)
             title.update(plain(f"{LABELS[service]}  {self.draft.urls[service]}"))
+            if service in self.inflight:
+                self.say(f"who-{service}", "Checking this login...", "busy")
+                continue
             if service in self.draft.logins:
                 self.say(f"who-{service}", self.draft.logins[service], "ok")
                 continue
@@ -762,11 +769,16 @@ class LoginStep(StepView):
         secret = box.value
         # Clear the field before anything else so the token is not kept in the widget.
         box.value = ""
+        if service in self.inflight:
+            self.say(f"who-{service}", "A login is still in progress. Wait for its result.", "busy")
+            return
         if not secret.strip():
             self.say(f"who-{service}", "Paste a token first.", "warn")
             return
         url, ca = self.draft.urls[service], self.draft.ca_bundle
         snapshot = Draft(urls={service: url}, ca_bundle=ca)
+        self.inflight.add(service)
+        self.query_one(f"#login-button-{service}", Button).disabled = True
         self.say(f"who-{service}", f"Checking the token with {LABELS[service]}...", "busy")
         self.setup.background(
             f"login-{service}",
@@ -782,6 +794,8 @@ class LoginStep(StepView):
         who: str | None,
         error: YojoError | None,
     ) -> None:
+        self.inflight.discard(service)
+        self.query_one(f"#login-button-{service}", Button).disabled = False
         if self.draft.urls.get(service) != url or self.draft.ca_bundle != ca:
             if who is not None:
                 if service not in self.draft.stored:
@@ -803,6 +817,9 @@ class LoginStep(StepView):
         self.say(f"who-{service}", self.draft.logins[service], "ok")
 
     def blocker(self) -> str | None:
+        if self.inflight:
+            names = ", ".join(LABELS[s] for s in SERVICES if s in self.inflight)
+            return f"Wait for the {names} login result before continuing."
         missing = [LABELS[s] for s in self.draft.urls if s not in self.draft.logins]
         if missing:
             names = ", ".join(missing)
@@ -1249,7 +1266,7 @@ class RulesStep(StepView):
         self.draft.rules.append(rule)
         self.draft.touch()
         self._list_rules()
-        self.setup.notify(rule.describe(), title="Rule added", markup=False)
+        self.setup.notify(clean_lines(rule.describe(), 1000), title="Rule added", markup=False)
 
     def _list_rules(self) -> None:
         view = self.query_one("#rule-list", ListView)
@@ -1688,6 +1705,14 @@ class SetupApp(App[dict[str, Any]]):
 
     def action_leave(self) -> None:
         if isinstance(self.screen, LeaveScreen):
+            return
+        login = self.query_one("#step-2", LoginStep)
+        if login.inflight:
+            self.notify(
+                "A login is still being checked. Wait for its result before leaving setup.",
+                severity="warning",
+                markup=False,
+            )
             return
         self.push_screen(LeaveScreen(self.leave_message()), self._left)
 

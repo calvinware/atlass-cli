@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -362,6 +363,52 @@ def test_rejected_token_stores_nothing_and_clears_the_field(tmp_path: Path) -> N
     world.drive(scenario)
     assert world.stored("jira") is None
     assert_no_secret(world)
+
+
+def test_second_login_cannot_race_the_first_keyring_write(tmp_path: Path) -> None:
+    world = World(tmp_path)
+    app = world.app()
+    started = threading.Event()
+    release = threading.Event()
+    submissions: list[str] = []
+
+    def slow_login(draft: Draft, service: str, secret: str) -> str:
+        submissions.append(secret)
+        started.set()
+        assert release.wait(5)
+        CredentialStore(world.keyring).save(service, draft.urls[service], Credential("pat", secret))
+        return "Logged in to Jira as example-user."
+
+    app.services.login = slow_login  # type: ignore[method-assign]
+
+    async def scenario(pilot: Pilot[Any]) -> None:
+        await connect(pilot, "jira")
+        await next_step(pilot)
+        step = app.query_one("#step-2", setup.LoginStep)
+        box = app.query_one("#token-jira", Input)
+        box.value = JIRA_TOKEN
+        step._login("jira")
+        await pilot.pause()
+        assert await asyncio.to_thread(started.wait, 5)
+        box.value = "second-fixture-token"
+        step._login("jira")
+        assert box.value == ""
+        assert submissions == [JIRA_TOKEN]
+        assert "still in progress" in text(pilot, "#who-jira")
+        app.action_next_step()
+        assert app.step == 2
+        await pilot.press("ctrl+q")
+        assert not isinstance(app.screen, setup.LeaveScreen)
+        release.set()
+        await settle(pilot)
+        assert not app.query_one("#login-button-jira", Button).disabled
+
+    try:
+        world.drive(scenario, app)
+    finally:
+        release.set()
+    assert submissions == [JIRA_TOKEN]
+    assert JIRA_TOKEN in (world.stored("jira") or "")
 
 
 def test_token_field_never_copies_its_value_out(tmp_path: Path) -> None:
