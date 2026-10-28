@@ -830,7 +830,7 @@ def test_comment(harness: Harness) -> None:
 
 def test_comment_from_file(harness: Harness) -> None:
     setup_comment(harness)
-    (harness.tmp_path / "note.txt").write_text("Ready for review.\n", encoding="utf-8")
+    (harness.tmp_path / "note.txt").write_bytes(b"Ready for review.\n")
     harness.server.routes[("POST", COMMENTS)] = []
     response = fixture("bitbucket_comment.json")
     response["text"] = "Ready for review.\n"
