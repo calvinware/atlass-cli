@@ -101,14 +101,14 @@ KEPT_JIRA_KEYS = {"base_url", "ca_bundle", "fields", "projects"}
 def check_mark() -> str:
     """Use the check glyph when the terminal encoding can represent it.
 
-    Textual redirects ``sys.stdout`` while it runs and draws on the original streams (stderr on
-    macOS and Linux, stdout on Windows), so their encodings are the ones that count.
+    Textual redirects ``sys.stdout`` while it runs and draws on the original stderr on macOS and
+    Linux, or the original stdout on Windows. Check the stream it actually writes to.
     """
-    for stream in (sys.__stdout__, sys.__stderr__):
-        try:
-            "✓".encode(getattr(stream, "encoding", None) or "utf-8")
-        except (LookupError, UnicodeEncodeError):
-            return "[x]"
+    stream = sys.__stdout__ if sys.platform == "win32" else sys.__stderr__
+    try:
+        "✓".encode(getattr(stream, "encoding", None) or "utf-8")
+    except (LookupError, UnicodeEncodeError):
+        return "[x]"
     return "✓"
 
 

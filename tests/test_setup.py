@@ -36,19 +36,31 @@ TOKENS = (JIRA_TOKEN, BITBUCKET_TOKEN, "confluence-secret-token-456")
 Scenario = Callable[[Pilot[Any]], Awaitable[None]]
 
 
-def test_check_mark_has_an_ascii_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    utf8 = SimpleNamespace(encoding="utf-8")
+@pytest.mark.parametrize(
+    ("platform", "stdout_encoding", "stderr_encoding", "expected"),
+    [
+        ("linux", "ascii", "utf-8", "✓"),
+        ("linux", "utf-8", "ascii", "[x]"),
+        ("darwin", "ascii", "utf-8", "✓"),
+        ("darwin", "utf-8", "ascii", "[x]"),
+        ("win32", "utf-8", "ascii", "✓"),
+        ("win32", "ascii", "utf-8", "[x]"),
+    ],
+)
+def test_check_mark_uses_the_display_stream_encoding(
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    stdout_encoding: str,
+    stderr_encoding: str,
+    expected: str,
+) -> None:
     with monkeypatch.context() as patch:
-        patch.setattr(sys, "__stdout__", utf8)
-        patch.setattr(sys, "__stderr__", SimpleNamespace(encoding="ascii"))
-        assert setup.check_mark() == "[x]"
-        patch.setattr(sys, "__stdout__", SimpleNamespace(encoding="ascii"))
-        patch.setattr(sys, "__stderr__", utf8)
-        assert setup.check_mark() == "[x]"
-        # A redirected sys.stdout, as inside Textual, has no say in the terminal's encoding.
-        patch.setattr(sys, "__stdout__", utf8)
+        patch.setattr(sys, "platform", platform)
+        patch.setattr(sys, "__stdout__", SimpleNamespace(encoding=stdout_encoding))
+        patch.setattr(sys, "__stderr__", SimpleNamespace(encoding=stderr_encoding))
+        # Textual redirects stdout while rendering; that redirected stream has no encoding.
         patch.setattr(sys, "stdout", SimpleNamespace())
-        assert setup.check_mark() == "✓"
+        assert setup.check_mark() == expected
 
 
 class World:
@@ -366,7 +378,7 @@ def test_connect_reports_unreachable_and_recovers_on_retry(tmp_path: Path) -> No
         assert "Not connected" in text(pilot, "#probe-jira")
         assert app_of(pilot).draft.probes == {}
         await press_button(pilot, "#check")
-        assert "✓ Jira 9.12.4" in text(pilot, "#probe-jira")
+        assert f"{setup.check_mark()} Jira 9.12.4" in text(pilot, "#probe-jira")
         await next_step(pilot)
         assert app_of(pilot).step == 2
 
@@ -383,7 +395,7 @@ def test_unreported_version_is_reachable_not_verified(tmp_path: Path) -> None:
         await connect(pilot, "jira", "confluence")
         for service in ("jira", "confluence"):
             status = text(pilot, f"#probe-{service}")
-            assert status.startswith("✓") and "version unavailable" in status
+            assert status.startswith(setup.check_mark()) and "version unavailable" in status
         assert all(p.version is None for p in app_of(pilot).draft.probes.values())
         await next_step(pilot)
         assert app_of(pilot).step == 2
