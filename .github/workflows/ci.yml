@@ -125,6 +125,25 @@ jobs:
           failIfEmpty: true
           output: ${{ runner.temp }}/lychee/out.md
 
+  captures:
+    name: setup captures (pinned Textual)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      # The SVGs are byte-for-byte renderer output; pin the renderer they were written with.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip setuptools
+          python -m pip install -e ".[dev]" "textual==8.2.8" "rich==15.0.0"
+      - name: Committed setup captures match the app
+        run: python scripts/capture_setup.py --check
+
   workflows:
     name: workflows (actionlint, release invariants)
     runs-on: ubuntu-latest

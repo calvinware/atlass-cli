@@ -113,7 +113,9 @@ Tests never touch a real server or keyring. [`tests/conftest.py`](../tests/conft
   real pseudo-terminal runs on macOS and Linux.
 - `python scripts/capture_setup.py --write` regenerates the light and dark SVG captures of each
   setup step in `docs/assets/setup/` from the same fixtures; `--check` fails when they drift.
-  Review the images after any change to the app's layout or text.
+  CI runs `--check` on Ubuntu with Python 3.14 and the Textual and Rich versions pinned in
+  `.github/workflows/ci.yml`; regenerate with those versions. Review the images after any change
+  to the app's layout or text.
 
 > [!NOTE]
 > Fixture tests prove behavior against modeled responses, not live compatibility. Live results go
