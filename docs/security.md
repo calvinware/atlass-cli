@@ -85,8 +85,11 @@ line is offered; the caller inspects remote state first, following
   network, keyring, or credentials.
 - Guides tell people and agents that only a human runs `yojo login`, and never show a secret in an
   argument or a file.
-- The built documentation site loads the Mermaid renderer from a public CDN at view time. The site
-  is not hosted yet; review this before publishing it.
+- The built documentation site loads the Mermaid renderer from a public CDN at view time.
+- The site is built by [`.github/workflows/pages.yml`](../.github/workflows/pages.yml) from `main`
+  only, and only its deploy job can write to GitHub Pages. It is published once a repository owner
+  sets the Pages source to GitHub Actions; until then the workflow's deploy step fails and nothing
+  is hosted. The site contains only what is in this repository's `docs/` folder.
 
 ## Reporting
 

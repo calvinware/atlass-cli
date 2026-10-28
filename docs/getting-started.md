@@ -120,6 +120,13 @@ cd yojo
 pipx install .
 ```
 
+Or, in one line without a clone (this is the install shown at the top of the README until the
+first release):
+
+```bash
+pipx install git+https://github.com/calvinware/yojo.git
+```
+
 For an editable development environment with the test and docs tools, see
 [Contributing](contributing.md#development-setup).
 
@@ -164,29 +171,93 @@ Desktop sessions normally have one running and unlocked.
 ## Set up in a terminal: `yojo setup`
 
 In a terminal, `yojo setup` opens a full-screen app that walks through the whole setup. Running
-plain `yojo` the first time (no `yojo.yaml` found) opens it too. It has seven steps:
-
-1. **Connect**: enter each instance URL; `yojo` checks that it answers and shows its version.
-2. **Log in**: paste a personal access token into a masked field. `yojo` confirms who you are,
-   stores the token in the OS keyring, and clears the field.
-3. **Choose projects**: search your live Jira projects and Bitbucket repositories.
-4. **Map fields and rules** (optional): pick fields and statuses by their Jira names, with a
-   plain-English preview of each rule. Nothing is added unless you add it.
-5. **Review and save**: the exact `yojo.yaml` and its diff against any existing file. Only
-   **Save** writes it, and it refuses if the file or Jira changed after you reviewed it.
-6. **Connect your agent**: pick the tools you use; this runs `yojo agent install`.
-7. **Try it**: run one read-only command and see the result. Setup completes only after Save and
-   a successful Try on the saved configuration.
+plain `yojo` the first time (no `yojo.yaml` found) opens it too. It has seven steps, shown in
+[Guided setup](#guided-setup) below. The pictures there are the real app, captured against the
+test fixture server with [`scripts/capture_setup.py`](../scripts/capture_setup.py); each one
+follows your light or dark theme.
 
 Use the keyboard throughout: Tab moves between fields, Enter presses a button, Space selects a
 list item, Ctrl+N and Ctrl+B go to the next and previous step, Ctrl+T switches light and dark,
 and Esc leaves. Leaving before Save changes no file; logins you already stored stay in the
 keyring. The app follows `NO_COLOR`.
 
-`yojo setup` never starts when stdout is piped or with `--json`. It then returns
-[`usage_error`](reference/errors.md#usage_error) (exit 2) listing the same steps as commands,
-which are also what scripts and CI use: `yojo login`, `yojo --json init ... --save`, and
-`yojo --json agent install`. The rest of this page covers those commands.
+`yojo setup` never starts when stdout is piped or with `--json`. `yojo --json setup` returns
+[`usage_error`](reference/errors.md#usage_error) (exit 2) with `details.steps`, the same steps as
+commands, which are also what scripts and CI use: `yojo login`, `yojo --json init ... --save`,
+`yojo --json agent install`, and a read. The rest of this page covers those commands, and each
+step below names its equivalent.
+
+## Guided setup
+
+### 1. Connect
+
+Enter each instance URL; `yojo` checks that it answers and shows its version. Leave a service empty
+to skip it.
+
+![yojo setup step 1 of 7, Connect: Jira, Confluence, and Bitbucket URLs on example.test hosts, each checked and showing its server version.](assets/setup/step-1-light.svg#gh-light-mode-only)
+![yojo setup step 1 of 7, Connect: Jira, Confluence, and Bitbucket URLs on example.test hosts, each checked and showing its server version.](assets/setup/step-1-dark.svg#gh-dark-mode-only)
+
+Without the app: `yojo --json init --jira-url URL --confluence-url URL --bitbucket-url URL` checks
+each URL.
+
+### 2. Log in
+
+Paste a personal access token into a masked field. `yojo` confirms who you are, stores the token in
+the OS keyring, and clears the field.
+
+![yojo setup step 2 of 7, Log in: a masked token field per service and the message Logged in to Jira as example-user, saved to your keyring.](assets/setup/step-2-light.svg#gh-light-mode-only)
+![yojo setup step 2 of 7, Log in: a masked token field per service and the message Logged in to Jira as example-user, saved to your keyring.](assets/setup/step-2-dark.svg#gh-dark-mode-only)
+
+Without the app: `yojo login --service jira --base-url URL` (a person, hidden prompt).
+
+### 3. Choose projects
+
+Search your live Jira projects and Bitbucket repositories, and select the ones you work in.
+
+![yojo setup step 3 of 7, Choose projects: a search box filtered to proj, project PROJ selected, and Bitbucket repository PROJ/web selected.](assets/setup/step-3-light.svg#gh-light-mode-only)
+![yojo setup step 3 of 7, Choose projects: a search box filtered to proj, project PROJ selected, and Bitbucket repository PROJ/web selected.](assets/setup/step-3-dark.svg#gh-dark-mode-only)
+
+Without the app: `yojo --json init ... --project KEY --repo PROJECT/slug`.
+
+### 4. Map fields and rules
+
+Optional. Pick fields and statuses by their Jira names, with a plain-English preview of each rule.
+Nothing is added unless you add it.
+
+![yojo setup step 4 of 7, Map fields and rules: tabs for friendly names, required on create, and transition rules, with Story Points chosen for a short name.](assets/setup/step-4-light.svg#gh-light-mode-only)
+![yojo setup step 4 of 7, Map fields and rules: tabs for friendly names, required on create, and transition rules, with Story Points chosen for a short name.](assets/setup/step-4-dark.svg#gh-dark-mode-only)
+
+Without the app: `yojo --json init ... --policy-input policy.json`.
+
+### 5. Review and save
+
+The exact `yojo.yaml` and its diff against any existing file. Only **Save** writes it, and it
+refuses if the file or Jira changed after you reviewed it.
+
+![yojo setup step 5 of 7, Review and save: a diff that creates yojo.yaml with version 1 and the Jira base URL, before Save is pressed.](assets/setup/step-5-light.svg#gh-light-mode-only)
+![yojo setup step 5 of 7, Review and save: a diff that creates yojo.yaml with version 1 and the Jira base URL, before Save is pressed.](assets/setup/step-5-dark.svg#gh-dark-mode-only)
+
+Without the app: `yojo --json init ...` previews; the same command with `--save` writes.
+
+### 6. Connect your agent
+
+Optional. Pick the tools you use; this runs `yojo agent install` and writes only `yojo`'s marked
+section.
+
+![yojo setup step 6 of 7, Connect your agent: five agent targets listed (AGENTS.md, Claude Code, Cursor, GitHub Copilot, Gemini CLI) and AGENTS.md created.](assets/setup/step-6-light.svg#gh-light-mode-only)
+![yojo setup step 6 of 7, Connect your agent: five agent targets listed (AGENTS.md, Claude Code, Cursor, GitHub Copilot, Gemini CLI) and AGENTS.md created.](assets/setup/step-6-dark.svg#gh-dark-mode-only)
+
+Without the app: `yojo --json agent install --target agents`.
+
+### 7. Try it
+
+Run one read-only command and see the result. Setup completes only after Save and a successful Try
+on the saved configuration.
+
+![yojo setup step 7 of 7, Try it: a read-only Jira search returned two example issues, then the message that yojo.yaml was saved and the Try passed, with next steps.](assets/setup/step-7-light.svg#gh-light-mode-only)
+![yojo setup step 7 of 7, Try it: a read-only Jira search returned two example issues, then the message that yojo.yaml was saved and the Try passed, with next steps.](assets/setup/step-7-dark.svg#gh-dark-mode-only)
+
+Without the app: `yojo --json jira search --jql 'project = PROJ' --limit 5`.
 
 ## Log in (human only)
 

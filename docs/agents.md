@@ -5,11 +5,27 @@ agent or automation that drives `yojo`. If the two ever disagree, `AGENTS.md` wi
 
 ## Install the instructions
 
-`yojo agent install --target agents|claude|cursor|copilot|gemini` writes compact instructions
-where the tool looks for them: an `AGENTS.md` section, a Claude skill
-(`.claude/skills/yojo/SKILL.md`), a Cursor rule (`.cursor/rules/yojo.mdc`),
-`.github/copilot-instructions.md`, or `GEMINI.md`. `yojo agent print` returns the same text for
-pasting into any chat. The text is generated from the command registry: every command's
+Pick the tools you use and run one line per tool. Each writes compact instructions where that tool
+looks for them:
+
+```bash
+yojo --json agent install --target agents    # AGENTS.md, read by many tools
+yojo --json agent install --target claude    # .claude/skills/yojo/SKILL.md
+yojo --json agent install --target cursor    # .cursor/rules/yojo.mdc
+yojo --json agent install --target copilot   # .github/copilot-instructions.md
+yojo --json agent install --target gemini    # GEMINI.md
+```
+
+| Tool | Command | File written |
+|------|---------|--------------|
+| Any tool that reads `AGENTS.md` | `yojo --json agent install --target agents` | `AGENTS.md` |
+| Claude Code | `yojo --json agent install --target claude` | `.claude/skills/yojo/SKILL.md` |
+| Cursor | `yojo --json agent install --target cursor` | `.cursor/rules/yojo.mdc` |
+| GitHub Copilot | `yojo --json agent install --target copilot` | `.github/copilot-instructions.md` |
+| Gemini CLI | `yojo --json agent install --target gemini` | `GEMINI.md` |
+
+Repeat `--target` to install several in one call. `yojo agent print` returns the same text for
+pasting into any other chat. The text is generated from the command registry: every command's
 signature, the shape of its `--input` document, and one `--json` example, plus the rules on this
 page. It stays under 12 KiB (about 2,600 tokens at four characters per token), and an agent can
 act from it without calling `commands`, `schema`, or `--help`.
@@ -27,6 +43,31 @@ call were already written the error says so and lists them in `details.written`.
 files; running the same command again reports them `unchanged` and retries the rest. Close
 unrelated editors before replacing a file: their writes are not covered by yojo's lock, and a
 write in the small interval between comparison and replacement can be lost.
+
+## Who decides what
+
+```mermaid
+flowchart LR
+    subgraph Person["Person"]
+        P1["Logs in; the token<br/>stays in the OS keyring"]
+        P2["Owns yojo.yaml<br/>team rules, reviewed"]
+        P3["Approves and merges<br/>pull requests"]
+    end
+    subgraph Agent["Agent or script"]
+        A1["Writes summaries,<br/>descriptions, comments"]
+        A2["Runs one yojo --json call"]
+        A3["Follows error.fix and retry;<br/>inspects before rerunning"]
+    end
+    subgraph Yojo["yojo"]
+        Y1["Resolves names to IDs"]
+        Y2["Checks every rule<br/>before the write"]
+        Y3["Writes once and confirms;<br/>never retries"]
+    end
+    Person -->|"logs in, sets rules"| Yojo
+    Agent -->|"one call"| Yojo
+    Yojo -->|"one JSON object"| Agent
+    Agent -->|"exit 3, or unsure"| Person
+```
 
 ## The loop
 

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from scripts import capture_command_examples as capture
 from scripts import generate_command_reference as gen
 from scripts.mkdocs_hooks import DocsRenderError, render_os_tabs, rewrite_external_links
 from tests.conftest import JIRA, Harness
@@ -28,7 +30,7 @@ def discovered() -> tuple[list[gen.Contract], dict[str, str]]:
 
 @pytest.fixture
 def examples() -> dict[str, Any]:
-    return gen._load_json(gen.EXAMPLES_PATH, "commands")
+    return gen.load_examples()
 
 
 @pytest.fixture
@@ -238,8 +240,7 @@ def test_comment_body_file_schema_and_row_say_plain_text(
 
 def _embedded_schema_drift(contract: gen.Contract, example: dict[str, Any]) -> list[str]:
     data = example["success"]["data"]
-    # The example's note says its `error` schema is abbreviated; everything else is verbatim.
-    return [k for k in contract.schema if k != "error" and data.get(k) != contract.schema[k]]
+    return [k for k in contract.schema if data.get(k) != contract.schema[k]]
 
 
 def test_embedded_comment_schema_matches_discovered(
@@ -255,6 +256,121 @@ def test_embedded_comment_schema_matches_discovered(
     body_file = reverted["success"]["data"]["arguments"]["properties"]["body_file"]
     body_file["description"] = "Path to a JSON file, or '-' for stdin."
     assert _embedded_schema_drift(comment, reverted) == ["arguments"]
+
+
+# --------------------------------------------------------------------------- captured output
+
+REMOTE_WRITES = [
+    "jira issue create",
+    "jira issue update",
+    "jira issue link",
+    "jira transition",
+    "jira attachment add",
+    "jira comment add",
+    "confluence page create",
+    "confluence page update",
+    "bitbucket pr create",
+    "bitbucket pr comment",
+]
+
+
+def test_every_example_has_both_faces_captured(examples: dict[str, Any]) -> None:
+    for path, example in examples.items():
+        captured = example["captured"]
+        for which in ("success", "error"):
+            case = captured[which]
+            if case is None:
+                assert which == "success" and path in gen.INTERACTIVE, path
+                continue
+            assert len(case["json"].splitlines()) == 1, (path, which)
+            assert (case["terminal"] is None) == (path in gen.INTERACTIVE), (path, which)
+
+
+def test_successful_writes_send_one_write_and_failures_none(examples: dict[str, Any]) -> None:
+    for path in REMOTE_WRITES:
+        success = examples[path]["captured"]["success"]
+        assert success["writes"] == 1, path
+        assert json.loads(success["json"])["ok"] is True, path
+    for path, example in examples.items():
+        assert example["captured"]["error"]["writes"] == 0, path
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (lambda e: e["captured"].pop("success"), "captured success is missing"),
+        (lambda e: e.update(error_argv=["jira", "issue", "get", "EXAMPLE-1"]), "different call"),
+        (lambda e: e["captured"]["success"].update(exit=4), "exit 4"),
+        (lambda e: e["captured"]["error"].update(writes=1), "send no write"),
+        (lambda e: e["captured"]["success"].update(terminal=None), "terminal capture"),
+        (
+            lambda e: e["captured"]["success"].update(json=json.dumps(e["success"], indent=2)),
+            "exactly one line",
+        ),
+        (
+            lambda e: e["captured"]["success"].update(json=json.dumps(e["success"])),
+            "not compact",
+        ),
+    ],
+)
+def test_capture_drift_is_reported(
+    discovered: tuple[list[gen.Contract], dict[str, str]],
+    examples: dict[str, Any],
+    mutate: Any,
+    expected: str,
+) -> None:
+    contracts, _ = discovered
+    broken = copy.deepcopy(examples)
+    mutate(broken["jira issue create"])
+    problems = gen.validate_examples(contracts, broken)
+    assert any(expected in p and "jira issue create" in p for p in problems), problems
+
+
+def test_reference_shows_exact_output_in_both_faces(examples: dict[str, Any]) -> None:
+    reference = gen.COMMANDS_MD.read_text(encoding="utf-8")
+    for path, example in examples.items():
+        for case in filter(None, example["captured"].values()):
+            assert case["json"].rstrip("\n") in reference, path
+            if case["terminal"] is not None:
+                assert case["terminal"].rstrip("\n") in reference, path
+    notes = [e.get("note", "") for e in examples.values()]
+    assert not [n for n in notes if "shortened" in n or "abbreviated" in n]
+    assert "pretty-printed" not in reference
+
+
+def test_terminal_capture_must_render_the_same_envelope(examples: dict[str, Any]) -> None:
+    case = copy.deepcopy(examples["jira issue create"]["captured"]["success"])
+    assert capture.problems_in("jira issue create", "success", case) == []
+    case["terminal"] = case["terminal"].replace("Created", "Updated")
+    assert any(
+        "not the rendering" in p for p in capture.problems_in("jira issue create", "success", case)
+    )
+    leaked = copy.deepcopy(examples["login"]["captured"]["success"])
+    leaked["json"] = leaked["json"].replace("example-user", "jira-secret-token-123")
+    assert any("token" in p for p in capture.problems_in("login", "success", leaked))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="captures are written on POSIX paths")
+def test_committed_captures_are_current() -> None:
+    expected = capture.CAPTURED_PATH.read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert capture.serialize(capture.build()) == expected, (
+        "run scripts/capture_command_examples.py --write"
+    )
+
+
+def test_capture_check_fails_on_stale_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stale = tmp_path / "captured-output.json"
+    stale.write_text(
+        capture.CAPTURED_PATH.read_text(encoding="utf-8").replace("Created EXAMPLE-42", "Made it")
+    )
+    before = stale.read_bytes()
+    monkeypatch.setattr(capture, "CAPTURED_PATH", stale)
+    monkeypatch.setattr(capture, "ROOT", tmp_path)
+    assert capture.main_(["--check"]) == 1
+    assert "capture_command_examples.py --write" in capsys.readouterr().err
+    assert stale.read_bytes() == before
 
 
 def test_missing_error_fix_is_reported(

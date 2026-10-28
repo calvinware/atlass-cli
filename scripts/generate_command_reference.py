@@ -2,8 +2,9 @@
 
 The command set and every contract come from `yojo commands` and `yojo schema '<path>'`, run as
 subprocesses of the current interpreter. No config, network, keyring, or service is used.
-Curated examples in docs/examples/ are validated against the published schemas and the real
-argument parser before anything is rendered.
+Curated example calls in docs/examples/commands.json, and their exact output in both faces as
+captured by scripts/capture_command_examples.py into docs/examples/captured-output.json, are
+validated against the published schemas and the real argument parser before anything is rendered.
 
     python scripts/generate_command_reference.py --write   # regenerate docs/reference/*.md
     python scripts/generate_command_reference.py --check   # exit 1 if the committed files drift
@@ -29,6 +30,7 @@ from yojo.contracts import COMMANDS_BY_PATH, ERROR_CODES, EXIT_CODES_DOC, GLOBAL
 
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES_PATH = ROOT / "docs" / "examples" / "commands.json"
+CAPTURED_PATH = ROOT / "docs" / "examples" / "captured-output.json"
 FIXES_PATH = ROOT / "docs" / "examples" / "error-fixes.json"
 COMMANDS_MD = ROOT / "docs" / "reference" / "commands.md"
 ERRORS_MD = ROOT / "docs" / "reference" / "errors.md"
@@ -38,7 +40,27 @@ GENERATED_NOTICE = (
     "and docs/examples/. Do not edit by hand. -->"
 )
 EXAMPLE_KEYS = frozenset(
-    {"argv", "arguments", "input", "stdin", "note", "success", "error", "error_scenario"}
+    {
+        "argv",
+        "arguments",
+        "input",
+        "stdin",
+        "note",
+        "success",
+        "error",
+        "error_scenario",
+        "error_argv",
+        "error_input",
+        "error_stdin",
+        "captured",
+    }
+)
+# Opens the terminal app instead of printing, so only its no-terminal fallback is captured and
+# its success summary is a schema-checked illustration.
+INTERACTIVE = frozenset({"setup"})
+CAPTURE_FIX = (
+    "run `python scripts/capture_command_examples.py --write`, then "
+    "`python scripts/generate_command_reference.py --write`"
 )
 FIX_KEYS = frozenset({"meaning", "fix", "details"})
 # The schema calls the `schema` command's positional `command`; argparse stores it as `path`.
@@ -61,6 +83,8 @@ URL_RE = re.compile(r"https?://([^/\s\"'`]+)")
 SECRET_MARKERS = ("Bearer ", "Basic ", "Authorization")
 SAFE_HOST_SUFFIX = ".example.test"
 SUBPROCESS_TIMEOUT = 60
+# The capture script shows the temporary folder each run used as this path.
+WORKDIR = "/work/repo"
 PLURALS = {"string": "strings", "object": "objects", "integer": "integers"}
 
 
@@ -218,7 +242,10 @@ def validate_examples(contracts: list[Contract], examples: dict[str, Any]) -> li
         unknown = sorted(set(example) - EXAMPLE_KEYS)
         if unknown:
             problems.append(f"{where}: unknown keys {unknown}")
-        absent = sorted({"argv", "arguments", "input", "success", "error"} - set(example))
+        absent = sorted(
+            {"argv", "arguments", "input", "success", "error", "error_argv", "captured"}
+            - set(example)
+        )
         if absent:
             problems.append(f"{where}: missing keys {absent}")
             continue
@@ -263,12 +290,76 @@ def validate_examples(contracts: list[Contract], examples: dict[str, Any]) -> li
             problems.append(f"{where}: error_scenario must describe the failing call")
         if parsed is not None:
             problems += semantic_problems(parsed, example, where)
+        problems += capture_problems(contract.path, example, where)
         for text in _strings(example):
             for host in URL_RE.findall(text):
-                if not host.endswith(SAFE_HOST_SUFFIX):
+                # An all-caps host such as HOST is a placeholder for the reader's own server.
+                if not host.endswith(SAFE_HOST_SUFFIX) and not re.fullmatch(r"[A-Z_]+", host):
                     problems.append(f"{where}: URL host {host!r} is not a *{SAFE_HOST_SUFFIX} host")
             if any(marker in text for marker in SECRET_MARKERS):
                 problems.append(f"{where}: example text looks like a credential header")
+    return problems
+
+
+def stdin_text(example: dict[str, Any], prefix: str = "") -> str | None:
+    """What the example sends on stdin: its JSON input as a heredoc body, or its stdin text."""
+    document = example.get(f"{prefix}input")
+    if document is not None:
+        return json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+    text = example.get(f"{prefix}stdin")
+    return text if isinstance(text, str) else None
+
+
+def _envelope(text: Any, where: str, problems: list[str]) -> Any:
+    lines = text.splitlines() if isinstance(text, str) else []
+    if len(lines) != 1:
+        problems.append(f"{where}: --json output must be exactly one line")
+        return None
+    envelope = json.loads(lines[0])
+    if lines[0] != json.dumps(envelope, ensure_ascii=True, separators=(",", ":")):
+        problems.append(f"{where}: --json output is not compact one-line JSON")
+    return envelope
+
+
+def capture_problems(path: str, example: dict[str, Any], where: str) -> list[str]:
+    """The captured output must come from this example's call and agree with itself."""
+    captured = example.get("captured")
+    if not isinstance(captured, dict):
+        return [f"{where}: no captured output; {CAPTURE_FIX}"]
+    problems: list[str] = []
+    calls = {
+        "success": (example.get("argv"), stdin_text(example)),
+        "error": (example.get("error_argv"), stdin_text(example, "error_")),
+    }
+    for which, (argv, stdin) in calls.items():
+        case = captured.get(which)
+        label = f"{where}: captured {which}"
+        if case is None:
+            if which == "success" and path in INTERACTIVE:
+                continue
+            problems.append(f"{label} is missing; {CAPTURE_FIX}")
+            continue
+        if case.get("argv") != argv or case.get("stdin") != stdin:
+            problems.append(f"{label} ran a different call than commands.json; {CAPTURE_FIX}")
+        if (case.get("terminal") is None) != (path in INTERACTIVE):
+            problems.append(f"{label}: the terminal capture is missing or unexpected")
+        envelope = _envelope(case.get("json"), label, problems)
+        if not isinstance(envelope, dict):
+            continue
+        if envelope != example.get(which):
+            problems.append(f"{label} differs from the example envelope")
+        code = str((envelope.get("error") or {}).get("code"))
+        expected_exit = (
+            0 if envelope.get("ok") is True else getattr(ERROR_CODES.get(code), "value", None)
+        )
+        if case.get("exit") != expected_exit:
+            problems.append(
+                f"{label}: exit {case.get('exit')!r} but the envelope implies {expected_exit}"
+            )
+        if which == "error" and case.get("writes"):
+            problems.append(f"{label}: a failing example must send no write")
+    if path in INTERACTIVE and captured.get("success") is not None:
+        problems.append(f"{where}: {path} opens the terminal app; it has no success capture")
     return problems
 
 
@@ -544,14 +635,50 @@ def _json_block(value: Any) -> list[str]:
     return ["```json", json.dumps(value, indent=2, ensure_ascii=False), "```"]
 
 
-def invocation(example: dict[str, Any]) -> list[str]:
-    command = "yojo " + shlex.join(example["argv"])
-    if example["input"] is not None:
-        body = json.dumps(example["input"], indent=2, ensure_ascii=False)
-        return ["```bash", f"{command} <<'JSON'", body, "JSON", "```"]
-    if "stdin" in example:
-        return ["```bash", f"{command} <<'EOF'", example["stdin"].rstrip("\n"), "EOF", "```"]
-    return ["```bash", command, "```"]
+def _fenced(language: str, lines: list[str]) -> list[str]:
+    """A code fence longer than any backtick run that starts a line of the content."""
+    runs = [len(m.group(0)) for line in lines if (m := re.match(r"\s*`+", line))]
+    fence = "`" * max(3, *(run + 1 for run in runs)) if runs else "```"
+    return [f"{fence}{language}", *lines, fence]
+
+
+def invocation(argv: list[str], stdin: str | None, *, json_mode: bool, document: bool) -> list[str]:
+    """The command line as typed at a POSIX shell prompt, with any stdin as a heredoc."""
+    command = "$ yojo " + ("--json " if json_mode else "") + shlex.join(argv)
+    if stdin is None:
+        return [command]
+    marker = "JSON" if document else "EOF"
+    return [f"{command} <<'{marker}'", *stdin.rstrip("\n").split("\n"), marker]
+
+
+def transcript(case: dict[str, Any], *, document: bool) -> list[str]:
+    """The exact call and stdout of a captured case, terminal face first, then `--json`."""
+    out = []
+    if case["terminal"] is not None:
+        out += [
+            f"In a terminal (exit {case['exit']}):",
+            "",
+            *_fenced(
+                "console",
+                [
+                    *invocation(case["argv"], case["stdin"], json_mode=False, document=document),
+                    *case["terminal"].rstrip("\n").split("\n"),
+                ],
+            ),
+            "",
+        ]
+    out += [
+        f"With `--json`, or whenever stdout is piped (exit {case['exit']}):",
+        "",
+        *_fenced(
+            "console",
+            [
+                *invocation(case["argv"], case["stdin"], json_mode=True, document=document),
+                case["json"].rstrip("\n"),
+            ],
+        ),
+    ]
+    return out
 
 
 def anchor(text: str) -> str:
@@ -576,11 +703,14 @@ def render_commands(
         "source of truth; run `yojo schema '<command>'` for the exact contract.",
         "",
         "> [!NOTE]",
-        "> Examples use synthetic data (`EXAMPLE-*` keys, `*.example.test` hosts) and were "
-        "captured from real runs against test fixtures. They are pretty-printed here; when "
-        "stdout is piped or `--json` is given, `yojo` prints each envelope on one line. On a "
-        "terminal it shows a readable view of the same envelope, with the same exit code. "
-        "Invocations use POSIX shell syntax.",
+        "> Every example below is exact output, not a sketch. "
+        "[`scripts/capture_command_examples.py`](../../scripts/capture_command_examples.py) runs "
+        "each call through the real parser and handlers against the test fixture server, never a "
+        "live instance, once in a terminal with `NO_COLOR=1` and once with `--json`, and CI fails "
+        "if this page and those runs disagree. The data is synthetic (`EXAMPLE-*` keys, "
+        f"`*.example.test` hosts), and the temporary folder each run used is shown as "
+        f"`{WORKDIR}`. The terminal view is a rendering of the same envelope, with the same exit "
+        "code. Invocations use POSIX shell syntax.",
         "",
         "Every command accepts these options:",
         "",
@@ -672,24 +802,30 @@ def _command_section(
         out.append(f"| `{name}` | {_cell(kind)} | {'yes' if required else 'no'} |")
     error = example["error"]["error"]
     error_exit = ERROR_CODES[error["code"]].value
-    out += [
-        "",
-        "**Example**",
-        "",
-        *invocation(example),
-        "",
-    ]
+    captured = example["captured"]
+    out += ["", "**Example**", ""]
     if "note" in example:
         out += [example["note"], ""]
+    if captured["success"] is None:
+        out += [
+            "In a terminal, `yojo setup` opens the full-screen app and prints nothing until it "
+            "closes. Each step is shown, as captured from the app against the same fixtures, in "
+            "the [setup guide](../getting-started.md#guided-setup).",
+            "",
+            "When the app closes after the last step, it prints a summary with this shape (an "
+            "illustration checked against the schema, not a capture):",
+            "",
+            *_json_block(example["success"]),
+            "",
+        ]
+    else:
+        document = example["input"] is not None
+        out += [*transcript(captured["success"], document=document), ""]
     out += [
-        "Success (exit 0):",
+        f"**Error:** {example['error_scenario']} "
+        f"([`{error['code']}`](errors.md#{error['code']}), exit {error_exit}).",
         "",
-        *_json_block(example["success"]),
-        "",
-        f"Error: {example['error_scenario']} "
-        f"([`{error['code']}`](errors.md#{error['code']}), exit {error_exit}):",
-        "",
-        *_json_block(example["error"]),
+        *transcript(captured["error"], document=example.get("error_input") is not None),
         "",
         "**Error codes**",
         "",
@@ -776,9 +912,25 @@ def _load_json(path: Path, key: str) -> dict[str, Any]:
     return section
 
 
+def load_examples() -> dict[str, Any]:
+    """The curated calls with the envelopes their captured runs actually printed."""
+    examples = _load_json(EXAMPLES_PATH, "commands")
+    captured = _load_json(CAPTURED_PATH, "commands")
+    for path, example in examples.items():
+        cases = captured.get(path)
+        if not isinstance(cases, dict):
+            continue
+        example["captured"] = cases
+        for which in ("success", "error"):
+            case = cases.get(which)
+            if isinstance(case, dict) and isinstance(case.get("json"), str):
+                example[which] = json.loads(case["json"].splitlines()[0])
+    return examples
+
+
 def build() -> dict[Path, str]:
     contracts, exit_codes = discover()
-    examples = _load_json(EXAMPLES_PATH, "commands")
+    examples = load_examples()
     fixes = _load_json(FIXES_PATH, "codes")
     problems = validate_examples(contracts, examples) + validate_fixes(contracts, fixes)
     if problems:

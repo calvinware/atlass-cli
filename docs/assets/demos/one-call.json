@@ -1,0 +1,28 @@
+{
+  "vhs": "0.12.1",
+  "command": "yojo jira issue create PROJ --type Bug --summary \"Fix example sign-in\" --base-url https://jira.example.test/jira",
+  "tape_sha256": "d251a3a9c24c5fcef77782251b1c2aed4740c9b55082d97a8fc7df0652eb9b3e",
+  "transcript_sha256": "753fba5247e1b1e811179506078a8d4ba207effaf164e2db503bc5f83c8488be",
+  "gif_sha256": "ff9737255689dbeda3b58cb0182d5af016e81e39d0632148454b994ac6f970ae",
+  "gif_bytes": 78604,
+  "gif_frames": 210,
+  "duration_seconds": 8.4,
+  "requests": [
+    [
+      "GET",
+      "/jira/rest/api/2/issue/createmeta/PROJ/issuetypes"
+    ],
+    [
+      "GET",
+      "/jira/rest/api/2/issue/createmeta/PROJ/issuetypes/10002"
+    ],
+    [
+      "POST",
+      "/jira/rest/api/2/issue"
+    ],
+    [
+      "GET",
+      "/jira/rest/api/2/issue/PROJ-128"
+    ]
+  ]
+}

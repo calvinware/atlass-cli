@@ -25,6 +25,135 @@ the [configuration reference](configuration.md).
 > Never put credentials in `yojo.yaml`. `yojo` never reads them from the file; people log in with
 > `yojo login`, which uses the OS keyring.
 
+## Three teams, three files
+
+No setup is the "right" one. These three unrelated teams use the same `yojo` with different
+rules. Each file is complete; copy the one closest to yours and change the names.
+
+| | Small product team | Documentation team | Operations team |
+|---|---|---|---|
+| Services | Jira, Bitbucket | Jira, Confluence | Jira, Confluence, Bitbucket |
+| Project | `APP` | `DOCS` | `OPS` |
+| Friendly names | `points` | `page`, `audience` | `sev`, `service` |
+| Required on create | Story: `points` | Task: `audience` | Incident: `sev`, `service`, Environment |
+| Transition rules | Review needs `points`; Done needs Resolution | Publish needs `page` and a reviewer | Resolve needs Root Cause and a `{key}_Timeline_*` file |
+| Attachments | Jira's limit | Jira's limit | 10 MiB cap |
+
+### Small product team
+
+Engineers create stories and bugs from the terminal and open pull requests in the same repository.
+The only extra rule: a story is estimated before review.
+
+```yaml
+version: 1
+jira:
+  base_url: https://jira.example.test/jira
+  fields:
+    points: {jira_name: Story Points}
+  projects:
+    - key: APP
+      create:
+        Story:
+          required: [points]
+      transitions:
+        review:
+          from: [In Progress]
+          to: In Review
+          require:
+            - kind: field_set
+              field: points
+        done:
+          from: [In Review]
+          to: Done
+          require:
+            - kind: field_set
+              field: Resolution
+bitbucket:
+  base_url: https://bitbucket.example.test/bitbucket
+```
+
+```bash
+yojo jira issue create APP --type Story --summary "Add an export button" --set points=3
+yojo bitbucket pr create --repo APP/web --source feature/export --target main --title "Add export"
+```
+
+### Documentation team
+
+Writers track pages in Jira and publish in Confluence. Every task names its audience, and a page
+is published only once it is linked and has a reviewer.
+
+```yaml
+version: 1
+jira:
+  base_url: https://jira.example.test/jira
+  fields:
+    page: {jira_name: Doc Page}
+    audience: {jira_name: Audience}
+  projects:
+    - key: DOCS
+      create:
+        Task:
+          required: [audience]
+      transitions:
+        publish:
+          from: [In Review]
+          to: Published
+          require:
+            - kind: field_set
+              field: page
+            - kind: field_set
+              field: Reviewer
+confluence:
+  base_url: https://confluence.example.test/confluence
+```
+
+```bash
+yojo jira issue create DOCS --type Task --summary "Document the export button" --set audience=Admins
+yojo jira transition DOCS-12 --to Published --set page=123456 --set Reviewer=writer2
+```
+
+### Operations team
+
+On-call engineers open incidents with severity and service, and close them only with a root cause
+and a timeline file attached. Files over 10 MiB are refused before upload.
+
+```yaml
+version: 1
+jira:
+  base_url: https://jira.example.test/jira
+  max_attachment_bytes: 10485760               # 10 MiB
+  fields:
+    sev: {jira_name: Severity}
+    service: {jira_name: Affected Service}
+  projects:
+    - key: OPS
+      create:
+        Incident:
+          required: [sev, service, Environment]
+      transitions:
+        resolve:
+          from: [Investigating, Mitigated]
+          to: Resolved
+          require:
+            - kind: field_set
+              field: Root Cause
+            - kind: attachment_filename
+              pattern: "{key}_Timeline_*"
+confluence:
+  base_url: https://confluence.example.test/confluence
+bitbucket:
+  base_url: https://bitbucket.example.test/bitbucket
+```
+
+```bash
+yojo jira issue create OPS --type Incident --summary "Example sign-in errors" \
+  --set sev=High --set service=Sign-in --set Environment=Production
+yojo jira attachment add OPS-7 --file OPS-7_Timeline_2026-10-28.md
+yojo jira transition OPS-7 --to Resolved --set "Root Cause=Expired example certificate"
+```
+
+The recipes below show one idea each.
+
 ## Recipe 1: just the URLs
 
 The smallest useful file. Everyone in the repository can drop `--base-url`, and nothing else

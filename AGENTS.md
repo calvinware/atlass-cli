@@ -26,6 +26,13 @@ itself requires.
   [error catalog](docs/reference/errors.md) are generated from those schemas. The
   [agent guide](docs/agents.md) expands on this file; this file stays authoritative.
 
+- To put compact `yojo` instructions where a tool reads them, run one of
+  `yojo --json agent install --target agents` (`AGENTS.md`), `--target claude`
+  (`.claude/skills/yojo/SKILL.md`), `--target cursor` (`.cursor/rules/yojo.mdc`),
+  `--target copilot` (`.github/copilot-instructions.md`), or `--target gemini` (`GEMINI.md`).
+  Only the marked `yojo` section is written. `yojo --json agent print` returns the same text.
+  The rules in this file still apply.
+
 | Exit | Meaning | What to do |
 |------|---------|------------|
 | 0 | success | continue |

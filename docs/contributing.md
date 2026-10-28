@@ -13,9 +13,13 @@ python3.11 -m venv .venv
 .venv/bin/python -m pytest -q
 .venv/bin/python -m build
 .venv/bin/python -m twine check --strict dist/*
+.venv/bin/python scripts/check_package.py dist
+.venv/bin/python scripts/capture_command_examples.py --check
 .venv/bin/python scripts/generate_command_reference.py --check
 .venv/bin/python scripts/capture_setup.py --check
-.venv/bin/python -m mkdocs build --strict
+.venv/bin/python scripts/capture_demos.py --check    # needs the pinned VHS; see below
+NO_MKDOCS_2_WARNING=1 .venv/bin/python -m mkdocs build --strict
+lychee --config lychee.toml README.md AGENTS.md 'docs/**/*.md'
 ```
 
 On Windows, use `.venv\Scripts\python.exe`. CI runs lint, type checks, tests, and the build on
@@ -24,6 +28,25 @@ permits prereleases when a final release is unavailable. The dependency audit an
 on Ubuntu with Python 3.11, 3.14, and 3.15. Python 3.12 is supported by the 3.11 floor but is not
 a CI matrix entry.
 Keep code compatible with 3.11: mypy checks `python_version = "3.11"` and Ruff targets `py311`.
+
+### Dependencies
+
+Runtime dependencies are pure Python, so `pipx install yojo` needs no compiler or system packages:
+
+| Package | Used for |
+|---------|----------|
+| `httpx` | HTTPS client with verified TLS and no redirects |
+| `truststore` | the OS certificate store for TLS verification |
+| `keyring` | the native OS keyring (the only place credentials live) |
+| `jsonschema` | validating `--input` documents against the published schemas |
+| `PyYAML` | the safe `yojo.yaml` loader |
+| `textual` | the `yojo setup` terminal app; imported only when the app opens |
+
+The `dev` extra adds the lint, type, test, build, and audit tools. The `docs` extra pins MkDocs,
+Material, and the GitHub alerts plugin to the versions CI tests. Two tools outside Python are
+needed only for docs work: [lychee](https://github.com/lycheeverse/lychee) for the link check and
+[VHS](https://github.com/charmbracelet/vhs) (with `ttyd` and `ffmpeg`) to re-record the README
+demo. CI pins both versions in `.github/workflows/ci.yml`.
 
 ## Architecture
 
@@ -116,6 +139,20 @@ Tests never touch a real server or keyring. [`tests/conftest.py`](../tests/conft
   CI runs `--check` on Ubuntu with Python 3.14 and the Textual and Rich versions pinned in
   `.github/workflows/ci.yml`; regenerate with those versions. Review the images after any change
   to the app's layout or text.
+- `python scripts/capture_command_examples.py --write` runs every example in
+  [`docs/examples/commands.json`](examples/commands.json) through the real CLI against fixture
+  servers, once on a terminal (`NO_COLOR=1`) and once in JSON mode, and stores the exact output and
+  exit codes in [`docs/examples/captured-output.json`](examples/captured-output.json). `--check`
+  fails when any output, exit code, or argument list differs. Run it before
+  `scripts/generate_command_reference.py --write`, which renders those captures into
+  `docs/reference/commands.md`.
+- `python scripts/capture_demos.py --write` records the README demo from
+  [`docs/demos/one-call.tape`](demos/one-call.tape) with VHS. The tape types a real `yojo`
+  command that runs the actual parser, handlers, and renderer against the fixture server and an
+  in-memory keyring; no network, OS keyring, or token is involved. `--check` re-records it in a
+  temporary folder and fails when the tape, the fixture responses, the CLI output, or the
+  committed GIF drift, or when the GIF is over its duration or size budget. Use the VHS version
+  pinned in CI.
 
 > [!NOTE]
 > Fixture tests prove behavior against modeled responses, not live compatibility. Live results go
@@ -183,13 +220,30 @@ must be a runnable command or an exact edit (file, key, value).
 - Set `YOJO_REQUIRE_SITE_BUILD=1` to make the docs tests fail, instead of skip, when MkDocs is not
   installed. The CI docs job sets it.
 
-Before opening a pull request:
+- Every image has alt text that says what it shows, and every theme-specific image comes as a
+  pair marked `#gh-light-mode-only` and `#gh-dark-mode-only`. Recordings and screenshots come only
+  from the capture scripts and the fixture server, never from a real instance.
+
+Before opening a pull request, run every check in [Development setup](#development-setup). The
+docs-specific ones are:
 
 ```bash
+python scripts/capture_command_examples.py --check
 python scripts/generate_command_reference.py --check
-python -m mkdocs build --strict
+python scripts/capture_setup.py --check
+python scripts/capture_demos.py --check
+NO_MKDOCS_2_WARNING=1 python -m mkdocs build --strict
 lychee --config lychee.toml README.md AGENTS.md 'docs/**/*.md'
 ```
+
+### Documentation site
+
+[`.github/workflows/pages.yml`](../.github/workflows/pages.yml) builds the site with
+`mkdocs build --strict` from the same `docs/` folder after CI succeeds on the current `main`
+commit. A manual run checks for successful CI on that exact commit before building. Only its
+deploy job gets `pages: write` and `id-token: write`. Pull requests never deploy; the `docs` job
+in CI builds the same site for review. A repository owner must set *Settings > Pages > Build and
+deployment > Source* to **GitHub Actions** once before the first deployment can succeed.
 
 ## Release
 
@@ -241,6 +295,8 @@ One-time setup, done by a repository owner before the first release:
 
    The first successful publish creates the project and turns the pending publisher into a normal
    one. The earlier `atlass-cli` project on PyPI stays as it is; do not publish to it.
+6. Under *Settings > Pages*, set the source to **GitHub Actions** so the `Pages` workflow can
+   deploy the documentation site from `main`.
 
 Each release:
 
@@ -263,8 +319,8 @@ Each release:
    or re-push the tag. Approve the `pypi` environment when it asks.
 4. On PyPI, check that the release has one wheel and one sdist and that the project page shows the
    README, the MIT license, and the project links.
-5. In a clean shell, run `pipx install yojo` (or `uv tool install yojo`), then `yojo --version`,
-   `yojo commands`, and `yojo schema 'jira issue create'`.
+5. In a clean shell, run `pipx install yojo` (or `uv tool install yojo`), then
+   `yojo --json commands` (check `data.version`) and `yojo schema 'jira issue create'`.
 6. After the first release only, once step 5 works: in a pull request, change the install section
    of `docs/getting-started.md` to say the package is available on PyPI, and recheck that the
    README's package-first install steps work as written.

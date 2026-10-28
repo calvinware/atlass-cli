@@ -89,6 +89,7 @@ nav:
       - Configuration reference: configuration.md
   - Contributors:
       - Contributing: contributing.md
+      - 0.1.0 release notes (draft): release-notes-0.1.0.md
   - Reference:
       - Commands: reference/commands.md
       - Errors: reference/errors.md

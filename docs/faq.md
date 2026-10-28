@@ -30,17 +30,21 @@ review it as described in [Moving from `atl.yaml`](configuration.md#moving-from-
 <details>
 <summary><strong>Does <code>yojo</code> work with Atlassian Cloud?</strong></summary>
 
-No. It targets Jira Data Center 9+ and Confluence Data Center 7.9+ and uses only Data Center REST
-endpoints.
+No, for none of the three products. `yojo` targets Jira Data Center 9+, Confluence Data Center
+7.9+, and Bitbucket Data Center (REST 1.0, token login), and uses only Data Center REST endpoints.
+Jira Cloud, Confluence Cloud, and Bitbucket Cloud are out of scope.
 
 </details>
 
 <details>
 <summary><strong>Has it been tested against a live Data Center instance?</strong></summary>
 
-Not yet. The automated tests use fixtures that model documented Data Center responses. They do not
-prove live compatibility. The README's live compatibility checklist records each check as
-`unverified` until someone runs it against a disposable instance.
+Not yet. The automated tests, the command reference output, the setup screenshots, and the README
+demo all run against a fixture server that models documented Data Center responses for Jira,
+Confluence, and Bitbucket. They show what `yojo` does with those responses; they do not prove
+live compatibility with any server version. The README's
+[live compatibility checklist](../README.md#live-compatibility-checklist) records each check as
+`unverified` until someone runs it against a disposable instance and records the version.
 
 </details>
 

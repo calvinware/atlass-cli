@@ -12,3 +12,11 @@ no_progress = true
 # Only 2xx counts as success. Rate limits (429) and other 4xx fail the check.
 accept = ["200..=299"]
 
+# The README uses absolute main-branch URLs so PyPI can resolve them. Files added in a pull request
+# do not exist on main until it merges, so these URLs are not fetched here; instead
+# tests/test_docs.py (test_readme_link_targets_are_absolute_repository_files) maps each one to a
+# file in the checkout and fails when it is missing.
+exclude = [
+  '^https://raw\.githubusercontent\.com/calvinware/yojo/main/',
+  '^https://github\.com/calvinware/yojo/blob/main/',
+]
