@@ -1422,6 +1422,13 @@ def main(argv: list[str] | None = None, runtime: Runtime | None = None) -> int:
     except (OSError, ValueError):
         is_tty = False
     rt.json_mode = "--json" in options or not is_tty
+    if (
+        command_path(options) == "setup"
+        and not any(token in ("-h", "--help") for token in options)
+        and not interactive_terminal(rt)
+    ):
+        # No one can use the app here, so the refusal goes to a caller reading JSON.
+        rt.json_mode = True
     envelope, exit_code = outcome(tokens, rt)
     try:
         if rt.json_mode:

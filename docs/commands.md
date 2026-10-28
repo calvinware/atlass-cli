@@ -17,6 +17,9 @@ JSON object to stdout in JSON mode and exits with one of the codes in the
 | JSON | `--json`, or stdout is not a terminal (piped, redirected, captured by a program) | exactly one compact JSON object on one line, ASCII-escaped, no color |
 | Terminal | stdout is a terminal and `--json` is not given | the same envelope rendered for people: aligned tables, plain-language status, the next step, a link after a write |
 
+`yojo setup` also answers in JSON when stdin is not a terminal or `TERM=dumb`, because the setup
+app cannot run there: one `usage_error` envelope (exit 2) listing the step-by-step commands.
+
 The exit code is the same in both modes. `NO_COLOR` (any value) or `TERM=dumb` turns color off. In
 a terminal, a write first prints `Sending: ...` to stderr, naming what will change, just before the
 request goes out. A refused write says plainly that nothing was sent. Running `yojo` with no

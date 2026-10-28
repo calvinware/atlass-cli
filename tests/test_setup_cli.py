@@ -27,6 +27,12 @@ SUMMARY = {
 }
 
 
+def needs_terminal_envelope() -> dict[str, Any]:
+    from yojo.cli import _setup_needs_terminal
+
+    return _setup_needs_terminal().envelope()
+
+
 def launcher(calls: list[Runtime]) -> Any:
     def launch(rt: Runtime) -> dict[str, Any]:
         calls.append(rt)
@@ -74,16 +80,16 @@ def test_setup_without_a_usable_terminal_is_one_usage_envelope(
     )
     assert code == ExitCode.INPUT
     assert calls == []
-    if not stdout_tty or "--json" in argv:
-        lines = out.splitlines()
-        assert len(lines) == 1
-        error = json.loads(lines[0])["error"]
-        assert error["code"] == "usage_error"
-        assert "yojo login" in error["fix"] and "init" in error["fix"]
-        assert "agent install" in error["fix"]
-        assert error["details"]["steps"][0].startswith("yojo login")
-    else:
-        assert "needs an interactive terminal" in out
+    lines = out.splitlines()
+    assert len(lines) == 1
+    assert lines[0] == json.dumps(needs_terminal_envelope(), separators=(",", ":"))
+    envelope = json.loads(lines[0])
+    assert envelope["ok"] is False
+    error = envelope["error"]
+    assert error["code"] == "usage_error"
+    assert "yojo login" in error["fix"] and "init" in error["fix"]
+    assert "agent install" in error["fix"]
+    assert error["details"]["steps"][0].startswith("yojo login")
     assert harness.server.requests == []
     assert list(harness.tmp_path.iterdir()) == []
 
@@ -192,6 +198,56 @@ def test_piped_setup_prints_one_json_line_and_never_imports_textual(tmp_path: Pa
         assert len(lines) == 1
         assert json.loads(lines[0])["error"]["code"] == "usage_error"
         assert done.stderr.decode().endswith("textual-absent")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="needs a POSIX pseudo-terminal")
+@pytest.mark.parametrize(("stdin_closed", "term"), [(True, "xterm-256color"), (False, "dumb")])
+def test_unusable_terminal_prints_one_json_line_and_never_imports_textual(
+    tmp_path: Path, stdin_closed: bool, term: str
+) -> None:
+    """stdout is a terminal, but stdin is not one or TERM=dumb: the app cannot run there."""
+    pty = pytest.importorskip("pty")
+    import select
+
+    script = (
+        "import sys\n"
+        "from yojo.cli import main\n"
+        "code = main(['setup'])\n"
+        "sys.stderr.write('textual-loaded' if 'textual' in sys.modules else 'textual-absent')\n"
+        "raise SystemExit(code)\n"
+    )
+    env = _env(tmp_path)
+    env["TERM"] = term
+    parent, child = pty.openpty()
+    stdin_parent, stdin_child = pty.openpty()
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed interpreter and arguments
+            [sys.executable, "-c", script],
+            cwd=tmp_path,
+            env=env,
+            stdin=subprocess.DEVNULL if stdin_closed else stdin_child,
+            stdout=child,
+            stderr=subprocess.PIPE,
+            timeout=60,
+            check=False,
+        )
+        # The terminal stays open here while it is drained: some systems drop unread output
+        # once every writer has closed it.
+        output = b""
+        while select.select([parent], [], [], 0.5)[0]:
+            chunk = os.read(parent, 65536)
+            if not chunk:
+                break
+            output += chunk
+    finally:
+        for fd in (parent, child, stdin_parent, stdin_child):
+            os.close(fd)
+    assert done.returncode == 2, done
+    lines = output.decode().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0]) == needs_terminal_envelope()
+    assert done.stderr.decode().endswith("textual-absent")
+    assert list(tmp_path.iterdir()) == []
 
 
 def _pty_session(
