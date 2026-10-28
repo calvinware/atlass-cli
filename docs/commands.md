@@ -27,7 +27,7 @@ command returns a `usage_error` envelope (exit 2) that points at `yojo commands`
 | Option | Meaning |
 |--------|---------|
 | `--json` | Print the JSON envelope even on a terminal. Agents and scripts should always pass it. |
-| `--base-url URL` | The Jira or Confluence HTTPS root for this call. Works with no `yojo.yaml`. If a `yojo.yaml` sets a different URL for that service, the call is refused with `input_invalid` and nothing is sent. |
+| `--base-url URL` | The Jira, Confluence, or Bitbucket HTTPS root for this call. Works with no `yojo.yaml`. If a `yojo.yaml` sets a different URL for that service, the call is refused with `input_invalid` and nothing is sent. |
 | `--config PATH` | Use this `yojo.yaml` instead of searching from the current directory upward. The file must exist. |
 
 ## Discovery
@@ -41,12 +41,13 @@ command returns a `usage_error` envelope (exit 2) that points at `yojo commands`
 ## Authentication
 
 ```
-yojo login --service jira|confluence|all [--base-url URL] [--auth pat|basic]
+yojo login --service jira|confluence|bitbucket|all [--base-url URL] [--auth pat|basic]
            [--username NAME] [--token-stdin | --password-stdin]
 ```
 
-- The URL comes from `--base-url` or from `yojo.yaml`. `--service all` uses the URLs in
-  `yojo.yaml`; with `--base-url`, log in to one service at a time.
+- The URL comes from `--base-url` or from `yojo.yaml`. `--service all` means Jira and Confluence
+  and uses the URLs in `yojo.yaml`; with `--base-url`, log in to one service at a time. Log in to
+  Bitbucket on its own with `--service bitbucket`.
 - The default `--auth` is `pat`, which sends `Authorization: Bearer`. `basic` sends HTTP Basic
   with `--username`.
 - Secrets are read from stdin (`--token-stdin` / `--password-stdin`, one line per service) or from
@@ -56,8 +57,13 @@ yojo login --service jira|confluence|all [--base-url URL] [--auth pat|basic]
   `{"prompt": {"kind": "token", "service": "jira", "message": "..."}}`. Only the result goes to
   stdout. Without a terminal, a stdin flag is required.
 - The credential is checked first against `GET /rest/api/2/myself` (Jira) or
-  `GET /rest/api/user/current` (Confluence; an anonymous user is refused). It is stored only if
-  the check passes.
+  `GET /rest/api/user/current` (Confluence; an anonymous user is refused). For Bitbucket, two
+  checks must pass: `GET /rest/api/1.0/application-properties` must identify Bitbucket (this
+  endpoint answers without a login, so it cannot prove the token on its own), and
+  `GET /rest/api/1.0/profile/recent/repos?limit=1`, which answers only for a signed-in user, must
+  accept the token. Bitbucket does not report a username there, so `user` is `null` and `version`
+  shows the Bitbucket version. Bitbucket takes a token only; `--auth basic` is refused. The
+  credential is stored only if every check passes.
 - The OS keyring entry (service name `yojo`) is keyed by service and normalized base URL, so the
   same login works with or without `yojo.yaml` as long as the URL matches. Only native backends
   are allowed: macOS Keychain, Windows Credential Manager, or Linux Secret Service/KWallet. There
@@ -71,7 +77,10 @@ yojo login --service jira|confluence|all [--base-url URL] [--auth pat|basic]
 
 ## Config
 
-`yojo config check` is a read-only drift report for `yojo.yaml`. It needs a config file. See
+`yojo config check` is a read-only drift report for `yojo.yaml`. It needs a config file. It checks
+Jira when a `jira` section is present, and when a `bitbucket` section is present it checks that the
+URL answers as Bitbucket Data Center and that the stored token is accepted. A Bitbucket-only file
+works. `--base-url` applies to Jira when Jira is configured, otherwise to Bitbucket. See
 [configuration](configuration.md#drift-checks).
 
 ## Jira
@@ -239,6 +248,54 @@ submitted `title`, and an integer `version.number` equal to `expected_version + 
 response, including an empty or non-JSON body, is `outcome_unknown` (exit 6) with a fix to run
 `yojo confluence page read ID --full` and compare. `yojo` never fills in a missing title or version.
 
+## Bitbucket
+
+Bitbucket Data Center only, through REST 1.0 under the configured context path. A repository is
+always `PROJECT/slug`, in arguments and in results. See the
+[Bitbucket guide](guides/bitbucket.md) for tasks.
+
+| Command | Main inputs | Result |
+|---------|-------------|--------|
+| `yojo bitbucket repo list [--project PROJECT]` | `--start`, `--limit N≤100` (default 20) | `repos[]` (`repo`, `name`, `url`), `next_start` |
+| `yojo bitbucket repo get PROJECT/slug` | — | `name`, `state`, `public`, `default_branch`, `clone_http`, `clone_ssh`, `url` |
+| `yojo bitbucket branch list --repo PROJECT/slug` | `--filter TEXT`, `--start`, `--limit` | `branches[]` (`name`, `default`, `commit`), `next_start` |
+| `yojo bitbucket pr list --repo PROJECT/slug` | `--state OPEN\|MERGED\|DECLINED\|ALL` (any case, default OPEN), `--start`, `--limit` | `pull_requests[]` (`id`, `title`, `state`, `source`, `target`, `author`, `updated`), `next_start` |
+| `yojo bitbucket pr get ID --repo PROJECT/slug` | `--full` | `title`, `state`, `source`, `target`, `author`, `reviewers[]`, `description`, `truncated`, `more`, `url` |
+| `yojo bitbucket pr diff ID --repo PROJECT/slug` | `--path FILE`, `--full` | `files[]`, `diff` (unified), `truncated`, `server_truncated`, `truncated_files`, `complete`, `more`, `url` |
+| `yojo bitbucket pr create --repo PROJECT/slug --source BRANCH --target BRANCH --title TEXT` | `--description`, or `--input -` | `id`, `title`, `source`, `target`, `state`, `url` |
+| `yojo bitbucket pr comment ID --repo PROJECT/slug --body TEXT` | or `--body-file PATH\|-` (UTF-8 text, max 1 MiB) | `comment_id`, `url` |
+
+Every list returns Bitbucket's own `nextPageStart` as `next_start`; `yojo` never computes it as
+`start + limit`, because Bitbucket may skip items you cannot see. A page that is not the last but
+has a missing, repeating, or backward cursor, more items than asked for, or a different `start`
+fails with `response_invalid` (exit 6). Pull request titles in a list are shortened to keep the page
+small; `pr get` shows the full title.
+
+`pr diff` uses Bitbucket's structured diff and renders a unified diff. Without `--full` it keeps
+about 2000 characters, cut at a line end, and the first 10 changed files. `truncated` says `yojo`
+cut it; `server_truncated` and `truncated_files` say Bitbucket did. `complete` is `true` only when
+neither happened, and `more` is the command for the rest: `--full`, or `--path FILE --full` for a
+file Bitbucket cut. If a diff is too large to fetch at all, the error names the `--path` form.
+
+`pr create` and `pr comment` check everything first and send nothing when a check fails or cannot
+be completed:
+
+- `pr create`: a non-blank title of at most 255 characters; the repository is visible to you; the
+  source and target branches each resolve to exactly one branch (exact case first, then a unique
+  any-case match; a near miss is suggested and used in `retry`); the branches differ; and no open
+  pull request already goes from that source to that target. The duplicate check reads every page
+  of open pull requests from the source branch, up to 1000; if it cannot finish, the check is
+  `unverified` and nothing is sent. Values from `--input` get no command-line `retry`.
+- `pr comment`: a non-blank comment, the pull request exists, and it has no comment with exactly
+  the same text (scanning up to 1000 activity entries; otherwise `unverified`).
+
+A create succeeds only when Bitbucket's response has a pull request ID, the requested source and
+target branches in the requested repository, and the submitted title. A comment succeeds only when
+the response has a comment ID and the submitted text. A rejection (for example 409 when Bitbucket
+already has an open pull request for the pair) shows Bitbucket's `errors[].message` in
+`details.messages`, or in `details.fields` under the field it names. Approving, merging, and
+declining pull requests are left to people; there are no commands for them.
+
 ## Writes and retries
 
 No write is ever retried. A write that was dispatched but whose result is unknown (timeout,
@@ -257,6 +314,8 @@ again, using the method for each write:
 | `jira transition` | Run `details.recovery_argv.inspect` (`yojo jira issue get KEY`) for the status, then `details.recovery_argv.requirements`. For a `pre_edit` edit, check the edited field values. |
 | `confluence page create` | Run the searches in `error.fix` (`details.recovery_argv`): first `space = "KEY" AND type = page AND (title = "<submitted>" OR title = "<trimmed>")`, then, if that finds nothing, the space's newest pages (`space = "KEY" AND type = page ORDER BY created DESC`), following `next_start` through every result page. Read each plausible candidate with `yojo confluence page read ID --full` and compare `title`, `space_key`, `ancestors`, and `body_storage` with what you sent. An empty exact-title search alone does not show the page was not created. Results can shift between pages, so a scan with no match does not establish absence either: ask a human to confirm the page does not exist before running the create again. |
 | `confluence page update` | `yojo confluence page read ID --full` and compare `version`, `title`, and `body_storage` with what you sent. |
+| `bitbucket pr create` | Run `details.recovery_argv.list` (`yojo bitbucket pr list --repo PROJECT/slug`) and look for your source, target, and title; if the response named an ID, also `details.recovery_argv.get`. Running the same create again is refused while an open pull request for that branch pair exists. |
+| `bitbucket pr comment` | Open the pull request link in `error.fix` and look for a comment matching what you sent. Running the same command again is refused while an identical comment is there. |
 
 Commands inside `error.fix` are quoted for POSIX shells (sh, bash, zsh) only. In `cmd.exe`,
 PowerShell, or a program, do not paste them; pass each list in `details.recovery_argv` (or

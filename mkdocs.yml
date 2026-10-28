@@ -80,6 +80,7 @@ nav:
       - Getting started: getting-started.md
       - Jira workflows: guides/jira-workflows.md
       - Confluence pages: guides/confluence.md
+      - Bitbucket pull requests: guides/bitbucket.md
       - Troubleshooting: troubleshooting.md
   - AI agents:
       - Agent guide: agents.md

@@ -2,7 +2,7 @@
 
 # Command reference
 
-`yojo` has **17 commands**. This page is generated from `yojo commands`, `yojo schema '<command>'`, and the checked examples in [`docs/examples/commands.json`](../examples/commands.json). The JSON Schemas remain the source of truth; run `yojo schema '<command>'` for the exact contract.
+`yojo` has **25 commands**. This page is generated from `yojo commands`, `yojo schema '<command>'`, and the checked examples in [`docs/examples/commands.json`](../examples/commands.json). The JSON Schemas remain the source of truth; run `yojo schema '<command>'` for the exact contract.
 
 > [!NOTE]
 > Examples use synthetic data (`EXAMPLE-*` keys, `*.example.test` hosts) and were captured from real runs against test fixtures. They are pretty-printed here; when stdout is piped or `--json` is given, `yojo` prints each envelope on one line. On a terminal it shows a readable view of the same envelope, with the same exit code. Invocations use POSIX shell syntax.
@@ -12,7 +12,7 @@ Every command accepts these options:
 | Option | Meaning |
 |--------|---------|
 | `--json` | Print the JSON envelope even on a terminal. Piped output is always JSON. |
-| `--base-url URL` | Jira or Confluence HTTPS root for this call; works without yojo.yaml. |
+| `--base-url URL` | Jira, Confluence, or Bitbucket HTTPS root for this call; works without yojo.yaml. |
 | `--config PATH` | Use this yojo.yaml instead of searching the current directory upward. |
 
 Every command produces exactly one envelope and exits with one of these codes:
@@ -35,8 +35,8 @@ Each error code, with its meaning and fix, is in the [error catalog](errors.md).
 |---------|---------|------------|
 | [`yojo commands`](#yojo-commands) | List every command with its signature and an example. Offline. | no |
 | [`yojo schema`](#yojo-schema) | Print argument, input, success, and error JSON Schemas for a command. Offline. | no |
-| [`yojo login`](#yojo-login) | Check a personal access token (or username and password) against the service and store it in the OS keyring for that URL. Secrets come from stdin or a hidden prompt, never arguments. | no |
-| [`yojo config check`](#yojo-config-check) | Compare yojo.yaml aliases, create rules, and transition rules with live Jira fields, projects, and statuses. Read-only. | no |
+| [`yojo login`](#yojo-login) | Check a personal access token (or username and password) against the service and store it in the OS keyring for that URL. Secrets come from stdin or a hidden prompt, never arguments. Bitbucket takes a token only; `all` means Jira and Confluence. | no |
+| [`yojo config check`](#yojo-config-check) | Compare yojo.yaml aliases, create rules, and transition rules with live Jira fields, projects, and statuses, and check that a configured Bitbucket answers and accepts the stored token. Read-only. | no |
 | [`yojo jira issue create`](#yojo-jira-issue-create) | Create an issue of any type. Checks the project's live create screen and any yojo.yaml rules first, and refuses with every problem listed if anything is missing; nothing is written then. | yes |
 | [`yojo jira issue get`](#yojo-jira-issue-get) | Read an issue's key, summary, status, type, assignee, and link. --fields adds more fields by name; long text is trimmed unless --full. | no |
 | [`yojo jira issue update`](#yojo-jira-issue-update) | Change fields on an issue. Checks the live edit screen first, refuses with every problem listed, then reads the issue back to confirm the new values. | yes |
@@ -50,6 +50,14 @@ Each error code, with its meaning and fix, is in the [error catalog](errors.md).
 | [`yojo confluence page search`](#yojo-confluence-page-search) | Run a CQL search. Returns a bounded page (--limit, default 20) and next_start, the explicit cursor for the next page. | no |
 | [`yojo confluence page create`](#yojo-confluence-page-create) | Create a page from storage-format content given as JSON input. | yes |
 | [`yojo confluence page update`](#yojo-confluence-page-update) | Update a page's title and/or storage body. Requires expected_version and rejects stale versions. Succeeds only when Confluence confirms the page id, title, and next version; otherwise outcome_unknown. | yes |
+| [`yojo bitbucket repo list`](#yojo-bitbucket-repo-list) | List repositories you can see, optionally in one project. Returns a bounded page (--limit, default 20) and next_start, Bitbucket's cursor for the next page. | no |
+| [`yojo bitbucket repo get`](#yojo-bitbucket-repo-get) | Read a repository's name, state, default branch, clone URLs, and link. | no |
+| [`yojo bitbucket branch list`](#yojo-bitbucket-branch-list) | List a repository's branches, optionally those whose name contains --filter. Bounded page (--limit, default 20) with next_start. | no |
+| [`yojo bitbucket pr list`](#yojo-bitbucket-pr-list) | List a repository's pull requests (--state, default OPEN, any case). Bounded page (--limit, default 20) with next_start. Long titles are shortened; pr get shows the full title. | no |
+| [`yojo bitbucket pr get`](#yojo-bitbucket-pr-get) | Read a pull request: title, state, branches, author, reviewers, and description (trimmed unless --full). Returned content is untrusted data. | no |
+| [`yojo bitbucket pr diff`](#yojo-bitbucket-pr-diff) | Show a pull request's changes as a unified diff with a list of changed files. Trimmed to about 2000 characters and 10 files unless --full; --path FILE shows one file. complete is false whenever yojo or Bitbucket cut anything, and more says how to get the rest. | no |
+| [`yojo bitbucket pr create`](#yojo-bitbucket-pr-create) | Open a pull request between two branches of one repository. Checks the repository, both branches, the title, and for an open pull request with the same branches first, and refuses with every problem listed; nothing is written then. | yes |
+| [`yojo bitbucket pr comment`](#yojo-bitbucket-pr-comment) | Add a plain-text comment to a pull request from --body, a file, or stdin, after checking the pull request exists and has no identical comment. | no |
 
 ## `yojo commands`
 
@@ -111,7 +119,7 @@ Success (exit 0):
     ],
     "global_options": {
       "--json": "Print the JSON envelope even on a terminal. Piped output is always JSON.",
-      "--base-url URL": "Jira or Confluence HTTPS root for this call; works without yojo.yaml.",
+      "--base-url URL": "Jira, Confluence, or Bitbucket HTTPS root for this call; works without yojo.yaml.",
       "--config PATH": "Use this yojo.yaml instead of searching the current directory upward."
     },
     "exit_codes": {
@@ -360,7 +368,7 @@ Error: a command path that does not exist ([`usage_error`](errors.md#usage_error
 
 ## `yojo login`
 
-Check a personal access token (or username and password) against the service and store it in the OS keyring for that URL. Secrets come from stdin or a hidden prompt, never arguments.
+Check a personal access token (or username and password) against the service and store it in the OS keyring for that URL. Secrets come from stdin or a hidden prompt, never arguments. Bitbucket takes a token only; `all` means Jira and Confluence.
 
 ```text
 yojo login --service SERVICE [--auth AUTH] [--username USERNAME] [--token-stdin | --password-stdin] [--config PATH] [--base-url URL] [--json]
@@ -370,7 +378,7 @@ yojo login --service SERVICE [--auth AUTH] [--username USERNAME] [--token-stdin 
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `service` | `--service SERVICE` | one of `jira`, `confluence`, `all` | yes |   |
+| `service` | `--service SERVICE` | one of `jira`, `confluence`, `bitbucket`, `all` | yes |   |
 | `auth` | `--auth AUTH` | one of `pat`, `basic` | no | default `pat` |
 | `username` | `--username USERNAME` | string | no | Basic auth username (not secret). |
 | `token_stdin` | `--token-stdin` | boolean | no |   |
@@ -444,7 +452,7 @@ Error: the only keyring backend is a plaintext file store ([`keyring_unavailable
 
 ## `yojo config check`
 
-Compare yojo.yaml aliases, create rules, and transition rules with live Jira fields, projects, and statuses. Read-only.
+Compare yojo.yaml aliases, create rules, and transition rules with live Jira fields, projects, and statuses, and check that a configured Bitbucket answers and accepts the stored token. Read-only.
 
 ```text
 yojo config check [--config PATH] [--base-url URL] [--json]
@@ -2030,4 +2038,834 @@ Error: someone else saved version 4 after your `page read`; nothing is written (
 | 3 | [`auth_failed`](errors.md#auth_failed), [`auth_missing`](errors.md#auth_missing), [`forbidden`](errors.md#forbidden), [`keyring_unavailable`](errors.md#keyring_unavailable) |
 | 4 | [`requirements_unmet`](errors.md#requirements_unmet) |
 | 5 | [`conflict`](errors.md#conflict), [`not_found`](errors.md#not_found), [`remote_limit_exceeded`](errors.md#remote_limit_exceeded), [`remote_validation`](errors.md#remote_validation), [`version_conflict`](errors.md#version_conflict) |
+| 6 | [`internal_error`](errors.md#internal_error), [`interrupted`](errors.md#interrupted), [`metadata_incomplete`](errors.md#metadata_incomplete), [`outcome_unknown`](errors.md#outcome_unknown), [`rate_limited`](errors.md#rate_limited), [`redirect_refused`](errors.md#redirect_refused), [`response_invalid`](errors.md#response_invalid), [`service_error`](errors.md#service_error), [`tls_error`](errors.md#tls_error), [`transport_error`](errors.md#transport_error) |
+
+## `yojo bitbucket repo list`
+
+List repositories you can see, optionally in one project. Returns a bounded page (--limit, default 20) and next_start, Bitbucket's cursor for the next page.
+
+```text
+yojo bitbucket repo list [--project PROJECT] [--start START] [--limit LIMIT] [--config PATH] [--base-url URL] [--json]
+```
+
+**Arguments**
+
+| Argument | CLI | Type | Required | Notes |
+|---|---|---|---|---|
+| `project` | `--project PROJECT` | string | no | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}(?![\s\S])` |
+| `start` | `--start START` | integer | no | min 0; default `0` |
+| `limit` | `--limit LIMIT` | integer | no | min 1; max 100; default `20` |
+
+**Input**
+
+No JSON input.
+
+**Output**
+
+Success `data` fields:
+
+| Field | Type | Always present |
+|---|---|---|
+| `project` | string or null | yes |
+| `start` | integer | yes |
+| `limit` | integer | yes |
+| `next_start` | integer or null | yes |
+| `content_trust` | constant `untrusted` | yes |
+| `repos` | array of objects | yes |
+
+**Example**
+
+```bash
+yojo bitbucket repo list --project PROJ
+```
+
+Success (exit 0):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "project": "PROJ",
+    "start": 0,
+    "limit": 20,
+    "next_start": 2,
+    "repos": [
+      {
+        "repo": "PROJ/web",
+        "name": "web",
+        "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/browse"
+      },
+      {
+        "repo": "PROJ/api",
+        "name": "api",
+        "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/api/browse"
+      }
+    ],
+    "content_trust": "untrusted"
+  }
+}
+```
+
+Error: Bitbucket answers a page that is not the last one without a usable `nextPageStart`; yojo refuses to guess the next cursor ([`response_invalid`](errors.md#response_invalid), exit 6):
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "response_invalid",
+    "message": "Bitbucket returned a repository list page without a usable next cursor, so the list cannot continue safely.",
+    "fix": "Run the command again. If it repeats, narrow it (a smaller --limit, or --filter for branches) and check that no proxy rewrites Bitbucket responses.",
+    "details": {
+      "what": "repository list page",
+      "start": 0
+    }
+  }
+}
+```
+
+**Error codes**
+
+| Exit | Error codes |
+|------|-------------|
+| 2 | [`config_invalid`](errors.md#config_invalid), [`config_legacy`](errors.md#config_legacy), [`config_not_found`](errors.md#config_not_found), [`input_invalid`](errors.md#input_invalid), [`service_not_configured`](errors.md#service_not_configured), [`usage_error`](errors.md#usage_error) |
+| 3 | [`auth_failed`](errors.md#auth_failed), [`auth_missing`](errors.md#auth_missing), [`forbidden`](errors.md#forbidden), [`keyring_unavailable`](errors.md#keyring_unavailable) |
+| 5 | [`not_found`](errors.md#not_found) |
+| 6 | [`internal_error`](errors.md#internal_error), [`interrupted`](errors.md#interrupted), [`rate_limited`](errors.md#rate_limited), [`redirect_refused`](errors.md#redirect_refused), [`response_invalid`](errors.md#response_invalid), [`service_error`](errors.md#service_error), [`tls_error`](errors.md#tls_error), [`transport_error`](errors.md#transport_error) |
+
+## `yojo bitbucket repo get`
+
+Read a repository's name, state, default branch, clone URLs, and link.
+
+```text
+yojo bitbucket repo get PROJECT/slug [--config PATH] [--base-url URL] [--json]
+```
+
+**Arguments**
+
+| Argument | CLI | Type | Required | Notes |
+|---|---|---|---|---|
+| `repo` | `PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
+
+**Input**
+
+No JSON input.
+
+**Output**
+
+Success `data` fields:
+
+| Field | Type | Always present |
+|---|---|---|
+| `repo` | string | yes |
+| `name` | string | yes |
+| `state` | string or null | yes |
+| `public` | boolean | yes |
+| `default_branch` | string or null | yes |
+| `clone_http` | string or null | yes |
+| `clone_ssh` | string or null | yes |
+| `url` | string | yes |
+| `content_trust` | constant `untrusted` | yes |
+
+**Example**
+
+```bash
+yojo bitbucket repo get PROJ/web
+```
+
+Success (exit 0):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "repo": "PROJ/web",
+    "name": "web",
+    "state": "AVAILABLE",
+    "public": false,
+    "default_branch": "main",
+    "clone_http": "https://bitbucket.example.test/bitbucket/scm/proj/web.git",
+    "clone_ssh": "ssh://git@bitbucket.example.test:7999/proj/web.git",
+    "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/browse",
+    "content_trust": "untrusted"
+  }
+}
+```
+
+Error: the repository does not exist or your account cannot see it ([`not_found`](errors.md#not_found), exit 5):
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "not_found",
+    "message": "bitbucket returned 404 Not Found.",
+    "fix": "Check the key or ID and that your account can view it.",
+    "details": {
+      "service": "bitbucket",
+      "status": 404,
+      "fields": {},
+      "messages": [
+        "Repository PROJ/web does not exist."
+      ]
+    }
+  }
+}
+```
+
+**Error codes**
+
+| Exit | Error codes |
+|------|-------------|
+| 2 | [`config_invalid`](errors.md#config_invalid), [`config_legacy`](errors.md#config_legacy), [`config_not_found`](errors.md#config_not_found), [`input_invalid`](errors.md#input_invalid), [`service_not_configured`](errors.md#service_not_configured), [`usage_error`](errors.md#usage_error) |
+| 3 | [`auth_failed`](errors.md#auth_failed), [`auth_missing`](errors.md#auth_missing), [`forbidden`](errors.md#forbidden), [`keyring_unavailable`](errors.md#keyring_unavailable) |
+| 5 | [`not_found`](errors.md#not_found) |
+| 6 | [`internal_error`](errors.md#internal_error), [`interrupted`](errors.md#interrupted), [`rate_limited`](errors.md#rate_limited), [`redirect_refused`](errors.md#redirect_refused), [`response_invalid`](errors.md#response_invalid), [`service_error`](errors.md#service_error), [`tls_error`](errors.md#tls_error), [`transport_error`](errors.md#transport_error) |
+
+## `yojo bitbucket branch list`
+
+List a repository's branches, optionally those whose name contains --filter. Bounded page (--limit, default 20) with next_start.
+
+```text
+yojo bitbucket branch list --repo PROJECT/slug [--filter TEXT] [--start START] [--limit LIMIT] [--config PATH] [--base-url URL] [--json]
+```
+
+**Arguments**
+
+| Argument | CLI | Type | Required | Notes |
+|---|---|---|---|---|
+| `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
+| `filter` | `--filter TEXT` | string | no | min length 1; max length 255 |
+| `start` | `--start START` | integer | no | min 0; default `0` |
+| `limit` | `--limit LIMIT` | integer | no | min 1; max 100; default `20` |
+
+**Input**
+
+No JSON input.
+
+**Output**
+
+Success `data` fields:
+
+| Field | Type | Always present |
+|---|---|---|
+| `repo` | string | yes |
+| `filter` | string or null | yes |
+| `start` | integer | yes |
+| `limit` | integer | yes |
+| `next_start` | integer or null | yes |
+| `content_trust` | constant `untrusted` | yes |
+| `branches` | array of objects | yes |
+| `url` | string | yes |
+
+**Example**
+
+```bash
+yojo bitbucket branch list --repo PROJ/web --filter feature/
+```
+
+Success (exit 0):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "repo": "PROJ/web",
+    "filter": "feature/",
+    "start": 0,
+    "limit": 20,
+    "next_start": null,
+    "branches": [
+      {
+        "name": "feature/login",
+        "default": false,
+        "commit": "0a943a29376f2336b78312d99e65da17048951db"
+      },
+      {
+        "name": "feature/login-v2",
+        "default": false,
+        "commit": "c5d3f5a4bd2a8b7e36d5d2e1a1c7a4e2f9b0c111"
+      }
+    ],
+    "content_trust": "untrusted",
+    "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/branches"
+  }
+}
+```
+
+Error: `--repo web` without the project key; rejected before any request ([`usage_error`](errors.md#usage_error), exit 2):
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "usage_error",
+    "message": "yojo bitbucket branch list: argument --repo: must be a repository as PROJECT/slug, such as PROJ/web",
+    "fix": "Use `yojo bitbucket branch list --repo PROJECT/slug [--filter TEXT] [--start N] [--limit N]`, for example `yojo --json bitbucket branch list --repo PROJ/web --filter feature/`.",
+    "details": {
+      "usage": "yojo bitbucket branch list --repo PROJECT/slug [--filter TEXT] [--start N] [--limit N]"
+    }
+  }
+}
+```
+
+**Error codes**
+
+| Exit | Error codes |
+|------|-------------|
+| 2 | [`config_invalid`](errors.md#config_invalid), [`config_legacy`](errors.md#config_legacy), [`config_not_found`](errors.md#config_not_found), [`input_invalid`](errors.md#input_invalid), [`service_not_configured`](errors.md#service_not_configured), [`usage_error`](errors.md#usage_error) |
+| 3 | [`auth_failed`](errors.md#auth_failed), [`auth_missing`](errors.md#auth_missing), [`forbidden`](errors.md#forbidden), [`keyring_unavailable`](errors.md#keyring_unavailable) |
+| 5 | [`not_found`](errors.md#not_found) |
+| 6 | [`internal_error`](errors.md#internal_error), [`interrupted`](errors.md#interrupted), [`rate_limited`](errors.md#rate_limited), [`redirect_refused`](errors.md#redirect_refused), [`response_invalid`](errors.md#response_invalid), [`service_error`](errors.md#service_error), [`tls_error`](errors.md#tls_error), [`transport_error`](errors.md#transport_error) |
+
+## `yojo bitbucket pr list`
+
+List a repository's pull requests (--state, default OPEN, any case). Bounded page (--limit, default 20) with next_start. Long titles are shortened; pr get shows the full title.
+
+```text
+yojo bitbucket pr list --repo PROJECT/slug [--state OPEN|MERGED|DECLINED|ALL] [--start START] [--limit LIMIT] [--config PATH] [--base-url URL] [--json]
+```
+
+**Arguments**
+
+| Argument | CLI | Type | Required | Notes |
+|---|---|---|---|---|
+| `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
+| `state` | `--state OPEN|MERGED|DECLINED|ALL` | one of `OPEN`, `MERGED`, `DECLINED`, `ALL` | no | default `OPEN` |
+| `start` | `--start START` | integer | no | min 0; default `0` |
+| `limit` | `--limit LIMIT` | integer | no | min 1; max 100; default `20` |
+
+**Input**
+
+No JSON input.
+
+**Output**
+
+Success `data` fields:
+
+| Field | Type | Always present |
+|---|---|---|
+| `repo` | string | yes |
+| `state` | one of `OPEN`, `MERGED`, `DECLINED`, `ALL` | yes |
+| `start` | integer | yes |
+| `limit` | integer | yes |
+| `next_start` | integer or null | yes |
+| `content_trust` | constant `untrusted` | yes |
+| `pull_requests` | array of objects | yes |
+| `url` | string | yes |
+
+**Example**
+
+```bash
+yojo bitbucket pr list --repo PROJ/web --state open
+```
+
+`--state` takes OPEN, MERGED, DECLINED, or ALL in any case.
+
+Success (exit 0):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "repo": "PROJ/web",
+    "state": "OPEN",
+    "start": 0,
+    "limit": 20,
+    "next_start": null,
+    "pull_requests": [
+      {
+        "id": 42,
+        "title": "Fix login on Safari",
+        "state": "OPEN",
+        "source": "feature/login",
+        "target": "main",
+        "author": "Example User",
+        "updated": "2026-10-28T12:53:31Z"
+      }
+    ],
+    "content_trust": "untrusted",
+    "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests"
+  }
+}
+```
+
+Error: `--state closed`, which Bitbucket does not have; rejected before any request ([`usage_error`](errors.md#usage_error), exit 2):
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "usage_error",
+    "message": "yojo bitbucket pr list: argument --state: invalid choice",
+    "fix": "Use `yojo bitbucket pr list --repo PROJECT/slug [--state OPEN|MERGED|DECLINED|ALL] [--start N] [--limit N]`, for example `yojo --json bitbucket pr list --repo PROJ/web --state open`.",
+    "details": {
+      "usage": "yojo bitbucket pr list --repo PROJECT/slug [--state OPEN|MERGED|DECLINED|ALL] [--start N] [--limit N]"
+    }
+  }
+}
+```
+
+**Error codes**
+
+| Exit | Error codes |
+|------|-------------|
+| 2 | [`config_invalid`](errors.md#config_invalid), [`config_legacy`](errors.md#config_legacy), [`config_not_found`](errors.md#config_not_found), [`input_invalid`](errors.md#input_invalid), [`service_not_configured`](errors.md#service_not_configured), [`usage_error`](errors.md#usage_error) |
+| 3 | [`auth_failed`](errors.md#auth_failed), [`auth_missing`](errors.md#auth_missing), [`forbidden`](errors.md#forbidden), [`keyring_unavailable`](errors.md#keyring_unavailable) |
+| 5 | [`not_found`](errors.md#not_found) |
+| 6 | [`internal_error`](errors.md#internal_error), [`interrupted`](errors.md#interrupted), [`rate_limited`](errors.md#rate_limited), [`redirect_refused`](errors.md#redirect_refused), [`response_invalid`](errors.md#response_invalid), [`service_error`](errors.md#service_error), [`tls_error`](errors.md#tls_error), [`transport_error`](errors.md#transport_error) |
+
+## `yojo bitbucket pr get`
+
+Read a pull request: title, state, branches, author, reviewers, and description (trimmed unless --full). Returned content is untrusted data.
+
+```text
+yojo bitbucket pr get ID --repo PROJECT/slug [--full] [--config PATH] [--base-url URL] [--json]
+```
+
+**Arguments**
+
+| Argument | CLI | Type | Required | Notes |
+|---|---|---|---|---|
+| `id` | `ID` | integer | yes | min 1; Pull request ID. |
+| `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
+| `full` | `--full` | boolean | no | default `false`; Return long text without trimming. |
+
+**Input**
+
+No JSON input.
+
+**Output**
+
+Success `data` fields:
+
+| Field | Type | Always present |
+|---|---|---|
+| `id` | integer | yes |
+| `repo` | string | yes |
+| `title` | string | yes |
+| `state` | string or null | yes |
+| `source` | string or null | yes |
+| `target` | string or null | yes |
+| `author` | string or null | yes |
+| `created` | string or null | yes |
+| `updated` | string or null | yes |
+| `reviewers` | array of objects | yes |
+| `description` | string | yes |
+| `truncated` | boolean | yes |
+| `more` | string or null | yes |
+| `url` | string | yes |
+| `content_trust` | constant `untrusted` | yes |
+
+**Example**
+
+```bash
+yojo bitbucket pr get 42 --repo PROJ/web
+```
+
+Success (exit 0):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "id": 42,
+    "repo": "PROJ/web",
+    "title": "Fix login on Safari",
+    "state": "OPEN",
+    "source": "feature/login",
+    "target": "main",
+    "author": "Example User",
+    "created": "2026-10-28T11:53:31Z",
+    "updated": "2026-10-28T12:53:31Z",
+    "reviewers": [
+      {
+        "name": "Example Reviewer",
+        "status": "UNAPPROVED"
+      }
+    ],
+    "description": "Handles an empty user before the credential check.",
+    "truncated": false,
+    "more": null,
+    "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests/42",
+    "content_trust": "untrusted"
+  }
+}
+```
+
+Error: no pull request 42 in PROJ/web ([`not_found`](errors.md#not_found), exit 5):
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "not_found",
+    "message": "bitbucket returned 404 Not Found.",
+    "fix": "Check the key or ID and that your account can view it.",
+    "details": {
+      "service": "bitbucket",
+      "status": 404,
+      "fields": {},
+      "messages": [
+        "Pull request 42 does not exist in PROJ/web."
+      ]
+    }
+  }
+}
+```
+
+**Error codes**
+
+| Exit | Error codes |
+|------|-------------|
+| 2 | [`config_invalid`](errors.md#config_invalid), [`config_legacy`](errors.md#config_legacy), [`config_not_found`](errors.md#config_not_found), [`input_invalid`](errors.md#input_invalid), [`service_not_configured`](errors.md#service_not_configured), [`usage_error`](errors.md#usage_error) |
+| 3 | [`auth_failed`](errors.md#auth_failed), [`auth_missing`](errors.md#auth_missing), [`forbidden`](errors.md#forbidden), [`keyring_unavailable`](errors.md#keyring_unavailable) |
+| 5 | [`not_found`](errors.md#not_found) |
+| 6 | [`internal_error`](errors.md#internal_error), [`interrupted`](errors.md#interrupted), [`rate_limited`](errors.md#rate_limited), [`redirect_refused`](errors.md#redirect_refused), [`response_invalid`](errors.md#response_invalid), [`service_error`](errors.md#service_error), [`tls_error`](errors.md#tls_error), [`transport_error`](errors.md#transport_error) |
+
+## `yojo bitbucket pr diff`
+
+Show a pull request's changes as a unified diff with a list of changed files. Trimmed to about 2000 characters and 10 files unless --full; --path FILE shows one file. complete is false whenever yojo or Bitbucket cut anything, and more says how to get the rest.
+
+```text
+yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE] [--full] [--config PATH] [--base-url URL] [--json]
+```
+
+**Arguments**
+
+| Argument | CLI | Type | Required | Notes |
+|---|---|---|---|---|
+| `id` | `ID` | integer | yes | min 1; Pull request ID. |
+| `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
+| `path` | `--path FILE` | string | no | min length 1; max length 1024; Repository-relative file path, e.g. src/app.py. |
+| `full` | `--full` | boolean | no | default `false`; Return long text without trimming. |
+
+**Input**
+
+No JSON input.
+
+**Output**
+
+Success `data` fields:
+
+| Field | Type | Always present |
+|---|---|---|
+| `id` | integer | yes |
+| `repo` | string | yes |
+| `path` | string or null | yes |
+| `files_total` | integer | yes |
+| `files` | array of objects | yes |
+| `diff` | string | yes |
+| `diff_chars` | integer | yes |
+| `truncated` | boolean | yes |
+| `server_truncated` | boolean | yes |
+| `truncated_files` | array of strings | yes |
+| `complete` | boolean | yes |
+| `more` | string or null | yes |
+| `url` | string | yes |
+| `content_trust` | constant `untrusted` | yes |
+
+**Example**
+
+```bash
+yojo bitbucket pr diff 42 --repo PROJ/web --path src/app.py
+```
+
+Without `--path` the whole pull request is shown, trimmed unless `--full`. `complete` is false whenever yojo or Bitbucket cut anything; `more` is the command for the rest.
+
+Success (exit 0):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "id": 42,
+    "repo": "PROJ/web",
+    "path": "src/app.py",
+    "files_total": 1,
+    "files": [
+      {
+        "path": "src/app.py",
+        "old_path": null,
+        "change": "modified",
+        "added": 2,
+        "removed": 1
+      }
+    ],
+    "diff": "diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n@@ -10,2 +10,3 @@\n def login(user):\n-    return check(user)\n+    if not user:\n+        return False\n",
+    "diff_chars": 171,
+    "truncated": false,
+    "server_truncated": false,
+    "truncated_files": [],
+    "complete": true,
+    "more": null,
+    "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests/42/diff#src/app.py",
+    "content_trust": "untrusted"
+  }
+}
+```
+
+Error: a `--path` that leaves the repository; rejected before any request ([`usage_error`](errors.md#usage_error), exit 2):
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "usage_error",
+    "message": "yojo bitbucket pr diff: argument --path: must be a repository-relative file path such as src/a.py",
+    "fix": "Use `yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE] [--full]`, for example `yojo --json bitbucket pr diff 42 --repo PROJ/web --path src/app.py`.",
+    "details": {
+      "usage": "yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE] [--full]"
+    }
+  }
+}
+```
+
+**Error codes**
+
+| Exit | Error codes |
+|------|-------------|
+| 2 | [`config_invalid`](errors.md#config_invalid), [`config_legacy`](errors.md#config_legacy), [`config_not_found`](errors.md#config_not_found), [`input_invalid`](errors.md#input_invalid), [`service_not_configured`](errors.md#service_not_configured), [`usage_error`](errors.md#usage_error) |
+| 3 | [`auth_failed`](errors.md#auth_failed), [`auth_missing`](errors.md#auth_missing), [`forbidden`](errors.md#forbidden), [`keyring_unavailable`](errors.md#keyring_unavailable) |
+| 5 | [`not_found`](errors.md#not_found) |
+| 6 | [`internal_error`](errors.md#internal_error), [`interrupted`](errors.md#interrupted), [`rate_limited`](errors.md#rate_limited), [`redirect_refused`](errors.md#redirect_refused), [`response_invalid`](errors.md#response_invalid), [`service_error`](errors.md#service_error), [`tls_error`](errors.md#tls_error), [`transport_error`](errors.md#transport_error) |
+
+## `yojo bitbucket pr create`
+
+Open a pull request between two branches of one repository. Checks the repository, both branches, the title, and for an open pull request with the same branches first, and refuses with every problem listed; nothing is written then.
+
+```text
+yojo bitbucket pr create [--repo PROJECT/slug] [--source BRANCH] [--target BRANCH] [--title TEXT] [--description TEXT] [--input FILE] [--config PATH] [--base-url URL] [--json]
+```
+
+**Arguments**
+
+| Argument | CLI | Type | Required | Notes |
+|---|---|---|---|---|
+| `repo` | `--repo PROJECT/slug` | string | no | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
+| `source` | `--source BRANCH` | string | no | min length 1; max length 255; Branch name in the same repository, e.g. feature/login or refs/heads/main. |
+| `target` | `--target BRANCH` | string | no | min length 1; max length 255; Branch name in the same repository, e.g. feature/login or refs/heads/main. |
+| `title` | `--title TEXT` | string | no | min length 1; max length 255 |
+| `description` | `--description TEXT` | string | no | max length 32767 |
+| `input` | `--input FILE` | string | no | min length 1; Path to a UTF-8 JSON file, or '-' for stdin. |
+
+**Input**
+
+A JSON object from `--input PATH`, or from stdin with `--input -`. Unknown properties and duplicate keys are rejected. Where the command also has flags, the input is an alternative to them; a flag and an input property that disagree are refused.
+
+| Property | Type | Required | Notes |
+|---|---|---|---|
+| `repo` | string | no | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])` |
+| `source` | string | no | min length 1; max length 255; Branch name in the same repository, e.g. feature/login or refs/heads/main. |
+| `target` | string | no | min length 1; max length 255; Branch name in the same repository, e.g. feature/login or refs/heads/main. |
+| `title` | string | no | min length 1; max length 255 |
+| `description` | string | no | max length 32767 |
+
+**Output**
+
+Success `data` fields:
+
+| Field | Type | Always present |
+|---|---|---|
+| `id` | integer | yes |
+| `repo` | string | yes |
+| `title` | string | yes |
+| `source` | string | yes |
+| `target` | string | yes |
+| `state` | string | yes |
+| `url` | string | yes |
+
+**Example**
+
+```bash
+yojo bitbucket pr create --input - <<'JSON'
+{
+  "repo": "PROJ/web",
+  "source": "feature/login",
+  "target": "main",
+  "title": "Fix login on Safari",
+  "description": "Handles an empty user before the credential check."
+}
+JSON
+```
+
+Flags are the usual form: `yojo bitbucket pr create --repo PROJ/web --source feature/login --target main --title '...'`. `--input -` reads the same names as JSON, useful for a long description; a value given both ways must match.
+
+Success (exit 0):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "id": 42,
+    "repo": "PROJ/web",
+    "title": "Fix login on Safari",
+    "source": "feature/login",
+    "target": "main",
+    "state": "OPEN",
+    "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests/42"
+  }
+}
+```
+
+Error: a misspelled source branch and no title, given as flags; every problem is listed and nothing is sent ([`requirements_unmet`](errors.md#requirements_unmet), exit 4):
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "requirements_unmet",
+    "message": "Opening a pull request in PROJ/web was refused with 3 problem(s); nothing was sent.",
+    "fix": "Apply each check's fix, then run details.retry (placeholders in <angle brackets> need your content).",
+    "details": {
+      "nothing_sent": true,
+      "checks": [
+        {
+          "id": "title",
+          "status": "fail",
+          "message": "The title is missing or blank.",
+          "fix": "Add --title 'one-line title'."
+        },
+        {
+          "id": "source",
+          "status": "fail",
+          "message": "No branch 'feature/logn' in PROJ/web. Did you mean 'feature/login'?",
+          "fix": "Use 'feature/login'. List branches with `yojo bitbucket branch list --repo PROJ/web --filter feature/logn`.",
+          "details": {
+            "given": "feature/logn",
+            "kind": "not_found",
+            "suggestion": "feature/login"
+          }
+        },
+        {
+          "id": "duplicate",
+          "status": "unverified",
+          "message": "Open pull requests cannot be checked until the repository and both branches are known.",
+          "fix": "Resolve the repo, source, and target checks first."
+        }
+      ],
+      "passed": 2,
+      "retry": "yojo bitbucket pr create --repo PROJ/web --source feature/login --target main --title '<title>'",
+      "retry_argv": [
+        "yojo",
+        "bitbucket",
+        "pr",
+        "create",
+        "--repo",
+        "PROJ/web",
+        "--source",
+        "feature/login",
+        "--target",
+        "main",
+        "--title",
+        "<title>"
+      ]
+    }
+  }
+}
+```
+
+**Error codes**
+
+| Exit | Error codes |
+|------|-------------|
+| 2 | [`config_invalid`](errors.md#config_invalid), [`config_legacy`](errors.md#config_legacy), [`config_not_found`](errors.md#config_not_found), [`input_invalid`](errors.md#input_invalid), [`service_not_configured`](errors.md#service_not_configured), [`usage_error`](errors.md#usage_error) |
+| 3 | [`auth_failed`](errors.md#auth_failed), [`auth_missing`](errors.md#auth_missing), [`forbidden`](errors.md#forbidden), [`keyring_unavailable`](errors.md#keyring_unavailable) |
+| 4 | [`requirements_unmet`](errors.md#requirements_unmet) |
+| 5 | [`conflict`](errors.md#conflict), [`not_found`](errors.md#not_found), [`remote_limit_exceeded`](errors.md#remote_limit_exceeded), [`remote_validation`](errors.md#remote_validation) |
+| 6 | [`internal_error`](errors.md#internal_error), [`interrupted`](errors.md#interrupted), [`metadata_incomplete`](errors.md#metadata_incomplete), [`outcome_unknown`](errors.md#outcome_unknown), [`rate_limited`](errors.md#rate_limited), [`redirect_refused`](errors.md#redirect_refused), [`response_invalid`](errors.md#response_invalid), [`service_error`](errors.md#service_error), [`tls_error`](errors.md#tls_error), [`transport_error`](errors.md#transport_error) |
+
+## `yojo bitbucket pr comment`
+
+Add a plain-text comment to a pull request from --body, a file, or stdin, after checking the pull request exists and has no identical comment.
+
+```text
+yojo bitbucket pr comment ID --repo PROJECT/slug (--body TEXT | --body-file FILE) [--config PATH] [--base-url URL] [--json]
+```
+
+**Arguments**
+
+| Argument | CLI | Type | Required | Notes |
+|---|---|---|---|---|
+| `id` | `ID` | integer | yes | min 1; Pull request ID. |
+| `repo` | `--repo PROJECT/slug` | string | yes | pattern `^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}(?![\s\S])`; Repository as PROJECT/slug, for example PROJ/web. |
+| `body` | `--body TEXT` | string | no | min length 1 |
+| `body_file` | `--body-file FILE` | string | no | min length 1; Path to a plain UTF-8 text file (not JSON, max 1 MiB), or '-' for stdin. |
+
+Requires exactly one of `body`, `body_file`.
+
+**Input**
+
+No JSON input.
+
+**Output**
+
+Success `data` fields:
+
+| Field | Type | Always present |
+|---|---|---|
+| `id` | integer | yes |
+| `repo` | string | yes |
+| `comment_id` | integer | yes |
+| `url` | string | yes |
+
+**Example**
+
+```bash
+yojo bitbucket pr comment 42 --repo PROJ/web --body 'Ready for review.'
+```
+
+Use `--body` for short text, or `--body-file FILE` (`-` for stdin) for longer plain text.
+
+Success (exit 0):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "id": 42,
+    "repo": "PROJ/web",
+    "comment_id": 777,
+    "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests/42/overview?commentId=777"
+  }
+}
+```
+
+Error: the pull request already has a comment with exactly this text; nothing is sent ([`requirements_unmet`](errors.md#requirements_unmet), exit 4):
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "requirements_unmet",
+    "message": "Commenting on pull request #42 was refused with 1 problem(s); nothing was sent.",
+    "fix": "Apply each check's fix, then run details.retry (placeholders in <angle brackets> need your content).",
+    "details": {
+      "nothing_sent": true,
+      "checks": [
+        {
+          "id": "duplicate",
+          "status": "fail",
+          "message": "Pull request #42 already has a comment with exactly this text.",
+          "fix": "Nothing to send if it is yours (see https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests/42/overview); to add something new, change the text.",
+          "details": {
+            "comment_id": 501
+          }
+        }
+      ],
+      "passed": 1,
+      "retry": null,
+      "retry_argv": null
+    }
+  }
+}
+```
+
+**Error codes**
+
+| Exit | Error codes |
+|------|-------------|
+| 2 | [`config_invalid`](errors.md#config_invalid), [`config_legacy`](errors.md#config_legacy), [`config_not_found`](errors.md#config_not_found), [`input_invalid`](errors.md#input_invalid), [`service_not_configured`](errors.md#service_not_configured), [`usage_error`](errors.md#usage_error) |
+| 3 | [`auth_failed`](errors.md#auth_failed), [`auth_missing`](errors.md#auth_missing), [`forbidden`](errors.md#forbidden), [`keyring_unavailable`](errors.md#keyring_unavailable) |
+| 4 | [`requirements_unmet`](errors.md#requirements_unmet) |
+| 5 | [`not_found`](errors.md#not_found), [`remote_limit_exceeded`](errors.md#remote_limit_exceeded), [`remote_validation`](errors.md#remote_validation) |
 | 6 | [`internal_error`](errors.md#internal_error), [`interrupted`](errors.md#interrupted), [`metadata_incomplete`](errors.md#metadata_incomplete), [`outcome_unknown`](errors.md#outcome_unknown), [`rate_limited`](errors.md#rate_limited), [`redirect_refused`](errors.md#redirect_refused), [`response_invalid`](errors.md#response_invalid), [`service_error`](errors.md#service_error), [`tls_error`](errors.md#tls_error), [`transport_error`](errors.md#transport_error) |

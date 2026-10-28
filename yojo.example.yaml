@@ -34,3 +34,6 @@ jira:
 confluence:
   base_url: https://confluence.example.test/confluence
   # ca_bundle: /path/to/team-ca.pem
+bitbucket:
+  base_url: https://bitbucket.example.test/bitbucket
+  # ca_bundle: /path/to/team-ca.pem

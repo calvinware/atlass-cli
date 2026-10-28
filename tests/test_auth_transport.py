@@ -432,6 +432,23 @@ def test_field_errors_are_sanitized() -> None:
     assert "\x1b" not in error.details["messages"][0]
 
 
+def test_bitbucket_error_list_is_extracted() -> None:
+    body = {
+        "errors": [
+            {"context": "title", "message": "Title is required\x1b[2J", "exceptionName": "x"},
+            {"context": None, "message": "Only one pull request may be open"},
+            {"message": 7},
+            "not an object",
+        ]
+    }
+    assert sanitize_remote_errors(body) == {
+        "fields": {"title": "Title is required [2J"},
+        "messages": ["Only one pull request may be open"],
+    }
+    many = {"errors": [{"context": None, "message": "e"}] * 100}
+    assert len(sanitize_remote_errors(many)["messages"]) == 50
+
+
 def test_sanitize_remote_errors_bounds_items() -> None:
     body = {"errors": {f"f{i}": "e" for i in range(100)}}
     assert len(sanitize_remote_errors(body)["fields"]) == 50

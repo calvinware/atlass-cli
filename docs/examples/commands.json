@@ -28,7 +28,7 @@
           ],
           "global_options": {
             "--json": "Print the JSON envelope even on a terminal. Piped output is always JSON.",
-            "--base-url URL": "Jira or Confluence HTTPS root for this call; works without yojo.yaml.",
+            "--base-url URL": "Jira, Confluence, or Bitbucket HTTPS root for this call; works without yojo.yaml.",
             "--config PATH": "Use this yojo.yaml instead of searching the current directory upward."
           },
           "exit_codes": {
@@ -1206,6 +1206,455 @@
             "id": "123456",
             "expected_version": 3,
             "current_version": 4
+          }
+        }
+      }
+    },
+    "bitbucket repo list": {
+      "argv": [
+        "bitbucket",
+        "repo",
+        "list",
+        "--project",
+        "PROJ"
+      ],
+      "arguments": {
+        "project": "PROJ"
+      },
+      "input": null,
+      "success": {
+        "ok": true,
+        "data": {
+          "project": "PROJ",
+          "start": 0,
+          "limit": 20,
+          "next_start": 2,
+          "repos": [
+            {
+              "repo": "PROJ/web",
+              "name": "web",
+              "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/browse"
+            },
+            {
+              "repo": "PROJ/api",
+              "name": "api",
+              "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/api/browse"
+            }
+          ],
+          "content_trust": "untrusted"
+        }
+      },
+      "error_scenario": "Bitbucket answers a page that is not the last one without a usable `nextPageStart`; yojo refuses to guess the next cursor",
+      "error": {
+        "ok": false,
+        "error": {
+          "code": "response_invalid",
+          "message": "Bitbucket returned a repository list page without a usable next cursor, so the list cannot continue safely.",
+          "fix": "Run the command again. If it repeats, narrow it (a smaller --limit, or --filter for branches) and check that no proxy rewrites Bitbucket responses.",
+          "details": {
+            "what": "repository list page",
+            "start": 0
+          }
+        }
+      }
+    },
+    "bitbucket repo get": {
+      "argv": [
+        "bitbucket",
+        "repo",
+        "get",
+        "PROJ/web"
+      ],
+      "arguments": {
+        "repo": "PROJ/web"
+      },
+      "input": null,
+      "success": {
+        "ok": true,
+        "data": {
+          "repo": "PROJ/web",
+          "name": "web",
+          "state": "AVAILABLE",
+          "public": false,
+          "default_branch": "main",
+          "clone_http": "https://bitbucket.example.test/bitbucket/scm/proj/web.git",
+          "clone_ssh": "ssh://git@bitbucket.example.test:7999/proj/web.git",
+          "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/browse",
+          "content_trust": "untrusted"
+        }
+      },
+      "error_scenario": "the repository does not exist or your account cannot see it",
+      "error": {
+        "ok": false,
+        "error": {
+          "code": "not_found",
+          "message": "bitbucket returned 404 Not Found.",
+          "fix": "Check the key or ID and that your account can view it.",
+          "details": {
+            "service": "bitbucket",
+            "status": 404,
+            "fields": {},
+            "messages": [
+              "Repository PROJ/web does not exist."
+            ]
+          }
+        }
+      }
+    },
+    "bitbucket branch list": {
+      "argv": [
+        "bitbucket",
+        "branch",
+        "list",
+        "--repo",
+        "PROJ/web",
+        "--filter",
+        "feature/"
+      ],
+      "arguments": {
+        "repo": "PROJ/web",
+        "filter": "feature/"
+      },
+      "input": null,
+      "success": {
+        "ok": true,
+        "data": {
+          "repo": "PROJ/web",
+          "filter": "feature/",
+          "start": 0,
+          "limit": 20,
+          "next_start": null,
+          "branches": [
+            {
+              "name": "feature/login",
+              "default": false,
+              "commit": "0a943a29376f2336b78312d99e65da17048951db"
+            },
+            {
+              "name": "feature/login-v2",
+              "default": false,
+              "commit": "c5d3f5a4bd2a8b7e36d5d2e1a1c7a4e2f9b0c111"
+            }
+          ],
+          "content_trust": "untrusted",
+          "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/branches"
+        }
+      },
+      "error_scenario": "`--repo web` without the project key; rejected before any request",
+      "error": {
+        "ok": false,
+        "error": {
+          "code": "usage_error",
+          "message": "yojo bitbucket branch list: argument --repo: must be a repository as PROJECT/slug, such as PROJ/web",
+          "fix": "Use `yojo bitbucket branch list --repo PROJECT/slug [--filter TEXT] [--start N] [--limit N]`, for example `yojo --json bitbucket branch list --repo PROJ/web --filter feature/`.",
+          "details": {
+            "usage": "yojo bitbucket branch list --repo PROJECT/slug [--filter TEXT] [--start N] [--limit N]"
+          }
+        }
+      }
+    },
+    "bitbucket pr list": {
+      "argv": [
+        "bitbucket",
+        "pr",
+        "list",
+        "--repo",
+        "PROJ/web",
+        "--state",
+        "open"
+      ],
+      "arguments": {
+        "repo": "PROJ/web",
+        "state": "OPEN"
+      },
+      "input": null,
+      "note": "`--state` takes OPEN, MERGED, DECLINED, or ALL in any case.",
+      "success": {
+        "ok": true,
+        "data": {
+          "repo": "PROJ/web",
+          "state": "OPEN",
+          "start": 0,
+          "limit": 20,
+          "next_start": null,
+          "pull_requests": [
+            {
+              "id": 42,
+              "title": "Fix login on Safari",
+              "state": "OPEN",
+              "source": "feature/login",
+              "target": "main",
+              "author": "Example User",
+              "updated": "2026-10-28T12:53:31Z"
+            }
+          ],
+          "content_trust": "untrusted",
+          "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests"
+        }
+      },
+      "error_scenario": "`--state closed`, which Bitbucket does not have; rejected before any request",
+      "error": {
+        "ok": false,
+        "error": {
+          "code": "usage_error",
+          "message": "yojo bitbucket pr list: argument --state: invalid choice",
+          "fix": "Use `yojo bitbucket pr list --repo PROJECT/slug [--state OPEN|MERGED|DECLINED|ALL] [--start N] [--limit N]`, for example `yojo --json bitbucket pr list --repo PROJ/web --state open`.",
+          "details": {
+            "usage": "yojo bitbucket pr list --repo PROJECT/slug [--state OPEN|MERGED|DECLINED|ALL] [--start N] [--limit N]"
+          }
+        }
+      }
+    },
+    "bitbucket pr get": {
+      "argv": [
+        "bitbucket",
+        "pr",
+        "get",
+        "42",
+        "--repo",
+        "PROJ/web"
+      ],
+      "arguments": {
+        "id": 42,
+        "repo": "PROJ/web"
+      },
+      "input": null,
+      "success": {
+        "ok": true,
+        "data": {
+          "id": 42,
+          "repo": "PROJ/web",
+          "title": "Fix login on Safari",
+          "state": "OPEN",
+          "source": "feature/login",
+          "target": "main",
+          "author": "Example User",
+          "created": "2026-10-28T11:53:31Z",
+          "updated": "2026-10-28T12:53:31Z",
+          "reviewers": [
+            {
+              "name": "Example Reviewer",
+              "status": "UNAPPROVED"
+            }
+          ],
+          "description": "Handles an empty user before the credential check.",
+          "truncated": false,
+          "more": null,
+          "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests/42",
+          "content_trust": "untrusted"
+        }
+      },
+      "error_scenario": "no pull request 42 in PROJ/web",
+      "error": {
+        "ok": false,
+        "error": {
+          "code": "not_found",
+          "message": "bitbucket returned 404 Not Found.",
+          "fix": "Check the key or ID and that your account can view it.",
+          "details": {
+            "service": "bitbucket",
+            "status": 404,
+            "fields": {},
+            "messages": [
+              "Pull request 42 does not exist in PROJ/web."
+            ]
+          }
+        }
+      }
+    },
+    "bitbucket pr diff": {
+      "argv": [
+        "bitbucket",
+        "pr",
+        "diff",
+        "42",
+        "--repo",
+        "PROJ/web",
+        "--path",
+        "src/app.py"
+      ],
+      "arguments": {
+        "id": 42,
+        "repo": "PROJ/web",
+        "path": "src/app.py"
+      },
+      "input": null,
+      "note": "Without `--path` the whole pull request is shown, trimmed unless `--full`. `complete` is false whenever yojo or Bitbucket cut anything; `more` is the command for the rest.",
+      "success": {
+        "ok": true,
+        "data": {
+          "id": 42,
+          "repo": "PROJ/web",
+          "path": "src/app.py",
+          "files_total": 1,
+          "files": [
+            {
+              "path": "src/app.py",
+              "old_path": null,
+              "change": "modified",
+              "added": 2,
+              "removed": 1
+            }
+          ],
+          "diff": "diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n@@ -10,2 +10,3 @@\n def login(user):\n-    return check(user)\n+    if not user:\n+        return False\n",
+          "diff_chars": 171,
+          "truncated": false,
+          "server_truncated": false,
+          "truncated_files": [],
+          "complete": true,
+          "more": null,
+          "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests/42/diff#src/app.py",
+          "content_trust": "untrusted"
+        }
+      },
+      "error_scenario": "a `--path` that leaves the repository; rejected before any request",
+      "error": {
+        "ok": false,
+        "error": {
+          "code": "usage_error",
+          "message": "yojo bitbucket pr diff: argument --path: must be a repository-relative file path such as src/a.py",
+          "fix": "Use `yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE] [--full]`, for example `yojo --json bitbucket pr diff 42 --repo PROJ/web --path src/app.py`.",
+          "details": {
+            "usage": "yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE] [--full]"
+          }
+        }
+      }
+    },
+    "bitbucket pr create": {
+      "argv": [
+        "bitbucket",
+        "pr",
+        "create",
+        "--input",
+        "-"
+      ],
+      "arguments": {
+        "input": "-"
+      },
+      "input": {
+        "repo": "PROJ/web",
+        "source": "feature/login",
+        "target": "main",
+        "title": "Fix login on Safari",
+        "description": "Handles an empty user before the credential check."
+      },
+      "note": "Flags are the usual form: `yojo bitbucket pr create --repo PROJ/web --source feature/login --target main --title '...'`. `--input -` reads the same names as JSON, useful for a long description; a value given both ways must match.",
+      "success": {
+        "ok": true,
+        "data": {
+          "id": 42,
+          "repo": "PROJ/web",
+          "title": "Fix login on Safari",
+          "source": "feature/login",
+          "target": "main",
+          "state": "OPEN",
+          "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests/42"
+        }
+      },
+      "error_scenario": "a misspelled source branch and no title, given as flags; every problem is listed and nothing is sent",
+      "error": {
+        "ok": false,
+        "error": {
+          "code": "requirements_unmet",
+          "message": "Opening a pull request in PROJ/web was refused with 3 problem(s); nothing was sent.",
+          "fix": "Apply each check's fix, then run details.retry (placeholders in <angle brackets> need your content).",
+          "details": {
+            "nothing_sent": true,
+            "checks": [
+              {
+                "id": "title",
+                "status": "fail",
+                "message": "The title is missing or blank.",
+                "fix": "Add --title 'one-line title'."
+              },
+              {
+                "id": "source",
+                "status": "fail",
+                "message": "No branch 'feature/logn' in PROJ/web. Did you mean 'feature/login'?",
+                "fix": "Use 'feature/login'. List branches with `yojo bitbucket branch list --repo PROJ/web --filter feature/logn`.",
+                "details": {
+                  "given": "feature/logn",
+                  "kind": "not_found",
+                  "suggestion": "feature/login"
+                }
+              },
+              {
+                "id": "duplicate",
+                "status": "unverified",
+                "message": "Open pull requests cannot be checked until the repository and both branches are known.",
+                "fix": "Resolve the repo, source, and target checks first."
+              }
+            ],
+            "passed": 2,
+            "retry": "yojo bitbucket pr create --repo PROJ/web --source feature/login --target main --title '<title>'",
+            "retry_argv": [
+              "yojo",
+              "bitbucket",
+              "pr",
+              "create",
+              "--repo",
+              "PROJ/web",
+              "--source",
+              "feature/login",
+              "--target",
+              "main",
+              "--title",
+              "<title>"
+            ]
+          }
+        }
+      }
+    },
+    "bitbucket pr comment": {
+      "argv": [
+        "bitbucket",
+        "pr",
+        "comment",
+        "42",
+        "--repo",
+        "PROJ/web",
+        "--body",
+        "Ready for review."
+      ],
+      "arguments": {
+        "id": 42,
+        "repo": "PROJ/web",
+        "body": "Ready for review."
+      },
+      "input": null,
+      "note": "Use `--body` for short text, or `--body-file FILE` (`-` for stdin) for longer plain text.",
+      "success": {
+        "ok": true,
+        "data": {
+          "id": 42,
+          "repo": "PROJ/web",
+          "comment_id": 777,
+          "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests/42/overview?commentId=777"
+        }
+      },
+      "error_scenario": "the pull request already has a comment with exactly this text; nothing is sent",
+      "error": {
+        "ok": false,
+        "error": {
+          "code": "requirements_unmet",
+          "message": "Commenting on pull request #42 was refused with 1 problem(s); nothing was sent.",
+          "fix": "Apply each check's fix, then run details.retry (placeholders in <angle brackets> need your content).",
+          "details": {
+            "nothing_sent": true,
+            "checks": [
+              {
+                "id": "duplicate",
+                "status": "fail",
+                "message": "Pull request #42 already has a comment with exactly this text.",
+                "fix": "Nothing to send if it is yours (see https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests/42/overview); to add something new, change the text.",
+                "details": {
+                  "comment_id": 501
+                }
+              }
+            ],
+            "passed": 1,
+            "retry": null,
+            "retry_argv": null
           }
         }
       }

@@ -157,3 +157,48 @@ def test_color_enabled() -> None:
     assert color_enabled({"NO_COLOR": ""}) is True
     assert color_enabled({"NO_COLOR": "1"}) is False
     assert color_enabled({"TERM": "dumb"}) is False
+
+
+def _diff_envelope(**overrides: Any) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "id": 42,
+        "repo": "PROJ/web",
+        "path": None,
+        "files_total": 1,
+        "files": [
+            {"path": "a.py", "old_path": None, "change": "modified", "added": 1, "removed": 1}
+        ],
+        "diff": "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1,1 +1,1 @@\n-old\n+new\n",
+        "diff_chars": 60,
+        "truncated": False,
+        "server_truncated": False,
+        "truncated_files": [],
+        "complete": True,
+        "more": None,
+        "url": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests/42/diff",
+        "content_trust": "untrusted",
+    }
+    data.update(overrides)
+    return {"ok": True, "data": data}
+
+
+def test_diff_on_a_terminal_colors_changes_and_keeps_lines() -> None:
+    out = render(_diff_envelope(), "bitbucket pr diff", Style(color=True))
+    assert out.startswith("\x1b[1mPull request #42 in PROJ/web")
+    assert "\x1b[31m-old\x1b[0m" in out and "\x1b[32m+new\x1b[0m" in out
+    assert "--- a/a.py" in out and "Incomplete" not in out
+    plain = render(_diff_envelope(), "bitbucket pr diff", Style(color=False))
+    assert ESC not in plain
+    assert "\n-old\n+new\n" in plain
+
+
+def test_incomplete_diff_says_so_and_how_to_get_more() -> None:
+    more = "yojo bitbucket pr diff 42 --repo PROJ/web --full"
+    out = render(
+        _diff_envelope(truncated=True, complete=False, more=more, diff="evil \x1b[2J line\n"),
+        "bitbucket pr diff",
+        Style(color=False),
+    )
+    assert "Incomplete: yojo shortened this diff." in out
+    assert f"More: {more}" in out
+    assert ESC not in out

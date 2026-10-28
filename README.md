@@ -13,9 +13,9 @@
 
 # yojo
 
-`yojo` is a command line for Jira and Confluence Data Center. It accepts the field names,
-statuses, option labels, and people you see in Jira, resolves IDs itself, and checks the rules
-before every write. A `yojo.yaml` can add your team's aliases and rules, but is optional.
+`yojo` is a command line for Jira, Confluence, and Bitbucket Data Center. It accepts the field
+names, statuses, option labels, and people you see in Jira, resolves IDs itself, and checks the
+rules before every write. A `yojo.yaml` can add your team's aliases and rules, but is optional.
 
 ## Get started
 
@@ -42,6 +42,14 @@ The response is one compact JSON object when piped or with `--json`. A terminal 
 says nothing was sent, and provides a corrected `retry` command. If the server cannot confirm a
 write, inspect the remote item before trying again. `yojo` never retries a write automatically.
 
+Opening a pull request is one call too; the branches are checked and an existing open pull
+request for the same branches is refused:
+
+```bash
+yojo --json bitbucket pr create --repo PROJ/web --source feature/login --target main \
+  --title "Fix login on Safari" --base-url https://bitbucket.example.test/bitbucket
+```
+
 Offline discovery works without config or credentials:
 
 ```bash
@@ -53,7 +61,7 @@ yojo --json schema 'jira issue create'
 
 | Audience | Start here |
 |----------|------------|
-| Developers | [Getting started](https://github.com/calvinware/yojo/blob/main/docs/getting-started.md), [Jira workflows](https://github.com/calvinware/yojo/blob/main/docs/guides/jira-workflows.md), [Confluence pages](https://github.com/calvinware/yojo/blob/main/docs/guides/confluence.md) |
+| Developers | [Getting started](https://github.com/calvinware/yojo/blob/main/docs/getting-started.md), [Jira workflows](https://github.com/calvinware/yojo/blob/main/docs/guides/jira-workflows.md), [Confluence pages](https://github.com/calvinware/yojo/blob/main/docs/guides/confluence.md), [Bitbucket pull requests](https://github.com/calvinware/yojo/blob/main/docs/guides/bitbucket.md) |
 | AI agents | [AGENTS.md](https://github.com/calvinware/yojo/blob/main/AGENTS.md), [Agent guide](https://github.com/calvinware/yojo/blob/main/docs/agents.md) |
 | Admins | [Configuration](https://github.com/calvinware/yojo/blob/main/docs/configuration.md), [Cookbook](https://github.com/calvinware/yojo/blob/main/docs/admin-cookbook.md) |
 | Contributors | [Contributing](https://github.com/calvinware/yojo/blob/main/docs/contributing.md), [Security](https://github.com/calvinware/yojo/blob/main/docs/security.md) |
@@ -61,7 +69,8 @@ yojo --json schema 'jira issue create'
 
 ## Compatibility
 
-`yojo` targets Jira Data Center 9+ and Confluence Data Center 7.9+ on Windows, macOS, and Linux.
+`yojo` targets Jira Data Center 9+, Confluence Data Center 7.9+, and Bitbucket Data Center (REST
+1.0; Bitbucket Cloud is not supported) on Windows, macOS, and Linux.
 Its fixture tests do not establish live compatibility with every server version. The
 [security guide](https://github.com/calvinware/yojo/blob/main/docs/security.md) describes TLS,
 keyring, permissions, and uncertain-write handling.
@@ -81,3 +90,10 @@ The fixture suite does not substitute for that check.
 | Attachment permissions and size limits | — | n/a | unverified |
 | JQL and CQL pagination | — | — | unverified |
 | Confluence create, update, and stale-version conflict | n/a | — | unverified |
+
+| Bitbucket check | Bitbucket version | Status |
+|-----------------|-------------------|--------|
+| Token login (application identity and signed-in check) | — | unverified |
+| Repository, branch, and pull request list cursors | — | unverified |
+| Pull request diff, including server-side truncation | — | unverified |
+| Pull request create and comment, including duplicate refusal | — | unverified |

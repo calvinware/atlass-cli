@@ -1,7 +1,8 @@
 """Optional, strict, versioned ``yojo.yaml`` discovery, parsing, and validation.
 
 ``yojo`` works without a config file: service commands take ``--base-url`` and read live Jira
-metadata. A ``yojo.yaml`` adds friendly field aliases and team rules on top.
+metadata. A ``yojo.yaml`` adds friendly field aliases and team rules on top, and may name only the
+services a team uses (for example Bitbucket alone).
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ MAX_CONFIG_BYTES = 256 * 1024
 DEFAULT_MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
 SUPPORTED_VERSIONS = {1}
 REQUIREMENT_KINDS = {"attachment_filename", "field_set"}
-SERVICES = ("jira", "confluence")
+SERVICES = ("jira", "confluence", "bitbucket")
 
 FRIENDLY_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 FIELD_ID_RE = re.compile(r"^(customfield_[0-9]{1,10}|[a-z][A-Za-z]{0,63})$")
@@ -114,11 +115,17 @@ class ConfluenceConfig(ServiceConfig):
 
 
 @dataclass(frozen=True)
+class BitbucketConfig(ServiceConfig):
+    pass
+
+
+@dataclass(frozen=True)
 class Config:
     path: Path
     version: int
     jira: JiraConfig | None
     confluence: ConfluenceConfig | None
+    bitbucket: BitbucketConfig | None = None
 
 
 # --------------------------------------------------------------------------- YAML loader
@@ -363,26 +370,31 @@ class _Validator:
 
 def validate_config(document: Any, path: Path) -> Config:
     v = _Validator(path)
-    root = v.mapping(document, "<root>", {"version", "jira", "confluence"}, {"version"})
+    root = v.mapping(document, "<root>", {"version", *SERVICES}, {"version"})
     version = root["version"]
     if type(version) is not int or version not in SUPPORTED_VERSIONS:
         raise v.fail("version", f"unsupported version {version!r}; supported: 1")
-    if "jira" not in root and "confluence" not in root:
-        raise v.fail("<root>", "at least one of jira or confluence must be configured")
+    if not any(service in root for service in SERVICES):
+        raise v.fail("<root>", "at least one of jira, confluence, or bitbucket must be configured")
 
     jira = _validate_jira(v, root["jira"]) if "jira" in root else None
     confluence = None
     if "confluence" in root:
-        section = v.mapping(
-            root["confluence"], "confluence", {"base_url", "ca_bundle"}, {"base_url"}
-        )
-        confluence = ConfluenceConfig(
-            base_url=v.url(section["base_url"], "confluence.base_url"),
-            ca_bundle=v.ca_bundle(section["ca_bundle"], "confluence.ca_bundle")
-            if "ca_bundle" in section
-            else None,
-        )
-    return Config(path=path, version=version, jira=jira, confluence=confluence)
+        url, ca_bundle = _validate_plain_service(v, root["confluence"], "confluence")
+        confluence = ConfluenceConfig(base_url=url, ca_bundle=ca_bundle)
+    bitbucket = None
+    if "bitbucket" in root:
+        url, ca_bundle = _validate_plain_service(v, root["bitbucket"], "bitbucket")
+        bitbucket = BitbucketConfig(base_url=url, ca_bundle=ca_bundle)
+    return Config(path=path, version=version, jira=jira, confluence=confluence, bitbucket=bitbucket)
+
+
+def _validate_plain_service(v: _Validator, value: Any, where: str) -> tuple[str, Path | None]:
+    section = v.mapping(value, where, {"base_url", "ca_bundle"}, {"base_url"})
+    ca_bundle = (
+        v.ca_bundle(section["ca_bundle"], f"{where}.ca_bundle") if "ca_bundle" in section else None
+    )
+    return v.url(section["base_url"], f"{where}.base_url"), ca_bundle
 
 
 def _validate_jira(v: _Validator, value: Any) -> JiraConfig:
@@ -571,8 +583,12 @@ def _reject_duplicate_destinations(
 def _service_section(config: Config | None, service: str) -> ServiceConfig | None:
     if config is None:
         return None
-    section: ServiceConfig | None = config.jira if service == "jira" else config.confluence
-    return section
+    sections: dict[str, ServiceConfig | None] = {
+        "jira": config.jira,
+        "confluence": config.confluence,
+        "bitbucket": config.bitbucket,
+    }
+    return sections[service]
 
 
 def select_service(config: Config | None, service: str, base_url: str | None) -> ServiceConfig:
@@ -597,6 +613,8 @@ def select_service(config: Config | None, service: str, base_url: str | None) ->
     if configured is None:
         if service == "jira":
             return JiraConfig(base_url=explicit, ca_bundle=None)
+        if service == "bitbucket":
+            return BitbucketConfig(base_url=explicit, ca_bundle=None)
         return ConfluenceConfig(base_url=explicit, ca_bundle=None)
     if configured.base_url != explicit:
         assert config is not None

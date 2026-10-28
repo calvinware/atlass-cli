@@ -25,7 +25,11 @@ WRITE_VERBS = {
     "jira attachment add": "Attached to",
     "confluence page create": "Created page",
     "confluence page update": "Updated page",
+    "bitbucket pr create": "Opened pull request",
+    "bitbucket pr comment": "Commented on pull request",
 }
+PR_STATES = {"OPEN": "open", "MERGED": "merged", "DECLINED": "declined", "ALL": ""}
+DIFF_LINES = 400
 EMPTY_STATES = {
     "issues": "No issues matched this search.",
     "results": "No pages matched this search.",
@@ -33,6 +37,9 @@ EMPTY_STATES = {
     "changed": "",
     "attachments": "No attachments were confirmed.",
     "checks": "No checks to show.",
+    "repos": "No repositories to show.",
+    "branches": "No branches matched.",
+    "files": "No changed files.",
 }
 TABLE_COLUMNS = {
     "issues": ["key", "status", "issue_type", "assignee", "summary"],
@@ -44,8 +51,23 @@ TABLE_COLUMNS = {
     "attachments": ["filename", "size", "id"],
     "services": ["service", "status", "user", "base_url"],
     "operations": ["op", "method", "status", "transition_id"],
+    "repos": ["repo", "name"],
+    "branches": ["name", "default", "commit"],
+    "pull_requests": ["id", "state", "source", "target", "author", "title"],
+    "files": ["change", "path", "added", "removed"],
+    "reviewers": ["name", "status"],
 }
-HIDDEN = {"content_trust", "url", "more", "next_start", "help", "exit_codes", "global_options"}
+HIDDEN = {
+    "content_trust",
+    "url",
+    "more",
+    "next_start",
+    "help",
+    "exit_codes",
+    "global_options",
+    "diff",
+    "truncated_files",
+}
 
 
 def color_enabled(environ: Mapping[str, str]) -> bool:
@@ -170,7 +192,19 @@ def _success(data: Any, command: str | None, style: Style) -> list[str]:
     lines: list[str] = []
     verb = WRITE_VERBS.get(command or "")
     subject = data.get("key") or data.get("id")
-    if verb and subject:
+    if command and command.startswith("bitbucket pr ") and subject:
+        subject = f"#{subject} in {clean(data.get('repo'))}"
+    if command in ("bitbucket pr create", "bitbucket pr get") and subject:
+        lead = style.green(f"{verb} {subject}") if verb else style.bold(subject)
+        lines.append(lead + f": {clean(data.get('title'), 80)}")
+    elif command == "bitbucket pr diff":
+        return _diff(data, style)
+    elif command == "bitbucket pr list" and data.get("pull_requests") == []:
+        state = PR_STATES.get(str(data.get("state")), "")
+        lines.append(
+            f"No {state + ' ' if state else ''}pull requests in {clean(data.get('repo'))}."
+        )
+    elif verb and subject:
         title = data.get("title") or data.get("summary")
         lines.append(
             style.green(f"{verb} {clean(subject)}")
@@ -208,7 +242,9 @@ def _success(data: Any, command: str | None, style: Style) -> list[str]:
                 f"{clean(data.get('key'))} is not ready to move to {clean(data.get('to'))}."
             )
         )
-    lines += _pairs(data, {"key", "id"} if verb else set())
+    lines += _pairs(
+        data, {"key", "id", "title"} if verb or command == "bitbucket pr get" else set()
+    )
     if isinstance(data.get("plan"), dict):
         lines += _lists({"operations": data["plan"].get("operations") or []}, style)
     lines += _lists(data, style)
@@ -227,6 +263,42 @@ def _success(data: Any, command: str | None, style: Style) -> list[str]:
         lines.append(f"Full text: {clean(data['more'])}")
     if data.get("next_start") is not None:
         lines.append(f"Next page: run the same command with --start {clean(data['next_start'])}")
+    return lines
+
+
+def _diff(data: Mapping[str, Any], style: Style) -> list[str]:
+    """Pull request diff: changed files, then the diff lines, then whether anything was cut."""
+    lines = [style.bold(f"Pull request #{clean(data.get('id'))} in {clean(data.get('repo'))}")]
+    lines += _lists({"files": data.get("files") or []}, style)
+    total, listed = data.get("files_total"), len(data.get("files") or [])
+    if isinstance(total, int) and total > listed:
+        lines.append(style.dim(f"... {total - listed} more changed files"))
+    text = data.get("diff")
+    body = text.splitlines() if isinstance(text, str) else []
+    if body:
+        lines.append("")
+    for raw in body[:DIFF_LINES]:
+        line = clean(raw, MAX_LINE)
+        if raw.startswith("+") and not raw.startswith("+++"):
+            line = style.green(line)
+        elif raw.startswith("-") and not raw.startswith("---"):
+            line = style.red(line)
+        elif raw.startswith("@@"):
+            line = style.dim(line)
+        lines.append(line)
+    if len(body) > DIFF_LINES:
+        lines.append(style.dim(f"... {len(body) - DIFF_LINES} more lines (use --json to see all)"))
+    if data.get("complete") is False:
+        cut = []
+        if data.get("truncated"):
+            cut.append("yojo shortened this diff")
+        if data.get("server_truncated"):
+            cut.append("Bitbucket cut part of the diff")
+        lines += ["", style.yellow("Incomplete: " + "; ".join(cut) + ".")]
+        if data.get("more"):
+            lines.append(f"More: {clean(data['more'])}")
+    if data.get("url"):
+        lines += ["", f"Open: {clean(data['url'], 2048)}"]
     return lines
 
 

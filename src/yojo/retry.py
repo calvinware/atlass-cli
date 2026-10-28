@@ -26,6 +26,7 @@ class Edit:
     ``rename``: keep the value but name the field ``value`` instead of ``name``.
     ``drop``: remove the ``--set`` named ``name``.
     ``flag``: give option ``name`` (for example ``--to``) the value ``value``.
+    ``none``: no command line can fix this (for example the item already exists), so no retry.
     ``source`` is where the original value came from; values from ``--input`` cannot be edited
     on the command line, so no retry is offered for them. A ``set`` whose source is ``missing``
     only adds a field the command does not already name.
@@ -71,7 +72,7 @@ def apply(argv: list[str], edits: list[Edit]) -> list[str] | None:
     """Return ``yojo`` plus ``argv`` with ``edits`` applied, or None if an edit is impossible."""
     out = list(argv)
     for edit in edits:
-        if edit.source == "input":
+        if edit.source == "input" or edit.kind == "none":
             return None
         sets = {name.strip().casefold(): (at, name, value) for at, name, value in _split_sets(out)}
         hit = sets.get(edit.name.strip().casefold())

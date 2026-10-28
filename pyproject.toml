@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "yojo"
 version = "0.1.0"
-description = "Generic, agent-first command line for Jira and Confluence Data Center: one JSON envelope, friendly terminal output."
+description = "Generic, agent-first command line for Jira, Confluence, and Bitbucket Data Center: one JSON envelope, friendly terminal output."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Calvinware" }]
-keywords = ["atlassian", "jira", "confluence", "data-center", "cli", "automation", "ai-agents"]
+keywords = ["atlassian", "jira", "confluence", "bitbucket", "data-center", "cli", "automation", "ai-agents"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",

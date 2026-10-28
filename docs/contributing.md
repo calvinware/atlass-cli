@@ -39,6 +39,7 @@ flowchart TD
     cli --> auth
     cli --> transport
     cli --> jira
+    cli --> bitbucket
     cli --> workflow
     cli --> confluence
     cli --> retry
@@ -51,6 +52,7 @@ flowchart TD
     workflow --> fields
     workflow --> retry
     confluence["confluence.py<br/>page read, search,<br/>create, update"] --> transport
+    bitbucket["bitbucket.py<br/>repos, branches,<br/>pull requests"] --> transport
     metadata["metadata.py<br/>createmeta, transitions,<br/>editmeta readers"] --> fields
     fields["fields.py<br/>field resolution,<br/>value coercion"] --> resolve
     resolve["resolve.py<br/>name matching,<br/>Did you mean, people"] --> transport
@@ -76,7 +78,7 @@ flowchart TD
 | [`retry.py`](../src/yojo/retry.py) | Builds the corrected `retry` command line from the caller's argv and each check's edit. |
 | [`workflow.py`](../src/yojo/workflow.py) | Pure transition checklist plus the PUT/recheck/POST executor. |
 | [`response.py`](../src/yojo/response.py) | Output budgets: long text is trimmed with a marker and a `more` command. |
-| [`jira.py`](../src/yojo/jira.py), [`confluence.py`](../src/yojo/confluence.py) | Command implementations. |
+| [`jira.py`](../src/yojo/jira.py), [`confluence.py`](../src/yojo/confluence.py), [`bitbucket.py`](../src/yojo/bitbucket.py) | Command implementations. |
 
 ## Test harness
 

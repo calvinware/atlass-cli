@@ -81,7 +81,13 @@ jira:                            # optional section
 confluence:                      # optional section
   base_url: https://confluence.example.test/confluence
   ca_bundle: certs/team-ca.pem   # optional
+bitbucket:                       # optional section
+  base_url: https://bitbucket.example.test/bitbucket
+  ca_bundle: certs/team-ca.pem   # optional
 ```
+
+At least one of `jira`, `confluence`, or `bitbucket` must be present, so a file with only a
+`bitbucket` section is valid.
 
 ### URLs and TLS
 
@@ -202,7 +208,10 @@ when Jira reports it; a proxy may enforce a lower one, which shows up as `remote
 
 ## Drift checks
 
-`yojo config check` is read-only and needs a `yojo.yaml`. It compares the file with live Jira:
+`yojo config check` is read-only and needs a `yojo.yaml`. When the file has a `bitbucket`
+section, it checks that `bitbucket.base_url` answers as Bitbucket Data Center (`drift` if another
+application answers) and that the stored token is accepted (`unverified` with a `yojo login` fix if
+not). When the file has a `jira` section, it compares the file with live Jira:
 
 - Every alias in `jira.fields` and each project's `fields` resolves to exactly one field in Jira's
   field list (an `id` must exist; a `jira_name` must match one field).

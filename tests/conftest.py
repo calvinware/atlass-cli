@@ -31,8 +31,11 @@ SHELL_SENTINELS = [
 ]
 JIRA = "https://jira.example.test/jira"
 CONFLUENCE = "https://confluence.example.test/confluence"
+BITBUCKET = "https://bitbucket.example.test/bitbucket"
 JIRA_TOKEN = "jira-secret-token-123"
 CONFLUENCE_TOKEN = "confluence-secret-token-456"
+BITBUCKET_TOKEN = "bitbucket-secret-token-789"
+BASES = {"jira": JIRA, "confluence": CONFLUENCE, "bitbucket": BITBUCKET}
 
 BASE_CONFIG = """\
 version: 1
@@ -172,12 +175,12 @@ class Harness:
         return path
 
     def store(self, service: str = "jira", token: str = JIRA_TOKEN) -> None:
-        base = JIRA if service == "jira" else CONFLUENCE
-        CredentialStore(self.keyring).save(service, base, Credential(auth="pat", secret=token))
+        CredentialStore(self.keyring).save(
+            service, BASES[service], Credential(auth="pat", secret=token)
+        )
 
     def stored(self, service: str) -> str | None:
-        base = JIRA if service == "jira" else CONFLUENCE
-        return self.keyring.get_password(KEYRING_SERVICE, account_name(service, base))
+        return self.keyring.get_password(KEYRING_SERVICE, account_name(service, BASES[service]))
 
     def runtime(
         self,
@@ -252,6 +255,10 @@ def jira_path(path: str) -> str:
 
 def confluence_path(path: str) -> str:
     return "/confluence" + path
+
+
+def bitbucket_path(path: str) -> str:
+    return "/bitbucket/rest/api/1.0" + path
 
 
 def backticked(text: str, prefix: str) -> list[str]:

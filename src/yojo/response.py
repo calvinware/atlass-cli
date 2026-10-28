@@ -1,4 +1,4 @@
-"""Safe accessors for untrusted Jira and Confluence response values."""
+"""Safe accessors for untrusted Jira, Confluence, and Bitbucket response values."""
 
 from __future__ import annotations
 

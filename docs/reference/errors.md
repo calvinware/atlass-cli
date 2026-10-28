@@ -69,7 +69,7 @@
 
 ### `service_not_configured`
 
-**Exit 2.** The command needs a Jira or Confluence URL, but there is no `--base-url` and `yojo.yaml` has no matching section (or there is no `yojo.yaml`).
+**Exit 2.** The command needs a Jira, Confluence, or Bitbucket URL, but there is no `--base-url` and `yojo.yaml` has no matching section (or there is no `yojo.yaml`).
 
 **Fix:** Pass `--base-url https://...` for this call, or add the `jira` or `confluence` section with its `base_url` to `yojo.yaml`.
 
@@ -153,7 +153,7 @@
 
 **Details:** `details.nothing_sent` is `true`; `details.checks[]` lists the failing checks and `details.passed` counts the rest. `details.retry` is quoted for POSIX shells; `details.retry_argv` is the same command as an argument list.
 
-**Returned by:** [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update).
+**Returned by:** [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `config_drift`
 
@@ -175,13 +175,13 @@
 
 ### `remote_validation`
 
-**Exit 5.** Jira or Confluence rejected the request with a 4xx validation error, for example invalid JQL or CQL, a field value the server refuses, or a workflow validator that REST metadata does not expose. For writes, nothing was applied.
+**Exit 5.** Jira, Confluence, or Bitbucket rejected the request with a 4xx validation error, for example invalid JQL or CQL, a field value the server refuses, a pull request Bitbucket will not open, or a workflow validator that REST metadata does not expose. For writes, nothing was applied.
 
 **Fix:** Correct the values in `details.fields` and `details.messages`, then run the command again. For transitions, check workflow validators with a Jira admin.
 
 **Details:** `details.status` is the HTTP status; `details.fields` and `details.messages` are sanitized server messages.
 
-**Returned by:** [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update).
+**Returned by:** [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo jira search`](commands.md#yojo-jira-search), [`yojo confluence page search`](commands.md#yojo-confluence-page-search), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `remote_limit_exceeded`
 
@@ -189,7 +189,7 @@
 
 **Fix:** Reduce the payload, for example by attaching a smaller file, or ask the administrators about the server limit.
 
-**Returned by:** [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update).
+**Returned by:** [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `not_found`
 
@@ -205,7 +205,7 @@
 
 **Fix:** Re-read the current remote state, reconcile your change with it, and resubmit.
 
-**Returned by:** [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update).
+**Returned by:** [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create).
 
 ### `version_conflict`
 
@@ -271,7 +271,7 @@
 
 **Fix:** Retry. If it persists, ask a Jira admin to check the metadata endpoint (createmeta, transitions, or editmeta) and the fields on that screen.
 
-**Returned by:** [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update).
+**Returned by:** [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue get`](commands.md#yojo-jira-issue-get), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira requirements`](commands.md#yojo-jira-requirements), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `outcome_unknown`
 
@@ -281,7 +281,7 @@
 
 **Details:** `details.reason` says why; for transitions, `details.operations[]` gives each write's status and `details.recovery_argv` gives the inspection commands as argument lists. No `retry` is ever offered for this code.
 
-**Returned by:** [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update).
+**Returned by:** [`yojo jira issue create`](commands.md#yojo-jira-issue-create), [`yojo jira issue update`](commands.md#yojo-jira-issue-update), [`yojo jira issue link`](commands.md#yojo-jira-issue-link), [`yojo jira transition`](commands.md#yojo-jira-transition), [`yojo jira attachment add`](commands.md#yojo-jira-attachment-add), [`yojo jira comment add`](commands.md#yojo-jira-comment-add), [`yojo confluence page create`](commands.md#yojo-confluence-page-create), [`yojo confluence page update`](commands.md#yojo-confluence-page-update), [`yojo bitbucket pr create`](commands.md#yojo-bitbucket-pr-create), [`yojo bitbucket pr comment`](commands.md#yojo-bitbucket-pr-comment).
 
 ### `interrupted`
 

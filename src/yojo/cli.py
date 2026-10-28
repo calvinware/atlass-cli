@@ -22,7 +22,7 @@ from typing import Any, BinaryIO, NoReturn, TextIO, cast
 import httpx
 from jsonschema import Draft202012Validator, ValidationError
 
-from yojo import __version__, confluence, jira, retry, workflow
+from yojo import __version__, bitbucket, confluence, jira, retry, workflow
 from yojo.auth import (
     Credential,
     CredentialStore,
@@ -31,6 +31,7 @@ from yojo.auth import (
     validate_username,
 )
 from yojo.config import (
+    BitbucketConfig,
     Config,
     ConfluenceConfig,
     JiraConfig,
@@ -39,6 +40,7 @@ from yojo.config import (
     select_service,
 )
 from yojo.contracts import (
+    BITBUCKET_PROJECT_PATTERN,
     COMMANDS,
     COMMANDS_BY_PATH,
     EXIT_CODES_DOC,
@@ -48,6 +50,7 @@ from yojo.contracts import (
     MAX_SEARCH_LIMIT,
     PAGE_ID_PATTERN,
     PROJECT_KEY_PATTERN,
+    REPO_PATTERN,
     SCHEMA_VERSION,
     CommandSpec,
     ExitCode,
@@ -68,7 +71,10 @@ MAX_FIELD_NAMES = 50
 ISSUE_KEY_RE = re.compile(ISSUE_KEY_PATTERN)
 PROJECT_KEY_RE = re.compile(PROJECT_KEY_PATTERN)
 PAGE_ID_RE = re.compile(PAGE_ID_PATTERN)
-ROOT_SUMMARY = "Generic command line for Jira and Confluence Data Center."
+REPO_RE = re.compile(REPO_PATTERN)
+BITBUCKET_PROJECT_RE = re.compile(BITBUCKET_PROJECT_PATTERN)
+MAX_DIFF_PATH = 1024
+ROOT_SUMMARY = "Generic command line for Jira, Confluence, and Bitbucket Data Center."
 SECRET_LABELS = {"token": "personal access token", "password": "password"}
 VALUE_OPTIONS = ("--config", "--base-url")
 
@@ -166,6 +172,33 @@ def _page_id(value: str) -> str:
     return value
 
 
+def _repo(value: str) -> str:
+    if not REPO_RE.fullmatch(value):
+        raise argparse.ArgumentTypeError("must be a repository as PROJECT/slug, such as PROJ/web")
+    return value
+
+
+def _bitbucket_project(value: str) -> str:
+    if not BITBUCKET_PROJECT_RE.fullmatch(value):
+        raise argparse.ArgumentTypeError("must be a Bitbucket project key such as PROJ")
+    return value
+
+
+def _diff_path(value: str) -> str:
+    parts = value.split("/")
+    if (
+        len(value) > MAX_DIFF_PATH
+        or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
+        or any(part in ("", ".", "..") for part in parts)
+    ):
+        raise argparse.ArgumentTypeError("must be a repository-relative file path such as src/a.py")
+    return value
+
+
+def _pr_state(value: str) -> str:
+    return value.upper()
+
+
 def _query(value: str) -> str:
     if not value.strip() or len(value) > MAX_QUERY_CHARS:
         raise argparse.ArgumentTypeError(f"must be 1-{MAX_QUERY_CHARS} characters")
@@ -224,7 +257,7 @@ def build_parser() -> _Parser:
     p.add_argument("path", nargs="+", metavar="COMMAND")
 
     p = leaf(groups, "login", "login")
-    p.add_argument("--service", required=True, choices=["jira", "confluence", "all"])
+    p.add_argument("--service", required=True, choices=["jira", "confluence", "bitbucket", "all"])
     p.add_argument("--auth", default="pat", choices=["pat", "basic"])
     p.add_argument("--username")
     stdin_group = p.add_mutually_exclusive_group()
@@ -296,6 +329,59 @@ def build_parser() -> _Parser:
     p = leaf(page, "update", "confluence page update")
     p.add_argument("id", type=_page_id)
     p.add_argument("--input", required=True)
+
+    def paging(parser: _Parser) -> None:
+        parser.add_argument("--start", type=_bounded(0, None), default=0)
+        parser.add_argument("--limit", type=_bounded(1, MAX_SEARCH_LIMIT), default=20)
+
+    def repo_flag(parser: _Parser, required: bool = True) -> None:
+        parser.add_argument("--repo", required=required, type=_repo, metavar="PROJECT/slug")
+
+    bitbucket_group = group(groups, "bitbucket")
+    repo = group(bitbucket_group, "repo")
+    p = leaf(repo, "list", "bitbucket repo list")
+    p.add_argument("--project", type=_bitbucket_project, metavar="PROJECT")
+    paging(p)
+    p = leaf(repo, "get", "bitbucket repo get")
+    p.add_argument("repo", type=_repo, metavar="PROJECT/slug")
+    branch = group(bitbucket_group, "branch")
+    p = leaf(branch, "list", "bitbucket branch list")
+    repo_flag(p)
+    p.add_argument("--filter", type=_name, metavar="TEXT")
+    paging(p)
+    pr = group(bitbucket_group, "pr")
+    p = leaf(pr, "list", "bitbucket pr list")
+    repo_flag(p)
+    p.add_argument(
+        "--state",
+        type=_pr_state,
+        choices=["OPEN", "MERGED", "DECLINED", "ALL"],
+        default="OPEN",
+        metavar="OPEN|MERGED|DECLINED|ALL",
+    )
+    paging(p)
+    p = leaf(pr, "get", "bitbucket pr get")
+    p.add_argument("id", type=_bounded(1, None), metavar="ID")
+    repo_flag(p)
+    p.add_argument("--full", action="store_true")
+    p = leaf(pr, "diff", "bitbucket pr diff")
+    p.add_argument("id", type=_bounded(1, None), metavar="ID")
+    repo_flag(p)
+    p.add_argument("--path", type=_diff_path, metavar="FILE")
+    p.add_argument("--full", action="store_true")
+    p = leaf(pr, "create", "bitbucket pr create")
+    repo_flag(p, required=False)
+    p.add_argument("--source", metavar="BRANCH")
+    p.add_argument("--target", metavar="BRANCH")
+    p.add_argument("--title", metavar="TEXT")
+    p.add_argument("--description", metavar="TEXT")
+    p.add_argument("--input", metavar="FILE")
+    p = leaf(pr, "comment", "bitbucket pr comment")
+    p.add_argument("id", type=_bounded(1, None), metavar="ID")
+    repo_flag(p)
+    body = p.add_mutually_exclusive_group(required=True)
+    body.add_argument("--body", metavar="TEXT")
+    body.add_argument("--body-file", metavar="FILE")
     return root
 
 
@@ -616,6 +702,14 @@ def _verify_login(client: ServiceClient, service: str) -> str | None:
 
 
 def cmd_login(args: argparse.Namespace, rt: Runtime) -> Any:
+    if args.service == "bitbucket" and (args.auth == "basic" or args.password_stdin):
+        raise YojoError(
+            "usage_error",
+            "Bitbucket login takes a personal access token, not a password.",
+            "Create an HTTP access token in Bitbucket (Profile > Manage account > HTTP access "
+            "tokens), then run `yojo login --service bitbucket --base-url URL` and paste it, or "
+            "pipe it with --token-stdin.",
+        )
     if args.service == "all" and getattr(args, "base_url", None) is not None:
         raise YojoError(
             "usage_error",
@@ -692,7 +786,10 @@ def cmd_login(args: argparse.Namespace, rt: Runtime) -> Any:
                 service, cfg.base_url, credential, ca_bundle=cfg.ca_bundle, transport=rt.transport
             )
             with client:
-                outcome["user"] = _verify_login(client, service)
+                if service == "bitbucket":
+                    outcome["version"] = bitbucket.verify_login(client)
+                else:
+                    outcome["user"] = _verify_login(client, service)
             store.save(service, cfg.base_url, credential)
             outcome["status"] = "stored"
         except YojoError as exc:
@@ -726,9 +823,21 @@ def cmd_config_check(args: argparse.Namespace, rt: Runtime) -> Any:
             "yojo.example.yaml in the repository root, or pass --config PATH.",
             {"searched_from": str(rt.cwd)},
         )
-    jira_cfg = cast(JiraConfig, select_service(config, "jira", getattr(args, "base_url", None)))
-    with _client(rt, "jira", jira_cfg) as client:
-        checks = jira.config_check(client, config, jira_cfg)
+    base_url = getattr(args, "base_url", None)
+    checks: list[workflow.Check] = []
+    services: list[str] = []
+    # --base-url names one instance: Jira's when Jira is configured, otherwise Bitbucket's.
+    if config.jira is not None or config.bitbucket is None:
+        jira_cfg = cast(JiraConfig, select_service(config, "jira", base_url))
+        with _client(rt, "jira", jira_cfg) as client:
+            checks += jira.config_check(client, config, jira_cfg)
+        services.append("Jira")
+        base_url = None
+    if config.bitbucket is not None:
+        bitbucket_cfg = select_service(config, "bitbucket", base_url)
+        checks += _bitbucket_config_checks(rt, config, bitbucket_cfg)
+        services.append("Bitbucket")
+    live = " and ".join(services)
     summary: dict[str, int] = {}
     for check in checks:
         summary[check.status] = summary.get(check.status, 0) + 1
@@ -736,7 +845,7 @@ def cmd_config_check(args: argparse.Namespace, rt: Runtime) -> Any:
     if summary.get("drift"):
         raise YojoError(
             "config_drift",
-            f"yojo.yaml no longer matches live Jira ({summary['drift']} check(s)).",
+            f"yojo.yaml no longer matches live {live} ({summary['drift']} check(s)).",
             "Apply each drift check's fix (update yojo.yaml or the Jira configuration), then "
             "re-run `yojo config check`.",
             {"status": "drift", "summary": summary, "checks": report},
@@ -744,11 +853,21 @@ def cmd_config_check(args: argparse.Namespace, rt: Runtime) -> Any:
     if summary.get("unverified"):
         raise YojoError(
             "config_unverified",
-            f"{summary['unverified']} check(s) could not be verified against live Jira.",
+            f"{summary['unverified']} check(s) could not be verified against live {live}.",
             "Apply each unverified check's fix, then re-run `yojo config check`.",
             {"status": "unverified", "summary": summary, "checks": report},
         )
     return {"status": "pass", "summary": summary, "checks": report}
+
+
+def _bitbucket_config_checks(
+    rt: Runtime, config: Config, cfg: ServiceConfig
+) -> list[workflow.Check]:
+    try:
+        with _client(rt, "bitbucket", cfg) as client:
+            return bitbucket.config_check(client, str(config.path))
+    except YojoError as exc:
+        return [workflow.Check("bitbucket:auth", "unverified", exc.message, exc.fix)]
 
 
 def cmd_issue_create(args: argparse.Namespace, rt: Runtime) -> Any:
@@ -901,6 +1020,77 @@ def cmd_page_update(args: argparse.Namespace, rt: Runtime) -> Any:
         return confluence.update(client, args.id, doc)
 
 
+def _bitbucket(rt: Runtime, args: argparse.Namespace) -> BitbucketConfig:
+    return cast(BitbucketConfig, _service(rt, args, "bitbucket"))
+
+
+def cmd_repo_list(args: argparse.Namespace, rt: Runtime) -> Any:
+    with _client(rt, "bitbucket", _bitbucket(rt, args)) as client:
+        return bitbucket.repo_list(client, args.project, args.start, args.limit)
+
+
+def cmd_repo_get(args: argparse.Namespace, rt: Runtime) -> Any:
+    with _client(rt, "bitbucket", _bitbucket(rt, args)) as client:
+        return bitbucket.repo_get(client, args.repo)
+
+
+def cmd_branch_list(args: argparse.Namespace, rt: Runtime) -> Any:
+    with _client(rt, "bitbucket", _bitbucket(rt, args)) as client:
+        return bitbucket.branch_list(client, args.repo, args.filter, args.start, args.limit)
+
+
+def cmd_pr_list(args: argparse.Namespace, rt: Runtime) -> Any:
+    with _client(rt, "bitbucket", _bitbucket(rt, args)) as client:
+        return bitbucket.pr_list(client, args.repo, args.state, args.start, args.limit)
+
+
+def cmd_pr_get(args: argparse.Namespace, rt: Runtime) -> Any:
+    with _client(rt, "bitbucket", _bitbucket(rt, args)) as client:
+        return bitbucket.pr_get(client, args.repo, args.id, args.full)
+
+
+def cmd_pr_diff(args: argparse.Namespace, rt: Runtime) -> Any:
+    with _client(rt, "bitbucket", _bitbucket(rt, args)) as client:
+        return bitbucket.pr_diff(client, args.repo, args.id, args.path, args.full)
+
+
+def cmd_pr_create(args: argparse.Namespace, rt: Runtime) -> Any:
+    doc = _input_doc(rt, args, "bitbucket pr create")
+    names = ("repo", "source", "target", "title", "description")
+    values = {name: _merged(args, doc, name) for name in names}
+    origins = {
+        name: "flag"
+        if getattr(args, name, None) is not None
+        else "input"
+        if name in doc
+        else "missing"
+        for name in names
+    }
+    request = bitbucket.PullRequestRequest(**values, origins=origins)
+    if request.repo is None:
+        raise bitbucket.pull_request_refusal(request)
+    with _client(rt, "bitbucket", _bitbucket(rt, args)) as client:
+        return bitbucket.pr_create(client, request)
+
+
+def cmd_pr_comment(args: argparse.Namespace, rt: Runtime) -> Any:
+    body = (
+        args.body
+        if args.body is not None
+        else _read_source(rt, args.body_file, "comment body", MAX_COMMENT_BYTES)
+    )
+    if len(body.encode("utf-8")) > MAX_COMMENT_BYTES:
+        raise YojoError(
+            "input_invalid",
+            f"The comment body exceeds {MAX_COMMENT_BYTES} bytes.",
+            "Shorten the comment.",
+            {"max_bytes": MAX_COMMENT_BYTES},
+        )
+    origin = "flag" if args.body is not None else "file"
+    with _client(rt, "bitbucket", _bitbucket(rt, args)) as client:
+        return bitbucket.pr_comment(client, args.repo, args.id, body, origin)
+
+
 HANDLERS: dict[str, Callable[[argparse.Namespace, Runtime], Any]] = {
     "commands": cmd_commands,
     "schema": cmd_schema,
@@ -919,6 +1109,14 @@ HANDLERS: dict[str, Callable[[argparse.Namespace, Runtime], Any]] = {
     "confluence page search": cmd_page_search,
     "confluence page create": cmd_page_create,
     "confluence page update": cmd_page_update,
+    "bitbucket repo list": cmd_repo_list,
+    "bitbucket repo get": cmd_repo_get,
+    "bitbucket branch list": cmd_branch_list,
+    "bitbucket pr list": cmd_pr_list,
+    "bitbucket pr get": cmd_pr_get,
+    "bitbucket pr diff": cmd_pr_diff,
+    "bitbucket pr create": cmd_pr_create,
+    "bitbucket pr comment": cmd_pr_comment,
 }
 
 
@@ -941,7 +1139,44 @@ def run(argv: list[str], rt: Runtime) -> Any:
     if not _words(argv):
         raise _no_command()
     args = build_parser().parse_args(argv)
-    return HANDLERS[args.command](args, rt)
+    data = HANDLERS[args.command](args, rt)
+    _check_bitbucket_read_size(args, argv, data)
+    return data
+
+
+def _check_bitbucket_read_size(args: argparse.Namespace, argv: list[str], data: Any) -> None:
+    """Keep ordinary Bitbucket read envelopes within the documented 4 KiB budget."""
+    command = args.command
+    if command not in {
+        "bitbucket repo list",
+        "bitbucket repo get",
+        "bitbucket branch list",
+        "bitbucket pr list",
+        "bitbucket pr get",
+    } or getattr(args, "full", False):
+        return
+    size = len(json.dumps(success(data), ensure_ascii=True, separators=(",", ":")).encode()) + 1
+    if size <= 4 * 1024:
+        return
+    if command.endswith(" list"):
+        if args.limit == 1:
+            fix = "Open the list in Bitbucket; one returned item exceeds compact output limits."
+        else:
+            smaller = max(1, args.limit // 2)
+            corrected = retry.apply(argv, [retry.Edit("flag", "--limit", str(smaller))])
+            assert corrected is not None
+            fix = f"Run `{retry.posix(corrected)}` to fetch a smaller page."
+    elif command == "bitbucket pr get":
+        corrected = [retry.PROGRAM, *argv, "--full"]
+        fix = f"Run `{retry.posix(corrected)}` to request the full pull request."
+    else:
+        fix = f"Open the repository in Bitbucket: {data['url']}"
+    raise YojoError(
+        "remote_limit_exceeded",
+        "The Bitbucket read result exceeds the 4 KiB compact output limit.",
+        fix,
+        {"max_bytes": 4 * 1024, "result_bytes": size},
+    )
 
 
 def command_path(argv: list[str]) -> str | None:

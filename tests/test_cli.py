@@ -14,12 +14,14 @@ from jsonschema import Draft202012Validator
 from tests.conftest import Harness
 from yojo import cli
 from yojo.contracts import (
+    BITBUCKET_PROJECT_PATTERN,
     COMMANDS,
     COMMANDS_BY_PATH,
     ERROR_CODES,
     ISSUE_KEY_PATTERN,
     PAGE_ID_PATTERN,
     PROJECT_KEY_PATTERN,
+    REPO_PATTERN,
     SPACE_KEY_PATTERN,
     ExitCode,
     command_schema,
@@ -64,6 +66,14 @@ def test_commands_lists_every_command_offline(harness: Harness) -> None:
         "confluence page search",
         "confluence page create",
         "confluence page update",
+        "bitbucket repo list",
+        "bitbucket repo get",
+        "bitbucket branch list",
+        "bitbucket pr list",
+        "bitbucket pr get",
+        "bitbucket pr diff",
+        "bitbucket pr create",
+        "bitbucket pr comment",
     ):
         assert expected in COMMANDS_BY_PATH
     assert len(result.data["commands"]) == len(COMMANDS_BY_PATH)
@@ -396,6 +406,8 @@ def test_input_schemas_reject_trailing_newline(
         (PROJECT_KEY_PATTERN, "ABC"),
         (PAGE_ID_PATTERN, "123456"),
         (SPACE_KEY_PATTERN, "~user"),
+        (REPO_PATTERN, "PROJ/web"),
+        (BITBUCKET_PROJECT_PATTERN, "~example.user"),
     ],
 )
 def test_key_patterns_have_portable_absolute_end(pattern: str, valid: str) -> None:

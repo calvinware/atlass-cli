@@ -3,9 +3,9 @@
 ![yojo: agent-first command line for Jira and Confluence Data Center](assets/banner-light.svg#gh-light-mode-only)
 ![yojo: agent-first command line for Jira and Confluence Data Center](assets/banner-dark.svg#gh-dark-mode-only)
 
-`yojo` is a command line for Jira and Confluence Data Center, built so that a developer, a Jira
-admin, or an AI agent on any model can do a task in **one call**. It speaks Jira's words (field
-names, statuses, option labels, people), resolves the IDs itself, checks every rule before it
+`yojo` is a command line for Jira, Confluence, and Bitbucket Data Center, built so that a developer,
+a Jira admin, or an AI agent on any model can do a task in **one call**. It speaks Jira's words
+(field names, statuses, option labels, people), resolves the IDs itself, checks every rule before it
 writes, and reports every problem at once with the corrected command. It works with no config; a
 `yojo.yaml` adds your team's friendly names and rules on top.
 

@@ -51,7 +51,9 @@ def sanitize_text(value: Any, limit: int = MAX_DETAIL_CHARS, redact: tuple[str, 
 
 
 def sanitize_remote_errors(body: Any, redact: tuple[str, ...] = ()) -> dict[str, Any]:
-    """Extract Jira/Confluence error messages into a bounded, printable, redacted structure."""
+    """Extract Jira, Confluence, or Bitbucket error messages into a bounded, printable, redacted
+    structure. Bitbucket sends ``errors`` as a list of ``{context, message}`` objects; an entry
+    with a context (a field name) goes to ``fields``, one without goes to ``messages``."""
     fields: dict[str, str] = {}
     messages: list[str] = []
     if isinstance(body, dict):
@@ -59,6 +61,16 @@ def sanitize_remote_errors(body: Any, redact: tuple[str, ...] = ()) -> dict[str,
         if isinstance(raw_fields, dict):
             for key, value in list(raw_fields.items())[:MAX_DETAIL_ITEMS]:
                 fields[sanitize_text(key, 100, redact)] = sanitize_text(value, redact=redact)
+        elif isinstance(raw_fields, list):
+            for item in raw_fields[:MAX_DETAIL_ITEMS]:
+                if not isinstance(item, dict) or not isinstance(item.get("message"), str):
+                    continue
+                text = sanitize_text(item["message"], redact=redact)
+                context = item.get("context")
+                if isinstance(context, str) and context:
+                    fields[sanitize_text(context, 100, redact)] = text
+                else:
+                    messages.append(text)
         raw_messages = body.get("errorMessages")
         if isinstance(raw_messages, list):
             messages.extend(
@@ -259,7 +271,7 @@ class ServiceClient:
                         "response_invalid",
                         f"The {self.service} response exceeded {MAX_RESPONSE_BYTES} bytes.",
                         "Narrow the request (smaller --limit or more specific query).",
-                        {"service": self.service},
+                        {"service": self.service, "max_bytes": MAX_RESPONSE_BYTES},
                     )
                 chunks.append(chunk)
         except httpx.HTTPError as exc:

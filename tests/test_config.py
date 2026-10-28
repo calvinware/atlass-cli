@@ -7,6 +7,7 @@ import pytest
 from tests.conftest import JIRA, Harness, config_text, jira_path
 from yojo.config import (
     DEFAULT_MAX_ATTACHMENT_BYTES,
+    BitbucketConfig,
     JiraConfig,
     discover_config,
     load_config,
@@ -452,3 +453,54 @@ def test_project_key_rejects_trailing_newline(tmp_path: Path) -> None:
     text = config_text().replace("- key: EXAMPLE", '- key: "EXAMPLE\\n"')
     assert '"EXAMPLE\\n"' in text
     _error(tmp_path, text)
+
+
+def test_bitbucket_only_config(tmp_path: Path) -> None:
+    (tmp_path / "ca.pem").write_text("x")
+    text = (
+        "version: 1\nbitbucket:\n  base_url: https://BITBUCKET.example.test/bitbucket/\n"
+        "  ca_bundle: ca.pem\n"
+    )
+    config = parse_config_file(_write(tmp_path, text))
+    assert config.jira is None and config.confluence is None
+    assert config.bitbucket == BitbucketConfig(
+        base_url="https://bitbucket.example.test/bitbucket", ca_bundle=tmp_path / "ca.pem"
+    )
+    assert select_service(config, "bitbucket", None) is config.bitbucket
+    with pytest.raises(YojoError) as info:
+        select_service(config, "jira", None)
+    assert info.value.code == "service_not_configured"
+
+
+def test_mixed_config_keeps_each_service(tmp_path: Path) -> None:
+    text = config_text() + "bitbucket:\n  base_url: https://bitbucket.example.test/bitbucket\n"
+    config = parse_config_file(_write(tmp_path, text))
+    assert config.jira is not None and config.bitbucket is not None
+    assert select_service(config, "bitbucket", "https://bitbucket.example.test/bitbucket/")
+    with pytest.raises(YojoError) as info:
+        select_service(config, "bitbucket", "https://other.example.test/bitbucket")
+    assert info.value.code == "input_invalid"
+
+
+def test_bitbucket_without_config_uses_base_url(tmp_path: Path) -> None:
+    selected = select_service(None, "bitbucket", "https://bitbucket.example.test/bb/")
+    assert isinstance(selected, BitbucketConfig)
+    assert selected.base_url == "https://bitbucket.example.test/bb"
+
+
+@pytest.mark.parametrize(
+    ("section", "where"),
+    [
+        ("bitbucket:\n  base_url: http://bitbucket.example.test\n", "bitbucket.base_url"),
+        ("bitbucket:\n  base_url: https://b.example.test\n  projects: []\n", "bitbucket"),
+        ("bitbucket: {}\n", "bitbucket"),
+    ],
+)
+def test_rejects_invalid_bitbucket_section(tmp_path: Path, section: str, where: str) -> None:
+    error = _error(tmp_path, "version: 1\n" + section)
+    assert error.details["where"] == where
+
+
+def test_empty_config_names_every_service(tmp_path: Path) -> None:
+    error = _error(tmp_path, "version: 1\n")
+    assert "jira, confluence, or bitbucket" in error.details["problem"]

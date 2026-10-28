@@ -3,7 +3,7 @@
 **Document version:** 3 (yojo 0.1.0). **Target:** OWASP ASVS 5.0.0, Level 2.
 
 `yojo` is a local command-line client, not a web application or service. It runs with the user's
-own permissions and talks to the team's Jira and Confluence Data Center servers. ASVS is written
+own permissions and talks to the team's Jira, Confluence, and Bitbucket Data Center servers. ASVS is written
 for applications that serve users, so many controls belong to the Atlassian servers. This document
 maps each ASVS 5.0 chapter to `yojo`. It records how each applicable control is met, and why the
 others do not apply.
@@ -21,7 +21,7 @@ others do not apply.
 |-------|--------|---------|
 | PAT / password | disclosure through argv, shell history, files, logs, error output | read only from stdin or a hidden prompt; stored only in the native OS keyring; never logged; `Credential.__repr__` redacts; sanitized error details, with server-echoed copies of the raw token or password, the full Authorization value, its PAT or base64 Basic credential part, and the raw `username:password` pair replaced by `[REDACTED]` (other encodings, such as URL-encoded or JSON-escaped copies, are not recognized, so the remaining protection is the length bound and control-character stripping); tests assert tokens never reach stdout/stderr |
 | Credential in transit | MITM, downgrade, redirect to another origin | HTTPS-only URLs; certificate and host name verification; TLS ≥ 1.2; OS trust store or an explicit CA bundle; redirects never followed; the `Authorization` header is never sent to a redirect target |
-| Jira workflow integrity | writes that skip Jira's or the team's rules; guessed values; silent partial writes; false success | every Jira write (issue create, update, link, transition, comment, attachment) runs its preflight inside the same call before the first write and refuses with nothing sent when any check fails or cannot be verified (live create/edit/transition screens, required fields, allowed values, permissions, `yojo.yaml` rules); names and values resolve only on a unique match, never on a guess or a suggestion; the transition checks re-run after a `pre_edit` PUT. Confluence writes check `expected_version` against a fresh read, the page type, and a well-formed title, version, and body. Also: `pre_edit` is opt-in; ordered operation statuses; `partial_transition` / `outcome_unknown`; success only when the response (or a read-back, for update and link) confirms the write; no automatic retries, and no retry line after an uncertain write |
+| Jira workflow integrity | writes that skip Jira's or the team's rules; guessed values; silent partial writes; false success | every Jira write (issue create, update, link, transition, comment, attachment) runs its preflight inside the same call before the first write and refuses with nothing sent when any check fails or cannot be verified (live create/edit/transition screens, required fields, allowed values, permissions, `yojo.yaml` rules); names and values resolve only on a unique match, never on a guess or a suggestion; the transition checks re-run after a `pre_edit` PUT. Confluence writes check `expected_version` against a fresh read, the page type, and a well-formed title, version, and body. Bitbucket pull request and comment writes check the repository, both branches (resolved to one exact branch each), the title or comment text, and for an existing open pull request or identical comment, and refuse as unverified when a bounded scan cannot finish. Also: `pre_edit` is opt-in; ordered operation statuses; `partial_transition` / `outcome_unknown`; success only when the response (or a read-back, for update and link) confirms the write; no automatic retries, and no retry line after an uncertain write |
 | Agent driving `yojo` | prompt injection from remote content; invented content | remote content is labeled untrusted data; the CLI never writes summaries, descriptions, comments, or missing values, and a refused write leaves placeholders where content is needed |
 | Team config | malicious or malformed YAML | `SafeLoader` subclass; no custom tags, anchors, aliases, or duplicate keys; strict schema; 256 KiB cap |
 | Local resources | huge inputs or responses | caps on input JSON (10 MiB), comments (1 MiB), secrets (4 KiB), config (256 KiB), and responses (32 MiB); bounded pagination and search limits (default 20, at most 100 per page); long text in reads trimmed to 2000 characters unless `--full`; user lookups bounded to 10 results |
@@ -35,7 +35,7 @@ others do not apply.
 | V3 Web Frontend Security | No | No browser UI, cookies, CSP, or DOM. | — |
 | V4 API and Web Service | Partially (client) | `yojo` consumes REST APIs, so the server-side controls belong to Atlassian. As a client it sends explicit `Content-Type`, accepts JSON only, and treats non-JSON or oversized responses as errors. It sends `X-Atlassian-Token: no-check` only on multipart uploads, which Jira requires. | `transport.ServiceClient._handle`; `tests/test_auth_transport.py::test_non_json_response` |
 | V5 File Handling | Yes | Attachments must be existing regular files and are size-checked before dispatch. The path is opened without blocking, the opened file must be the checked regular file (same device and inode), and the bytes are uploaded from an owner-only temporary snapshot bounded by `max_attachment_bytes`; a change while copying is rejected before anything is sent. The stream is bounded so it cannot exceed the declared size. Paths are resolved relative to the working directory. Downloaded content is never written to disk. | `jira.attachment_add`; `tests/test_jira.py::test_attachment_*` |
-| V6 Authentication | Partially | Authentication is performed by Data Center. `yojo` uses PATs (preferred) or basic auth, verifies the credential with an authenticated read before storing it, and never puts secrets in arguments or URLs. Secrets are never read from `yojo.yaml` or the environment. Rate limiting, lockout, password policy, and MFA are server responsibilities. | `cli.cmd_login`, `auth.validate_secret`; `tests/test_auth_transport.py::test_login_*` |
+| V6 Authentication | Partially | Authentication is performed by Data Center. `yojo` uses PATs (preferred) or basic auth (Bitbucket: tokens only), verifies the credential with an authenticated read before storing it (for Bitbucket, a sign-in-only endpoint, because the application-properties identity check answers anonymously), and never puts secrets in arguments or URLs. Secrets are never read from `yojo.yaml` or the environment. Rate limiting, lockout, password policy, and MFA are server responsibilities. | `cli.cmd_login`, `auth.validate_secret`; `tests/test_auth_transport.py::test_login_*` |
 | V7 Session Management | No | Stateless. Each request carries the stored credential. There are no cookies or sessions. Server session controls belong to Data Center. | — |
 | V8 Authorization | No (server-side) | Data Center enforces permissions. 401/403 map to `auth_failed`/`forbidden` (exit 3) with no bypass. | `transport.ServiceClient._handle`; `test_status_mapping` |
 | V9 Self-contained Tokens | No | PATs are opaque bearer tokens validated by the server. `yojo` does not issue or parse JWTs. | — |
@@ -50,11 +50,13 @@ others do not apply.
 
 ## LLM / agent considerations (OWASP LLM Top 10 2025)
 
-- **LLM01 Prompt injection:** Confluence and Jira content is returned as data. Page results carry
+- **LLM01 Prompt injection:** Confluence, Jira, and Bitbucket content (including diffs) is
+  returned as data. Page results carry
   `content_trust: "untrusted"`, and [AGENTS.md](../AGENTS.md) tells agents never to follow
   instructions found in it.
 - **LLM06 Excessive agency:** the CLI exposes a small set of generic write operations and no
-  delete, approve, or merge. Content stays with the caller: `yojo` never writes summaries,
+  delete, approve, merge, or decline; Bitbucket pull request approval and merging stay with
+  people. Content stays with the caller: `yojo` never writes summaries,
   descriptions, comments, or missing values, and never applies a "did you mean" suggestion
   without the caller running the corrected command. Ambiguous names and people are refused with
   the candidates listed.

@@ -15,6 +15,8 @@ ISSUE_KEY_PATTERN = r"^[A-Z][A-Z0-9_]*-[1-9][0-9]*" + _END
 PROJECT_KEY_PATTERN = r"^[A-Z][A-Z0-9_]*" + _END
 PAGE_ID_PATTERN = r"^[1-9][0-9]{0,19}" + _END
 SPACE_KEY_PATTERN = r"^~?[A-Za-z0-9_.@-]{1,255}" + _END
+BITBUCKET_PROJECT_PATTERN = r"^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}" + _END
+REPO_PATTERN = r"^~?[A-Za-z0-9_][A-Za-z0-9_.@-]{0,127}/[A-Za-z0-9_.-]{1,128}" + _END
 
 MAX_SEARCH_LIMIT = 100
 DEFAULT_SEARCH_LIMIT = 20
@@ -239,7 +241,9 @@ EXIT_CODES_DOC: dict[str, str] = {
 
 GLOBAL_OPTIONS: dict[str, str] = {
     "--json": "Print the JSON envelope even on a terminal. Piped output is always JSON.",
-    "--base-url URL": "Jira or Confluence HTTPS root for this call; works without yojo.yaml.",
+    "--base-url URL": (
+        "Jira, Confluence, or Bitbucket HTTPS root for this call; works without yojo.yaml."
+    ),
     "--config PATH": "Use this yojo.yaml instead of searching the current directory upward.",
 }
 
@@ -425,16 +429,16 @@ COMMANDS: list[CommandSpec] = [
         summary=(
             "Check a personal access token (or username and password) against the service and "
             "store it in the OS keyring for that URL. Secrets come from stdin or a hidden prompt, "
-            "never arguments."
+            "never arguments. Bitbucket takes a token only; `all` means Jira and Confluence."
         ),
         usage=(
-            "yojo login --service jira|confluence|all [--base-url URL] [--auth pat|basic] "
-            "[--username NAME] [--token-stdin | --password-stdin]"
+            "yojo login --service jira|confluence|bitbucket|all [--base-url URL] "
+            "[--auth pat|basic] [--username NAME] [--token-stdin | --password-stdin]"
         ),
         example="yojo login --service jira --base-url https://jira.example.test/jira",
         arguments=_obj(
             {
-                "service": {"enum": ["jira", "confluence", "all"]},
+                "service": {"enum": ["jira", "confluence", "bitbucket", "all"]},
                 "auth": {"enum": ["pat", "basic"], "default": "pat"},
                 "username": {"type": "string", "description": "Basic auth username (not secret)."},
                 "token_stdin": BOOL,
@@ -447,7 +451,7 @@ COMMANDS: list[CommandSpec] = [
                 "services": _arr(
                     _obj(
                         {
-                            "service": {"enum": ["jira", "confluence"]},
+                            "service": {"enum": ["jira", "confluence", "bitbucket"]},
                             "status": {"enum": ["stored", "failed", "not_attempted"]},
                             "auth": {"enum": ["pat", "basic"]},
                             "user": NULLABLE_STR,
@@ -466,7 +470,8 @@ COMMANDS: list[CommandSpec] = [
         path="config check",
         summary=(
             "Compare yojo.yaml aliases, create rules, and transition rules with live Jira "
-            "fields, projects, and statuses. Read-only."
+            "fields, projects, and statuses, and check that a configured Bitbucket answers and "
+            "accepts the stored token. Read-only."
         ),
         usage="yojo config check [--config PATH]",
         example="yojo --json config check",
@@ -849,6 +854,350 @@ COMMANDS: list[CommandSpec] = [
         errors=[*COMMON_REMOTE_ERRORS, *WRITE_ERRORS, "version_conflict", "conflict"],
     ),
 ]
+
+BB_PROJECT: dict[str, Any] = {"type": "string", "pattern": BITBUCKET_PROJECT_PATTERN}
+REPO: dict[str, Any] = {
+    "type": "string",
+    "pattern": REPO_PATTERN,
+    "description": "Repository as PROJECT/slug, for example PROJ/web.",
+}
+PR_ID: dict[str, Any] = {"type": "integer", "minimum": 1, "description": "Pull request ID."}
+BRANCH: dict[str, Any] = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 255,
+    "description": "Branch name in the same repository, e.g. feature/login or refs/heads/main.",
+}
+PR_STATE: dict[str, Any] = {"enum": ["OPEN", "MERGED", "DECLINED", "ALL"], "default": "OPEN"}
+NULLABLE_INT: dict[str, Any] = {"type": ["integer", "null"]}
+UNTRUSTED: dict[str, Any] = {"const": "untrusted"}
+LISTING = {"start": INT, "limit": INT, "next_start": NULLABLE_INT, "content_trust": UNTRUSTED}
+LISTING_REQUIRED = ["start", "limit", "next_start", "content_trust"]
+PR_ROW = _obj(
+    {
+        "id": INT,
+        "title": STR,
+        "state": NULLABLE_STR,
+        "source": NULLABLE_STR,
+        "target": NULLABLE_STR,
+        "author": NULLABLE_STR,
+        "updated": NULLABLE_STR,
+    },
+    ["id", "title", "state", "source", "target", "author", "updated"],
+)
+PR_CREATE_INPUT = _obj(
+    {
+        "repo": {"type": "string", "pattern": REPO_PATTERN},
+        "source": BRANCH,
+        "target": BRANCH,
+        "title": {"type": "string", "minLength": 1, "maxLength": 255},
+        "description": LONG_TEXT,
+    }
+)
+LIST_ERRORS = [*COMMON_REMOTE_ERRORS, "usage_error"]
+
+BITBUCKET_COMMANDS: list[CommandSpec] = [
+    CommandSpec(
+        path="bitbucket repo list",
+        summary=(
+            "List repositories you can see, optionally in one project. Returns a bounded page "
+            "(--limit, default 20) and next_start, Bitbucket's cursor for the next page."
+        ),
+        usage="yojo bitbucket repo list [--project PROJECT] [--start N] [--limit N]",
+        example="yojo --json bitbucket repo list --project PROJ",
+        arguments=_obj({"project": BB_PROJECT, "start": START, "limit": LIMIT}),
+        success=_obj(
+            {
+                "project": NULLABLE_STR,
+                **LISTING,
+                "repos": _arr(
+                    _obj({"repo": STR, "name": STR, "url": URL}, ["repo", "name", "url"])
+                ),
+            },
+            ["project", *LISTING_REQUIRED, "repos"],
+        ),
+        errors=LIST_ERRORS,
+    ),
+    CommandSpec(
+        path="bitbucket repo get",
+        summary="Read a repository's name, state, default branch, clone URLs, and link.",
+        usage="yojo bitbucket repo get PROJECT/slug",
+        example="yojo --json bitbucket repo get PROJ/web",
+        arguments=_obj({"repo": REPO}, ["repo"]),
+        success=_obj(
+            {
+                "repo": STR,
+                "name": STR,
+                "state": NULLABLE_STR,
+                "public": BOOL,
+                "default_branch": NULLABLE_STR,
+                "clone_http": NULLABLE_STR,
+                "clone_ssh": NULLABLE_STR,
+                "url": URL,
+                "content_trust": UNTRUSTED,
+            },
+            [
+                "repo",
+                "name",
+                "state",
+                "public",
+                "default_branch",
+                "clone_http",
+                "clone_ssh",
+                "url",
+                "content_trust",
+            ],
+        ),
+        errors=COMMON_REMOTE_ERRORS,
+    ),
+    CommandSpec(
+        path="bitbucket branch list",
+        summary=(
+            "List a repository's branches, optionally those whose name contains --filter. "
+            "Bounded page (--limit, default 20) with next_start."
+        ),
+        usage=(
+            "yojo bitbucket branch list --repo PROJECT/slug [--filter TEXT] [--start N] [--limit N]"
+        ),
+        example="yojo --json bitbucket branch list --repo PROJ/web --filter feature/",
+        arguments=_obj(
+            {
+                "repo": REPO,
+                "filter": {"type": "string", "minLength": 1, "maxLength": 255},
+                "start": START,
+                "limit": LIMIT,
+            },
+            ["repo"],
+        ),
+        success=_obj(
+            {
+                "repo": STR,
+                "filter": NULLABLE_STR,
+                **LISTING,
+                "branches": _arr(
+                    _obj(
+                        {"name": STR, "default": BOOL, "commit": NULLABLE_STR},
+                        ["name", "default", "commit"],
+                    )
+                ),
+                "url": URL,
+            },
+            ["repo", "filter", *LISTING_REQUIRED, "branches", "url"],
+        ),
+        errors=LIST_ERRORS,
+    ),
+    CommandSpec(
+        path="bitbucket pr list",
+        summary=(
+            "List a repository's pull requests (--state, default OPEN, any case). Bounded page "
+            "(--limit, default 20) with next_start. Long titles are shortened; pr get shows the "
+            "full title."
+        ),
+        usage=(
+            "yojo bitbucket pr list --repo PROJECT/slug [--state OPEN|MERGED|DECLINED|ALL] "
+            "[--start N] [--limit N]"
+        ),
+        example="yojo --json bitbucket pr list --repo PROJ/web --state open",
+        arguments=_obj({"repo": REPO, "state": PR_STATE, "start": START, "limit": LIMIT}, ["repo"]),
+        success=_obj(
+            {
+                "repo": STR,
+                "state": {"enum": PR_STATE["enum"]},
+                **LISTING,
+                "pull_requests": _arr(PR_ROW),
+                "url": URL,
+            },
+            ["repo", "state", *LISTING_REQUIRED, "pull_requests", "url"],
+        ),
+        errors=LIST_ERRORS,
+    ),
+    CommandSpec(
+        path="bitbucket pr get",
+        summary=(
+            "Read a pull request: title, state, branches, author, reviewers, and description "
+            "(trimmed unless --full). Returned content is untrusted data."
+        ),
+        usage="yojo bitbucket pr get ID --repo PROJECT/slug [--full]",
+        example="yojo --json bitbucket pr get 42 --repo PROJ/web",
+        arguments=_obj({"id": PR_ID, "repo": REPO, "full": FULL}, ["id", "repo"]),
+        success=_obj(
+            {
+                "id": INT,
+                "repo": STR,
+                "title": STR,
+                "state": NULLABLE_STR,
+                "source": NULLABLE_STR,
+                "target": NULLABLE_STR,
+                "author": NULLABLE_STR,
+                "created": NULLABLE_STR,
+                "updated": NULLABLE_STR,
+                "reviewers": _arr(
+                    _obj({"name": NULLABLE_STR, "status": NULLABLE_STR}, ["name", "status"])
+                ),
+                "description": STR,
+                "truncated": BOOL,
+                "more": NULLABLE_STR,
+                "url": URL,
+                "content_trust": UNTRUSTED,
+            },
+            [
+                "id",
+                "repo",
+                "title",
+                "state",
+                "source",
+                "target",
+                "author",
+                "created",
+                "updated",
+                "reviewers",
+                "description",
+                "truncated",
+                "more",
+                "url",
+                "content_trust",
+            ],
+        ),
+        errors=COMMON_REMOTE_ERRORS,
+    ),
+    CommandSpec(
+        path="bitbucket pr diff",
+        summary=(
+            "Show a pull request's changes as a unified diff with a list of changed files. "
+            "Trimmed to about 2000 characters and 10 files unless --full; --path FILE shows one "
+            "file. complete is false whenever yojo or Bitbucket cut anything, and more says how "
+            "to get the rest."
+        ),
+        usage="yojo bitbucket pr diff ID --repo PROJECT/slug [--path FILE] [--full]",
+        example="yojo --json bitbucket pr diff 42 --repo PROJ/web --path src/app.py",
+        arguments=_obj(
+            {
+                "id": PR_ID,
+                "repo": REPO,
+                "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "description": "Repository-relative file path, e.g. src/app.py.",
+                },
+                "full": FULL,
+            },
+            ["id", "repo"],
+        ),
+        success=_obj(
+            {
+                "id": INT,
+                "repo": STR,
+                "path": NULLABLE_STR,
+                "files_total": INT,
+                "files": _arr(
+                    _obj(
+                        {
+                            "path": STR,
+                            "old_path": NULLABLE_STR,
+                            "change": {"enum": ["added", "deleted", "renamed", "modified"]},
+                            "added": INT,
+                            "removed": INT,
+                        },
+                        ["path", "old_path", "change", "added", "removed"],
+                    )
+                ),
+                "diff": STR,
+                "diff_chars": INT,
+                "truncated": BOOL,
+                "server_truncated": BOOL,
+                "truncated_files": _arr(STR),
+                "complete": BOOL,
+                "more": NULLABLE_STR,
+                "url": URL,
+                "content_trust": UNTRUSTED,
+            },
+            [
+                "id",
+                "repo",
+                "path",
+                "files_total",
+                "files",
+                "diff",
+                "diff_chars",
+                "truncated",
+                "server_truncated",
+                "truncated_files",
+                "complete",
+                "more",
+                "url",
+                "content_trust",
+            ],
+        ),
+        errors=COMMON_REMOTE_ERRORS,
+    ),
+    CommandSpec(
+        path="bitbucket pr create",
+        summary=(
+            "Open a pull request between two branches of one repository. Checks the repository, "
+            "both branches, the title, and for an open pull request with the same branches "
+            "first, and refuses with every problem listed; nothing is written then."
+        ),
+        usage=(
+            "yojo bitbucket pr create --repo PROJECT/slug --source BRANCH --target BRANCH "
+            "--title TEXT [--description TEXT] [--input FILE|-]"
+        ),
+        example=(
+            "yojo --json bitbucket pr create --repo PROJ/web --source feature/login "
+            "--target main --title 'Fix login on Safari'"
+        ),
+        arguments=_obj(
+            {
+                "repo": REPO,
+                "source": BRANCH,
+                "target": BRANCH,
+                "title": SUMMARY,
+                "description": LONG_TEXT,
+                "input": INPUT_PATH,
+            }
+        ),
+        input=PR_CREATE_INPUT,
+        success=_obj(
+            {
+                "id": INT,
+                "repo": STR,
+                "title": STR,
+                "source": STR,
+                "target": STR,
+                "state": STR,
+                "url": URL,
+            },
+            ["id", "repo", "title", "source", "target", "state", "url"],
+        ),
+        errors=[*COMMON_REMOTE_ERRORS, *WRITE_ERRORS, "conflict"],
+    ),
+    CommandSpec(
+        path="bitbucket pr comment",
+        summary=(
+            "Add a plain-text comment to a pull request from --body, a file, or stdin, after "
+            "checking the pull request exists and has no identical comment."
+        ),
+        usage="yojo bitbucket pr comment ID --repo PROJECT/slug (--body TEXT | --body-file FILE|-)",
+        example="yojo --json bitbucket pr comment 42 --repo PROJ/web --body 'Ready for review.'",
+        arguments=_obj(
+            {
+                "id": PR_ID,
+                "repo": REPO,
+                "body": {"type": "string", "minLength": 1},
+                "body_file": TEXT_PATH,
+            },
+            ["id", "repo"],
+        )
+        | {"oneOf": [{"required": ["body"]}, {"required": ["body_file"]}]},
+        success=_obj(
+            {"id": INT, "repo": STR, "comment_id": INT, "url": URL},
+            ["id", "repo", "comment_id", "url"],
+        ),
+        errors=[*COMMON_REMOTE_ERRORS, *WRITE_ERRORS],
+    ),
+]
+
+COMMANDS += BITBUCKET_COMMANDS
 
 COMMANDS_BY_PATH: dict[str, CommandSpec] = {spec.path: spec for spec in COMMANDS}
 

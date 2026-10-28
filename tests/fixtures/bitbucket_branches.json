@@ -1,0 +1,32 @@
+{
+  "size": 3,
+  "limit": 25,
+  "isLastPage": true,
+  "start": 0,
+  "values": [
+    {
+      "id": "refs/heads/main",
+      "displayId": "main",
+      "type": "BRANCH",
+      "latestCommit": "8d51122def5632836d1cb1026e879069e10a1e13",
+      "latestChangeset": "8d51122def5632836d1cb1026e879069e10a1e13",
+      "isDefault": true
+    },
+    {
+      "id": "refs/heads/feature/login",
+      "displayId": "feature/login",
+      "type": "BRANCH",
+      "latestCommit": "0a943a29376f2336b78312d99e65da17048951db",
+      "latestChangeset": "0a943a29376f2336b78312d99e65da17048951db",
+      "isDefault": false
+    },
+    {
+      "id": "refs/heads/feature/login-v2",
+      "displayId": "feature/login-v2",
+      "type": "BRANCH",
+      "latestCommit": "c5d3f5a4bd2a8b7e36d5d2e1a1c7a4e2f9b0c111",
+      "latestChangeset": "c5d3f5a4bd2a8b7e36d5d2e1a1c7a4e2f9b0c111",
+      "isDefault": false
+    }
+  ]
+}

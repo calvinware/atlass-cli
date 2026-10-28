@@ -215,8 +215,9 @@ def test_comment_body_file_schema_and_row_say_plain_text(
     assert "JSON file" not in prop["description"]
     assert prop["minLength"] == 1
     reference = gen.COMMANDS_MD.read_text(encoding="utf-8")
-    (row,) = [line for line in reference.splitlines() if line.startswith("| `body_file` |")]
-    assert prop["description"] in row
+    rows = [line for line in reference.splitlines() if line.startswith("| `body_file` |")]
+    assert len(rows) == 2  # jira comment add and bitbucket pr comment share the schema
+    assert all(prop["description"] in row for row in rows)
 
 
 def _embedded_schema_drift(contract: gen.Contract, example: dict[str, Any]) -> list[str]:

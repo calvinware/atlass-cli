@@ -15,14 +15,18 @@ import httpx
 import pytest
 
 from tests.conftest import (
+    BITBUCKET,
+    BITBUCKET_TOKEN,
     CONFLUENCE_TOKEN,
     Harness,
+    bitbucket_path,
     config_text,
     confluence_path,
     fixture,
     jira_path,
     run_argv,
 )
+from yojo.contracts import COMMANDS_BY_PATH
 
 WRITE_BUDGET = 2 * 1024
 READ_BUDGET = 4 * 1024
@@ -136,6 +140,28 @@ def test_golden_comment(harness: Harness) -> None:
     result = harness.run("jira", "comment", "add", "EXAMPLE-1", "--body", "Ready for review.")
     assert result.code == 0
     assert result.data["url"].endswith("focusedCommentId=777#comment-777")
+    assert result.nbytes <= WRITE_BUDGET
+
+
+def test_golden_open_pull_request(harness: Harness) -> None:
+    """The documented example, run as-is: internal preflight GETs, then exactly one POST."""
+    example = shlex.split(COMMANDS_BY_PATH["bitbucket pr create"].example)
+    assert example[:2] == ["yojo", "--json"]
+    harness.store("bitbucket", BITBUCKET_TOKEN)
+    repo = bitbucket_path("/projects/PROJ/repos/web")
+    branches = fixture("bitbucket_branches.json")
+    pr = fixture("bitbucket_pull_request.json")
+    harness.server.add("GET", repo, fixture("bitbucket_repo.json"))
+    harness.server.add("GET", repo + "/branches", branches)
+    harness.server.add(
+        "GET", repo + "/pull-requests", {"isLastPage": True, "start": 0, "values": []}
+    )
+    harness.server.add("POST", repo + "/pull-requests", pr, status=201)
+    result = harness.run(*example[1:], "--base-url", BITBUCKET)
+    assert result.code == 0, result.out
+    assert result.data["id"] == 42
+    assert result.data["url"].endswith("/projects/PROJ/repos/web/pull-requests/42")
+    assert [r.method for r in harness.server.requests] == ["GET", "GET", "GET", "GET", "POST"]
     assert result.nbytes <= WRITE_BUDGET
 
 

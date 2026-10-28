@@ -1,0 +1,48 @@
+{
+  "id": 42,
+  "version": 0,
+  "title": "Fix login on Safari",
+  "description": "Handles an empty user before the credential check.",
+  "state": "OPEN",
+  "open": true,
+  "closed": false,
+  "createdDate": 1793188411000,
+  "updatedDate": 1793192011000,
+  "fromRef": {
+    "id": "refs/heads/feature/login",
+    "displayId": "feature/login",
+    "latestCommit": "0a943a29376f2336b78312d99e65da17048951db",
+    "repository": {"slug": "web", "name": "web", "project": {"key": "PROJ"}}
+  },
+  "toRef": {
+    "id": "refs/heads/main",
+    "displayId": "main",
+    "latestCommit": "8d51122def5632836d1cb1026e879069e10a1e13",
+    "repository": {"slug": "web", "name": "web", "project": {"key": "PROJ"}}
+  },
+  "locked": false,
+  "author": {
+    "user": {"name": "example-user", "displayName": "Example User", "slug": "example-user"},
+    "role": "AUTHOR",
+    "approved": false,
+    "status": "UNAPPROVED"
+  },
+  "reviewers": [
+    {
+      "user": {
+        "name": "example-reviewer",
+        "displayName": "Example Reviewer",
+        "slug": "example-reviewer"
+      },
+      "role": "REVIEWER",
+      "approved": false,
+      "status": "UNAPPROVED"
+    }
+  ],
+  "participants": [],
+  "links": {
+    "self": [
+      {"href": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/pull-requests/42"}
+    ]
+  }
+}
