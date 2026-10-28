@@ -1,0 +1,26 @@
+{
+  "slug": "web",
+  "id": 11,
+  "name": "web",
+  "hierarchyId": "e3c939f9ef4a7fae272e",
+  "scmId": "git",
+  "state": "AVAILABLE",
+  "statusMessage": "Available",
+  "forkable": true,
+  "project": {
+    "key": "PROJ",
+    "id": 1,
+    "name": "Example Project",
+    "public": false,
+    "type": "NORMAL",
+    "links": {"self": [{"href": "https://bitbucket.example.test/bitbucket/projects/PROJ"}]}
+  },
+  "public": false,
+  "links": {
+    "clone": [
+      {"href": "https://bitbucket.example.test/bitbucket/scm/proj/web.git", "name": "http"},
+      {"href": "ssh://git@bitbucket.example.test:7999/proj/web.git", "name": "ssh"}
+    ],
+    "self": [{"href": "https://bitbucket.example.test/bitbucket/projects/PROJ/repos/web/browse"}]
+  }
+}

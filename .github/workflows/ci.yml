@@ -60,10 +60,11 @@ jobs:
           python -m venv smoke
           if [ -f smoke/Scripts/python.exe ]; then BIN=smoke/Scripts; else BIN=smoke/bin; fi
           "$BIN/python" -m pip install dist/*.whl
-          "$BIN/atl" commands > commands.json
-          "$BIN/atl" schema 'jira story create' > schema.json
-          "$BIN/python" -c "import json; from atlass_cli.contracts import COMMANDS; d=json.load(open('commands.json')); assert d['ok'] and [c['path'] for c in d['data']['commands']] == [c.path for c in COMMANDS]"
-          python -c "import json; d=json.load(open('schema.json')); assert d['ok'] and d['data']['command'] == 'jira story create'"
+          "$BIN/python" -c "import yojo"
+          "$BIN/yojo" --json commands > commands.json
+          "$BIN/yojo" --json schema 'jira issue create' > schema.json
+          "$BIN/python" -c "import json; from yojo.contracts import COMMANDS; d=json.load(open('commands.json')); assert d['ok'] and [c['path'] for c in d['data']['commands']] == [c.path for c in COMMANDS]"
+          python -c "import json; d=json.load(open('schema.json')); assert d['ok'] and d['data']['command'] == 'jira issue create'"
 
   docs:
     name: docs (reference, site, links, py${{ matrix.python }})
@@ -89,7 +90,7 @@ jobs:
         run: python scripts/generate_command_reference.py --check
       - name: Docs tests, including the built-site checks
         env:
-          ATL_REQUIRE_SITE_BUILD: "1"
+          YOJO_REQUIRE_SITE_BUILD: "1"
         run: python -m pytest -q tests/test_docs.py
       - name: Build site (strict)
         env:

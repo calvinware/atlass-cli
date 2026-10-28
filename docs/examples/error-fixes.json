@@ -2,95 +2,87 @@
   "codes": {
     "usage_error": {
       "meaning": "The command line is invalid: an unknown command or option, a missing or malformed argument, conflicting flags, or (for `login`) a missing or malformed secret line or username. Argument errors never echo the value you passed.",
-      "fix": "Run `atl schema '<command>'` (or `atl commands` for an unknown command) and correct the arguments. For `login`, use `--token-stdin` with `--auth pat` and `--password-stdin` with `--auth basic`, and supply exactly one secret line per service.",
+      "fix": "Run `yojo schema '<command>'` (or `yojo commands` for an unknown command) and correct the arguments. For `login`, use `--token-stdin` with `--auth pat` and `--password-stdin` with `--auth basic`, and supply exactly one secret line per service.",
       "details": "`details.usage` shows the parser's usage line when the error came from argument parsing."
     },
     "input_invalid": {
-      "meaning": "The JSON input, comment body, or input file cannot be used: unreadable, over the size cap (10 MiB input, 1 MiB comment), not UTF-8, not valid JSON, duplicate keys, or not matching the input schema. Also raised for unknown friendly field names, reserved names inside `fields`, an empty comment, or a Confluence update aimed at content that is not a page.",
-      "fix": "Correct each problem in `details.errors` (path, rule, and missing or allowed keys) against `atl schema '<command>'`. Put `acceptance_criteria` and `feature_key` at the top level, and use only friendly field names from `atl.yaml`.",
+      "meaning": "The flags, JSON input, comment body, or input file cannot be used: unreadable, over the size cap (10 MiB input, 1 MiB comment), not UTF-8, not valid JSON, duplicate keys, or not matching the input schema. Also raised when a flag and the input disagree, when the same `--set` field is given twice with different values, when `jira issue update` has no change, when `jira issue get --fields` names a field Jira does not have, or for a Confluence update aimed at content that is not a page. Nothing was sent.",
+      "fix": "Correct each problem in `details.errors`, `details.conflicts`, or `details.problems` against `yojo schema '<command>'`. Field-name problems carry a suggestion when one name is clearly closest.",
       "details": "`details.errors[]` lists schema problems by location and rule; rejected values and unknown caller-defined keys are masked."
     },
     "config_not_found": {
-      "meaning": "No `atl.yaml` was found by walking up from the current directory, or the `--config PATH` file does not exist.",
-      "fix": "Copy `atl.example.yaml` to `atl.yaml` in the repository root and fill in team values, or pass `--config PATH` to an existing file. Only `atl commands`, `atl schema`, and `--help` work without a config."
+      "meaning": "The `--config PATH` file does not exist, or `yojo config check` found no `yojo.yaml` to check. Other commands work without a config file.",
+      "fix": "Pass `--config` with an existing file, or copy `yojo.example.yaml` to `yojo.yaml` in the repository root and fill in team values."
     },
     "config_invalid": {
-      "meaning": "`atl.yaml` failed strict validation (unknown or missing keys, wrong types, unsafe YAML such as anchors or custom tags, over 256 KiB), or the configured `ca_bundle` cannot be loaded.",
+      "meaning": "`yojo.yaml` failed strict validation (unknown or missing keys, wrong types, unsafe YAML such as anchors or custom tags, over 256 KiB), or the configured `ca_bundle` cannot be loaded.",
       "fix": "Edit the key named in `details.where` so it matches the [configuration reference](../configuration.md). For a CA bundle error, point `ca_bundle` at a readable PEM file.",
       "details": "`details.where` is the exact key path and `details.problem` says what is wrong."
     },
+    "config_legacy": {
+      "meaning": "The nearest configuration file is a legacy `atl.yaml` with no `yojo.yaml` beside it. `yojo` never reads or migrates it, so nothing was sent.",
+      "fix": "Rename the file to `yojo.yaml` and review it against [Configuration](../configuration.md) (version 1 dropped the story and feature settings), or pass `--config PATH`. `yojo` works without a config file when you pass `--base-url`."
+    },
     "service_not_configured": {
-      "meaning": "The command needs a `jira` or `confluence` section that `atl.yaml` does not have.",
-      "fix": "Add the missing section with its `base_url` (and `projects` for Jira) to `atl.yaml`."
-    },
-    "project_not_configured": {
-      "meaning": "The project key from the input or issue key has no `jira.projects` entry in `atl.yaml`.",
-      "fix": "Use a configured project (listed in `details.configured`), or ask the team to add the project to `atl.yaml`."
-    },
-    "transition_not_configured": {
-      "meaning": "`--to STATUS` does not match any configured transition destination for the issue's project.",
-      "fix": "Use one of the destinations in `details.configured`, or ask the team to add the transition to `atl.yaml`."
+      "meaning": "The command needs a Jira, Confluence, or Bitbucket URL, but there is no `--base-url` and `yojo.yaml` has no matching section (or there is no `yojo.yaml`).",
+      "fix": "Pass `--base-url https://...` for this call, or add the `jira` or `confluence` section with its `base_url` to `yojo.yaml`."
     },
     "issue_key_mismatch": {
-      "meaning": "Jira returned the issue under a different key or project than requested (it was probably moved). `atl` applies a project's rules only to that project's issues, so nothing was written.",
-      "fix": "Re-run with `details.current_key`. Its project must be configured in `atl.yaml`."
+      "meaning": "Jira returned the issue under a different key or project than requested (it was probably moved). `yojo` applies a project's `yojo.yaml` rules only to that project's issues, so nothing was written.",
+      "fix": "Re-run with `details.current_key`."
     },
     "file_invalid": {
-      "meaning": "The `--file` for an attachment does not exist, is not a regular file, cannot be opened, was replaced between the check and the open, or changed while `atl` was reading it. Nothing was sent.",
+      "meaning": "The `--file` for an attachment does not exist, is not a regular file, cannot be opened, was replaced between the check and the open, or changed while `yojo` was reading it. Nothing was sent.",
       "fix": "Pass the path of an existing, readable regular file. Relative paths resolve from the current directory. If the file was replaced or changed, wait until it is fully written, then retry."
     },
     "attachment_too_large": {
       "meaning": "The file is larger than `jira.max_attachment_bytes` (default 50 MiB). Nothing was sent.",
-      "fix": "Compress or split the file, or raise `jira.max_attachment_bytes` in `atl.yaml` if the team agrees.",
+      "fix": "Compress or split the file, or raise `jira.max_attachment_bytes` in `yojo.yaml` if the team agrees.",
       "details": "`details.size` and `details.limit` are in bytes."
     },
     "auth_missing": {
       "meaning": "No usable credential is stored in the OS keyring for this service and base URL, or the stored entry is unreadable.",
-      "fix": "Ask a human to run `atl login --service <service>`. Agents never handle the secret."
+      "fix": "Ask a human to run `yojo login --service <service>` (with `--base-url URL` when there is no `yojo.yaml`). Agents never handle the secret."
     },
     "auth_failed": {
       "meaning": "The server answered 401, or did not confirm an authenticated user during login. The stored or supplied credential is wrong, expired, or revoked.",
-      "fix": "Ask a human to run `atl login --service <service>` with a valid personal access token or password."
+      "fix": "Ask a human to run `yojo login --service <service>` with a valid personal access token or password."
     },
     "forbidden": {
       "meaning": "The server answered 403: the account lacks permission for the project, space, or operation, or the server requires a CAPTCHA sign-in.",
       "fix": "Ask an administrator for access to the project or space. If `details.login_reason` mentions CAPTCHA, a human signs in through the browser once, then retries."
     },
     "keyring_unavailable": {
-      "meaning": "No native OS keyring is usable. `atl` refuses plaintext, null, and unknown backends, and never falls back to a file.",
+      "meaning": "No native OS keyring is usable. `yojo` refuses plaintext, null, and unknown backends, and never falls back to a file.",
       "fix": "Use macOS Keychain, Windows Credential Manager, or a running, unlocked Linux Secret Service (GNOME Keyring or KWallet). See [Getting started](../getting-started.md#keyring-prerequisites).",
       "details": "`details.backends` names the refused backends, or `details.error_type` names the keyring exception."
     },
     "login_failed": {
-      "meaning": "`atl login --service all` failed for at least one service. Services marked `stored` were saved; the others were not.",
-      "fix": "Follow each failed service's `error.fix` in `details.services`, then run `atl login --service <service>` for that service only.",
+      "meaning": "`yojo login --service all` failed for at least one service. Services marked `stored` were saved; the others were not.",
+      "fix": "Follow each failed service's `error.fix` in `details.services`, then run `yojo login --service <service>` for that service only.",
       "details": "`details.services[]` has `status` (`stored` or `failed`) and, for failures, the nested `error`."
     },
     "requirements_unmet": {
-      "meaning": "A create preflight or the transition checklist failed. Nothing was written.",
-      "fix": "Resolve each check whose `status` is `fail` using its own `fix`, then retry. `atl` never writes acceptance criteria or chooses a feature for you.",
-      "details": "Create commands list checks in `details.checks`; transitions put the full checklist in `details.checklist`."
-    },
-    "approval_required": {
-      "meaning": "The project's `feature_create_policy` is `human_confirmed` and the input has no `human_confirmation`. Nothing was sent.",
-      "fix": "Ask a human to approve the feature, then add `human_confirmation` with `confirmed_by` and `statement`. Never invent an approval: the attestation is recorded text, and `atl` cannot verify who approved."
+      "meaning": "The preflight inside a write command found one or more problems: a missing or unknown field, an ambiguous name, a disallowed value, a missing permission, or a failed team rule. Every problem is reported at once, and nothing was sent.",
+      "fix": "Apply each failing check's `fix`, then run `details.retry` when it is present (fill in any `<placeholder>`). The retry is your own command with the corrections applied. It is `null` when a value came from `--input` or when no rerun would help, such as a duplicate that already exists; then follow each check's `fix` only.",
+      "details": "`details.nothing_sent` is `true`; `details.checks[]` lists the failing checks and `details.passed` counts the rest. `details.retry` is quoted for POSIX shells; `details.retry_argv` is the same command as an argument list."
     },
     "config_drift": {
-      "meaning": "`atl config check` found at least one difference between `atl.yaml` and live Jira metadata.",
-      "fix": "Apply each `drift` check's fix, either by updating `atl.yaml` (through team review) or by asking a Jira admin to change the screen or workflow, then re-run `atl config check`. See [Troubleshooting](../troubleshooting.md).",
+      "meaning": "`yojo config check` found at least one difference between `yojo.yaml` and the live services: Jira metadata, or a `bitbucket.base_url` whose server does not identify itself as Bitbucket Data Center.",
+      "fix": "Apply each `drift` check's fix. For a Jira check, update `yojo.yaml` (through team review) or ask a Jira admin to change the screen or workflow. For `bitbucket:application`, set `bitbucket.base_url` to the Bitbucket application root including any context path. Then re-run `yojo config check`. See [Troubleshooting](../troubleshooting.md).",
       "details": "`details.checks[]` holds every check with `pass`, `drift`, or `unverified`; `details.summary` counts them."
     },
     "config_unverified": {
-      "meaning": "`atl config check` found no drift, but at least one check could not be verified: usually no sample issue in a transition's source status, or truncated metadata.",
-      "fix": "Apply each `unverified` check's fix. For transitions, pass `--issue KEY` for an issue currently in the listed status, then re-run `atl config check`. Unverified never counts as pass."
+      "meaning": "`yojo config check` found no drift, but at least one check could not be verified, for example because Jira did not return a project's statuses.",
+      "fix": "Apply each `unverified` check's fix, then re-run `yojo config check`. Unverified never counts as pass."
     },
     "remote_validation": {
-      "meaning": "Jira or Confluence rejected the request with a 4xx validation error, for example invalid JQL or CQL, a field value the server refuses, or a workflow validator that REST metadata does not expose. For writes, nothing was applied.",
-      "fix": "Correct the values in `details.fields` and `details.messages`, then retry. For transitions, check workflow validators with a Jira admin.",
+      "meaning": "Jira, Confluence, or Bitbucket rejected the request with a 4xx validation error, for example invalid JQL or CQL, a field value the server refuses, a pull request Bitbucket will not open, or a workflow validator that REST metadata does not expose. For writes, nothing was applied.",
+      "fix": "Correct the values in `details.fields` and `details.messages`, then run the command again. For transitions, check workflow validators with a Jira admin.",
       "details": "`details.status` is the HTTP status; `details.fields` and `details.messages` are sanitized server messages."
     },
     "remote_limit_exceeded": {
-      "meaning": "The server or a proxy answered 413: its size limit is lower than `atl`'s.",
+      "meaning": "The server or a proxy answered 413: its size limit is lower than `yojo`'s.",
       "fix": "Reduce the payload, for example by attaching a smaller file, or ask the administrators about the server limit."
     },
     "not_found": {
@@ -103,7 +95,7 @@
     },
     "version_conflict": {
       "meaning": "A Confluence update's `expected_version` does not match the page's current version, or Confluence answered 409 to a concurrent edit. Nothing was overwritten.",
-      "fix": "Run `atl confluence page read ID`, merge your change into the current content, and resubmit with the current version as `expected_version`.",
+      "fix": "Run `yojo confluence page read ID`, merge your change into the current content, and resubmit with the current version as `expected_version`.",
       "details": "`details.expected_version` and `details.current_version` (when known)."
     },
     "transport_error": {
@@ -112,10 +104,10 @@
     },
     "tls_error": {
       "meaning": "TLS certificate or host name verification failed. Verification is never disabled.",
-      "fix": "Confirm the `base_url` host name. If the server uses an internal CA, set `ca_bundle` in `atl.yaml` to that CA's PEM file."
+      "fix": "Confirm the `base_url` host name. If the server uses an internal CA, set `ca_bundle` in `yojo.yaml` to that CA's PEM file."
     },
     "redirect_refused": {
-      "meaning": "A read was answered with a 3xx redirect. `atl` never follows redirects, so credentials are never sent to another URL. (A redirected write is `outcome_unknown`.)",
+      "meaning": "A read was answered with a 3xx redirect. `yojo` never follows redirects, so credentials are never sent to another URL. (A redirected write is `outcome_unknown`.)",
       "fix": "Set `base_url` to the final HTTPS URL including the context path. SSO redirects usually mean you should log in with a personal access token."
     },
     "service_error": {
@@ -131,27 +123,27 @@
       "fix": "Check that `base_url` points at the Data Center application root, including any context path, and is not behind a rewriting proxy. For an oversized answer, narrow the query or lower `--limit`."
     },
     "metadata_incomplete": {
-      "meaning": "Jira create, transition, or edit metadata was truncated or inconsistent, so `atl` refuses to guess.",
+      "meaning": "Jira create, transition, edit, field, or link-type metadata was truncated or inconsistent, so `yojo` refuses to guess.",
       "fix": "Retry. If it persists, ask a Jira admin to check the metadata endpoint (createmeta, transitions, or editmeta) and the fields on that screen."
     },
     "outcome_unknown": {
-      "meaning": "A write was dispatched but `atl` cannot tell whether it was applied: timeout, disconnect, 408, 499, 5xx, redirect, an attachment that changed during upload, or a success response that does not confirm the write.",
-      "fix": "Inspect remote state before any retry, using the method for that write in [Writes and retries](../commands.md#writes-and-retries). Retry only when inspection shows the write was not applied. If you cannot tell, or find duplicates, stop and ask a human.",
-      "details": "`details.reason` says why; for transitions, `details.operations[]` gives each write's status. For transitions and Confluence page create, `details.recovery_argv` gives the inspection commands as argument lists; the commands in `fix` are quoted for POSIX shells only."
+      "meaning": "A write was dispatched but `yojo` cannot tell whether it was applied: timeout, disconnect, 408, 499, 5xx, redirect, an attachment that changed during upload, a success response that does not confirm the write, or a read-back that does not match.",
+      "fix": "Do not retry yet. Inspect remote state with the command in `fix`, using the method for that write in [Writes and retries](../commands.md#writes-and-retries). Run the write again only when inspection shows it was not applied. If you cannot tell, or find duplicates, stop and ask a human.",
+      "details": "`details.reason` says why; for transitions, `details.operations[]` gives each write's status and `details.recovery_argv` gives the inspection commands as argument lists. No `retry` is ever offered for this code."
     },
     "interrupted": {
       "meaning": "The process was interrupted (for example Ctrl+C) before it finished.",
-      "fix": "If the command was a write, inspect the issue or page before running it again."
+      "fix": "If the command was a write, inspect the issue, page, or pull request before running it again."
     },
     "internal_error": {
-      "meaning": "An unexpected error inside `atl`. Only the exception type is reported.",
-      "fix": "If the command was a write, inspect the remote item first. Re-run it; if it repeats, report `details.error_type` to the `atl` maintainers.",
+      "meaning": "An unexpected error inside `yojo`. Only the exception type is reported.",
+      "fix": "If the command was a write, inspect the remote item first. Re-run it; if it repeats, report `details.error_type` to the `yojo` maintainers.",
       "details": "`details.error_type` is the exception class name; no traceback or message is printed."
     },
     "partial_transition": {
-      "meaning": "A `pre_edit` transition applied its edit (PUT) but not the transition (POST): the refresh failed, the checklist no longer passed, or the POST was rejected. The edit stays applied.",
-      "fix": "Do not roll back. Inspect the issue's status and edited field values, reconcile them with the issue owner, resolve the failed checks, and get a fresh `ready: true` from `atl jira requirements` before retrying. A retry repeats the edit unconditionally.",
-      "details": "`details.operations[]` shows the edit `succeeded` and the transition `skipped` or `rejected`; `details.atomic` is `false`. `details.recovery_argv` gives the `requirements` and `transition` commands as argument lists; the commands in `fix` are quoted for POSIX shells only."
+      "meaning": "A `pre_edit` transition applied its edit (PUT) but not the transition (POST): the refresh failed, the checks no longer passed, or the POST was rejected. The edit stays applied.",
+      "fix": "Do not roll back. Inspect the issue's status and edited field values, reconcile them with the issue owner, resolve the failed checks, and get `ready: true` from `yojo jira requirements` before running the transition again. Running it again repeats the edit.",
+      "details": "`details.operations[]` shows the edit `succeeded` and the transition `skipped` or `rejected`; `details.atomic` is `false`. `details.recovery_argv` gives the `inspect` and `requirements` commands as argument lists. No `retry` is offered."
     }
   }
 }

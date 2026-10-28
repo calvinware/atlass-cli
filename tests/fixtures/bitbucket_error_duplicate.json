@@ -1,0 +1,9 @@
+{
+  "errors": [
+    {
+      "context": null,
+      "message": "Only one pull request may be open for a given source and target branch",
+      "exceptionName": "com.atlassian.bitbucket.pull.DuplicatePullRequestException"
+    }
+  ]
+}

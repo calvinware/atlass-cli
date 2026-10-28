@@ -164,9 +164,18 @@ def test_release_gate_cli_fails_closed(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- package license
 
 LICENSE_TEXT = (ROOT / "LICENSE").read_text(encoding="utf-8")
+VERSION = check_package.project_version()
 METADATA = "\n".join(
-    ["Metadata-Version: 2.4", "Name: atlass-cli", *check_package.EXPECTED_METADATA, "", "body"]
+    [
+        "Metadata-Version: 2.4",
+        "Name: yojo",
+        f"Version: {VERSION}",
+        *check_package.EXPECTED_METADATA,
+        "",
+        "body",
+    ]
 )
+ENTRY_POINTS = "[console_scripts]\nyojo = yojo.cli:main\n"
 
 
 def test_source_license_is_the_complete_mit_text() -> None:
@@ -185,14 +194,26 @@ def test_title_only_license_fails() -> None:
     assert len(check_package.license_problems("MIT License\n")) == 4
 
 
-def _write_dists(dist: Path, license_bytes: bytes, metadata: str = METADATA) -> None:
+def _write_dists(
+    dist: Path,
+    license_bytes: bytes,
+    metadata: str = METADATA,
+    *,
+    entry_points: str = ENTRY_POINTS,
+    extra: tuple[str, ...] = (),
+) -> None:
     dist.mkdir()
-    with zipfile.ZipFile(dist / "atlass_cli-1.0.0-py3-none-any.whl", "w") as zf:
-        zf.writestr("atlass_cli-1.0.0.dist-info/METADATA", metadata)
-        zf.writestr("atlass_cli-1.0.0.dist-info/licenses/LICENSE", license_bytes)
-    with tarfile.open(dist / "atlass_cli-1.0.0.tar.gz", "w:gz") as tf:
+    info_dir = f"yojo-{VERSION}.dist-info"
+    with zipfile.ZipFile(dist / f"yojo-{VERSION}-py3-none-any.whl", "w") as zf:
+        zf.writestr("yojo/__init__.py", "")
+        for name in extra:
+            zf.writestr(name, "")
+        zf.writestr(f"{info_dir}/METADATA", metadata)
+        zf.writestr(f"{info_dir}/entry_points.txt", entry_points)
+        zf.writestr(f"{info_dir}/licenses/LICENSE", license_bytes)
+    with tarfile.open(dist / f"yojo-{VERSION}.tar.gz", "w:gz") as tf:
         for name, data in (("PKG-INFO", metadata.encode()), ("LICENSE", license_bytes)):
-            info = tarfile.TarInfo(f"atlass_cli-1.0.0/{name}")
+            info = tarfile.TarInfo(f"yojo-{VERSION}/{name}")
             info.size = len(data)
             tf.addfile(info, io.BytesIO(data))
 
@@ -228,3 +249,35 @@ def test_package_check_rejects_bad_metadata_and_missing_archives(tmp_path: Path)
     assert "sdist metadata has a legacy License field" in problems
     (tmp_path / "empty").mkdir()
     assert check_package.check(tmp_path / "empty")
+
+
+def test_project_is_yojo_below_one() -> None:
+    assert VERSION == "0.1.0"
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    assert "url: https://pypi.org/project/yojo/" in release
+    assert "atlass" not in release
+
+
+@pytest.mark.parametrize(
+    ("change", "problem"),
+    [
+        ({"metadata": METADATA.replace("Name: yojo", "Name: atlass-cli")}, "'Name: yojo'"),
+        ({"metadata": METADATA.replace(f"Version: {VERSION}", "Version: 1.0.0")}, "'Version: "),
+        ({"extra": ("atlass_cli/__init__.py",)}, "still contains the atlass_cli package"),
+        (
+            {"entry_points": ENTRY_POINTS + "atl = atlass_cli.cli:main\n"},
+            "still installs the 'atl' command",
+        ),
+        ({"entry_points": "[console_scripts]\n"}, "console_scripts is missing"),
+        (
+            {"entry_points": "[gui_scripts]\nyojo = yojo.cli:main\n"},
+            "console_scripts is missing",
+        ),
+    ],
+)
+def test_package_check_rejects_wrong_identity(
+    tmp_path: Path, change: dict[str, Any], problem: str
+) -> None:
+    _write_dists(tmp_path / "dist", (ROOT / "LICENSE").read_bytes(), **change)
+    problems = check_package.check(tmp_path / "dist")
+    assert any(problem in p for p in problems), problems

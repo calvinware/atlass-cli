@@ -10,8 +10,8 @@ from typing import Any
 import httpx
 import pytest
 
-from atlass_cli import transport, workflow
 from tests.conftest import (
+    JIRA,
     SHELL_SENTINELS,
     Harness,
     backticked,
@@ -21,6 +21,7 @@ from tests.conftest import (
     run_argv,
     run_in_posix_shell,
 )
+from yojo import transport, workflow
 
 KEY = "EXAMPLE-1"
 ISSUE = jira_path(f"/rest/api/2/issue/{KEY}")
@@ -34,9 +35,9 @@ def setup(
     issue: str = "issue_todo.json",
     transitions: Any = "transitions_todo.json",
     pre_edit: str = "false",
-    work_started: str = "Yes",
+    review_flag: str = "Yes",
 ) -> None:
-    harness.write_config(config_text(pre_edit=pre_edit, work_started=work_started))
+    harness.write_config(config_text(pre_edit=pre_edit, review_flag=review_flag))
     harness.store()
     harness.server.add("GET", ISSUE, fixture(issue))
     body = fixture(transitions) if isinstance(transitions, str) else transitions
@@ -59,7 +60,7 @@ def test_requirements_ready_with_on_screen_field(harness: Harness) -> None:
     assert data["ready"] is True
     assert data["transition"] == {"id": "11", "name": "Start Progress"}
     checks = checks_by_id(data)
-    assert checks["auto_set:work_started"]["details"]["placement"] == "transition"
+    assert checks["auto_set:review_flag"]["details"]["placement"] == "transition"
     assert data["plan"]["atomic"] is True
     assert [op["op"] for op in data["plan"]["operations"]] == ["transition"]
     assert data["plan"]["operations"][0]["fields"][0]["id"] == "customfield_10300"
@@ -86,7 +87,7 @@ def test_requirements_transition_unavailable(harness: Harness) -> None:
     data = harness.run("jira", "requirements", KEY, "--to", "In Progress").data
     checks = checks_by_id(data)
     assert checks["transition_available"]["status"] == "fail"
-    assert checks["auto_set:work_started"]["status"] == "unverified"
+    assert checks["auto_set:review_flag"]["status"] == "unverified"
     assert data["ready"] is False
 
 
@@ -101,24 +102,56 @@ def test_requirements_duplicate_live_transitions(harness: Harness) -> None:
     assert check["transition_available"]["details"]["transition_ids"] == ["11", "99"]
 
 
-def test_requirements_unconfigured_destination_is_offline(harness: Harness) -> None:
+def test_requirements_status_not_offered_lists_what_is(harness: Harness) -> None:
     setup(harness)
-    result = harness.run("jira", "requirements", KEY, "--to", "Cancelled")
-    assert result.code == 2
-    assert result.error["code"] == "transition_not_configured"
-    assert harness.server.requests == []
+    data = harness.run("jira", "requirements", KEY, "--to", "Archived").data
+    assert data["ready"] is False
+    check = checks_by_id(data)["transition_available"]
+    assert check["status"] == "fail"
+    assert check["details"]["offered"] == ["Cancelled", "In Progress"]
+    assert "'In Progress'" in check["fix"]
+    assert harness.server.writes() == []
 
 
-def test_requirements_unconfigured_project(harness: Harness) -> None:
+def test_requirements_suggests_a_close_status(harness: Harness) -> None:
     setup(harness)
-    result = harness.run("jira", "requirements", "OTHER-1", "--to", "Done")
-    assert result.error["code"] == "project_not_configured"
+    check = checks_by_id(harness.run("jira", "requirements", KEY, "--to", "In Progres").data)
+    assert check["transition_available"]["details"]["suggestion"] == "In Progress"
+    assert "Did you mean 'In Progress'?" in check["transition_available"]["message"]
+
+
+def test_requirements_matches_the_transition_name(harness: Harness) -> None:
+    setup(harness)
+    data = harness.run("jira", "requirements", KEY, "--to", "start progress").data
+    assert data["ready"] is True
+    assert data["to"] == "In Progress"
+
+
+def test_requirements_without_config_uses_live_checks_only(harness: Harness) -> None:
+    harness.store()
+    issue = fixture("issue_todo.json")
+    issue["key"] = "OTHER-1"
+    issue["fields"]["project"] = {"key": "OTHER", "id": "10010"}
+    harness.server.add("GET", jira_path("/rest/api/2/issue/OTHER-1"), issue)
+    harness.server.add(
+        "GET", jira_path("/rest/api/2/issue/OTHER-1/transitions"), fixture("transitions_todo.json")
+    )
+    result = harness.run("--base-url", JIRA, "jira", "requirements", "OTHER-1", "--to", "Doing")
+    assert result.code == 0
+    data = result.data
+    assert data["rule"] is None and data["ready"] is False
+    assert [c["id"] for c in data["checks"]] == ["transition_available"]
+    result = harness.run(
+        "--base-url", JIRA, "jira", "requirements", "OTHER-1", "--to", "In Progress"
+    )
+    assert result.data["ready"] is True
+    assert result.data["plan"]["operations"][0]["fields"] == []
 
 
 def test_off_screen_auto_set_without_pre_edit_fails(harness: Harness) -> None:
     setup(harness, transitions="transitions_todo_no_screen.json")
     data = harness.run("jira", "requirements", KEY, "--to", "In Progress").data
-    check = checks_by_id(data)["auto_set:work_started"]
+    check = checks_by_id(data)["auto_set:review_flag"]
     assert check["status"] == "fail"
     assert "pre_edit: true" in check["fix"]
     assert EDITMETA not in harness.server.paths()
@@ -134,7 +167,7 @@ def test_off_screen_auto_set_with_pre_edit_plans_edit(harness: Harness) -> None:
     assert ops[0]["fields"][0]["id"] == "customfield_10300"
     assert ops[1]["fields"] == []
     assert "non-atomic" in data["notice"]
-    assert checks_by_id(data)["auto_set:work_started"]["details"]["placement"] == "edit"
+    assert checks_by_id(data)["auto_set:review_flag"]["details"]["placement"] == "edit"
 
 
 def test_pre_edit_not_in_editmeta(harness: Harness) -> None:
@@ -142,8 +175,10 @@ def test_pre_edit_not_in_editmeta(harness: Harness) -> None:
     harness.server.routes[("GET", EDITMETA)] = []
     harness.server.add("GET", EDITMETA, {"fields": {}})
     check = checks_by_id(harness.run("jira", "requirements", KEY, "--to", "In Progress").data)
-    assert check["auto_set:work_started"]["status"] == "fail"
-    assert "editmeta" in check["auto_set:work_started"]["message"]
+    assert check["auto_set:review_flag"]["status"] == "fail"
+    assert (
+        "neither on the transition screen nor editable" in check["auto_set:review_flag"]["message"]
+    )
 
 
 def test_pre_edit_without_set_operation(harness: Harness) -> None:
@@ -153,14 +188,14 @@ def test_pre_edit_without_set_operation(harness: Harness) -> None:
     harness.server.routes[("GET", EDITMETA)] = []
     harness.server.add("GET", EDITMETA, meta)
     check = checks_by_id(harness.run("jira", "requirements", KEY, "--to", "In Progress").data)
-    assert "'set'" in check["auto_set:work_started"]["message"]
+    assert "cannot be set" in check["auto_set:review_flag"]["message"]
 
 
 def test_disallowed_option_value(harness: Harness) -> None:
-    setup(harness, work_started="Maybe")
+    setup(harness, review_flag="Maybe")
     check = checks_by_id(harness.run("jira", "requirements", KEY, "--to", "In Progress").data)
-    assert check["auto_set:work_started"]["status"] == "fail"
-    assert "Yes, No" in check["auto_set:work_started"]["fix"]
+    assert check["auto_set:review_flag"]["status"] == "fail"
+    assert "'Yes', 'No'" in check["auto_set:review_flag"]["fix"]
 
 
 def test_disabled_option_is_not_allowed(harness: Harness) -> None:
@@ -168,10 +203,10 @@ def test_disabled_option_is_not_allowed(harness: Harness) -> None:
     body["transitions"][0]["fields"]["customfield_10300"]["allowedValues"][0]["disabled"] = True
     setup(harness, transitions=body)
     check = checks_by_id(harness.run("jira", "requirements", KEY, "--to", "In Progress").data)
-    assert check["auto_set:work_started"]["status"] == "fail"
+    assert check["auto_set:review_flag"]["status"] == "fail"
 
 
-def test_required_screen_field_not_configured(harness: Harness) -> None:
+def test_required_screen_field_is_asked_for(harness: Harness) -> None:
     body = fixture("transitions_in_progress.json")
     body["transitions"][0]["fields"]["resolution"] = {
         "required": True,
@@ -182,22 +217,83 @@ def test_required_screen_field_not_configured(harness: Harness) -> None:
     }
     setup(harness, issue="issue_in_progress.json", transitions=body)
     data = harness.run("jira", "requirements", KEY, "--to", "Done").data
-    check = checks_by_id(data)["screen_field:resolution"]
+    check = checks_by_id(data)["required:resolution"]
     assert check["status"] == "fail"
-    assert "auto_set" in check["fix"]
+    assert "--set 'Resolution=<value>'" in check["fix"]
+    assert check["details"]["allowed"] == ["Done"]
+
+
+def test_explicit_set_on_the_screen_satisfies_a_required_field(harness: Harness) -> None:
+    body = fixture("transitions_in_progress.json")
+    body["transitions"][0]["fields"]["resolution"] = {
+        "required": True,
+        "name": "Resolution",
+        "schema": {"type": "resolution", "system": "resolution"},
+        "operations": ["set"],
+        "allowedValues": [{"id": "10000", "name": "Done"}],
+    }
+    setup(harness, issue="issue_in_progress.json", transitions=body)
+    harness.server.add("POST", TRANSITIONS, status=204)
+    result = harness.run("jira", "transition", KEY, "--to", "Done", "--set", "resolution=done")
+    assert result.code == 0
+    (post,) = harness.server.writes()
+    assert _body(post)["fields"] == {"resolution": {"id": "10000"}}
+    assert result.data["changed"] == [{"field": "Resolution", "id": "resolution"}]
+
+
+def test_explicit_set_off_the_screen_is_refused(harness: Harness) -> None:
+    setup(harness)
+    result = harness.run(
+        "jira", "transition", KEY, "--to", "In Progress", "--set", "Story Points=3"
+    )
+    assert result.code == 4
+    check = {c["id"]: c for c in result.error["details"]["checks"]}["field:Story Points"]
+    assert "not on the 'Start Progress' transition screen" in check["message"]
+    assert "yojo jira issue update EXAMPLE-1" in check["fix"]
+    assert result.error["details"]["retry_argv"] == [
+        "yojo",
+        "jira",
+        "transition",
+        KEY,
+        "--to",
+        "In Progress",
+    ]
+    assert harness.server.writes() == []
+
+
+def test_explicit_set_conflicting_with_auto_set_is_refused(harness: Harness) -> None:
+    setup(harness)
+    result = harness.run(
+        "jira", "transition", KEY, "--to", "In Progress", "--set", "Review Flag=No"
+    )
+    assert result.code == 4
+    check = {c["id"]: c for c in result.error["details"]["checks"]}["auto_set:review_flag"]
+    assert "different value" in check["message"]
+    assert harness.server.writes() == []
+
+
+def test_explicit_set_matching_auto_set_is_sent_once(harness: Harness) -> None:
+    setup(harness)
+    harness.server.add("POST", TRANSITIONS, status=204)
+    result = harness.run(
+        "jira", "transition", KEY, "--to", "In Progress", "--set", "review flag=yes"
+    )
+    assert result.code == 0
+    (post,) = harness.server.writes()
+    assert _body(post)["fields"] == {"customfield_10300": {"id": "1"}}
 
 
 def test_attachment_requirement_matches_basename(harness: Harness) -> None:
     setup(harness, issue="issue_in_progress.json", transitions="transitions_in_progress.json")
     data = harness.run("jira", "requirements", KEY, "--to", "Done").data
     assert data["ready"] is True
-    check = checks_by_id(data)["attachment:{key}_TestResults_*"]
-    assert check["details"]["matched"] == ["EXAMPLE-1_TestResults_2026.xml"]
+    check = checks_by_id(data)["attachment:{key}_Evidence_*"]
+    assert check["details"]["matched"] == ["EXAMPLE-1_Evidence_2026.xml"]
 
 
 @pytest.mark.parametrize(
     "names",
-    [[], ["EXAMPLE-2_TestResults_x.xml"], ["example-1_testresults_x.xml"], ["notes.txt"]],
+    [[], ["EXAMPLE-2_Evidence_x.xml"], ["example-1_evidence_x.xml"], ["notes.txt"]],
 )
 def test_attachment_requirement_missing(harness: Harness, names: list[str]) -> None:
     issue = fixture("issue_in_progress.json")
@@ -207,10 +303,10 @@ def test_attachment_requirement_missing(harness: Harness, names: list[str]) -> N
     harness.server.add("GET", ISSUE, issue)
     harness.server.add("GET", TRANSITIONS, fixture("transitions_in_progress.json"))
     data = harness.run("jira", "requirements", KEY, "--to", "Done").data
-    check = checks_by_id(data)["attachment:{key}_TestResults_*"]
+    check = checks_by_id(data)["attachment:{key}_Evidence_*"]
     assert check["status"] == "fail"
-    assert "EXAMPLE-1_TestResults_*" in check["fix"]
-    assert "atl jira attachment add EXAMPLE-1" in check["fix"]
+    assert "EXAMPLE-1_Evidence_*" in check["fix"]
+    assert "yojo jira attachment add EXAMPLE-1" in check["fix"]
 
 
 # --------------------------------------------------------------------------- transition
@@ -239,7 +335,10 @@ def test_transition_requirements_unmet_writes_nothing(harness: Harness) -> None:
     result = harness.run("jira", "transition", KEY, "--to", "In Progress")
     assert result.code == 4
     assert result.error["code"] == "requirements_unmet"
-    assert result.error["details"]["checklist"]["ready"] is False
+    details = result.error["details"]
+    assert details["nothing_sent"] is True
+    assert [c["id"] for c in details["checks"]] == ["auto_set:review_flag"]
+    assert details["passed"] >= 2
     assert harness.server.writes() == []
 
 
@@ -308,7 +407,8 @@ def test_partial_when_transition_disappears_after_put(harness: Harness) -> None:
         ("edit", "succeeded"),
         ("transition", "skipped"),
     ]
-    assert result.error["details"]["checklist"]["ready"] is False
+    assert "transition_available" in {c["id"] for c in result.error["details"]["checks"]}
+    assert "retry" not in result.error["details"]
     assert [r.method for r in harness.server.writes()] == ["PUT"]
 
 
@@ -436,7 +536,7 @@ def test_hidden_validator_rejection(harness: Harness) -> None:
     assert len(harness.server.writes()) == 1
 
 
-# --------------------------------------------------------------------------- policy project
+# --------------------------------------------------------------------------- rules project
 
 
 def _moved_issue() -> dict[str, Any]:
@@ -461,7 +561,7 @@ def test_moved_issue_is_refused_before_any_write(harness: Harness, command: str)
         "requested_key": KEY,
         "current_key": "OTHER-5",
         "current_project": "OTHER",
-        "policy_project": "EXAMPLE",
+        "rules_project": "EXAMPLE",
     }
     assert harness.server.writes() == []
     assert TRANSITIONS not in harness.server.paths()
@@ -504,11 +604,10 @@ def _two_fields_one_id(pre_edit: str = "false") -> str:
     return (
         config_text(pre_edit=pre_edit)
         .replace(
-            "work_started: {jira_name: Work Started, encoding: single_option}",
-            "work_started: {jira_name: Work Started, encoding: single_option}\n"
-            "        started_flag: {id: customfield_10300, encoding: single_option}",
+            "review_flag: {jira_name: Review Flag}",
+            "review_flag: {jira_name: Review Flag}\n    started_flag: {id: customfield_10300}",
         )
-        .replace("auto_set: {work_started: Yes}", "auto_set: {work_started: Yes, started_flag: No}")
+        .replace("auto_set: {review_flag: Yes}", "auto_set: {review_flag: Yes, started_flag: No}")
     )
 
 
@@ -525,13 +624,10 @@ def test_auto_set_fields_resolving_to_one_id_are_refused(
     harness.server.add("POST", TRANSITIONS, status=204)
     result = harness.run("jira", "transition", KEY, "--to", "In Progress")
     assert result.code == 4
-    checklist = result.error["details"]["checklist"]
-    check = checks_by_id(checklist)["auto_set:started_flag"]
+    check = checks_by_id(result.error["details"])["auto_set:started_flag"]
     assert check["status"] == "fail"
-    assert check["details"] == {
-        "friendly": ["work_started", "started_flag"],
-        "field_id": "customfield_10300",
-    }
+    assert "'review_flag' and 'started_flag' both name" in check["message"]
+    assert check["details"] == {"field_id": "customfield_10300"}
     assert harness.server.writes() == []
 
 
@@ -627,10 +723,10 @@ def test_partial_when_required_screen_field_appears_after_put(harness: Harness) 
         ("edit", "succeeded"),
         ("transition", "skipped"),
     ]
-    refreshed = checks_by_id(error["details"]["checklist"])
-    assert refreshed["screen_field:customfield_10500"]["status"] == "fail"
+    refreshed = checks_by_id(error["details"])
+    assert refreshed["required:customfield_10500"]["status"] == "fail"
     assert [r.method for r in harness.server.writes()] == ["PUT"]
-    assert "fresh" in error["fix"] and "harmless" not in error["fix"]
+    assert "ready: true" in error["fix"] and "harmless" not in error["fix"]
 
 
 def test_partial_when_allowed_value_changes_after_put(harness: Harness) -> None:
@@ -647,56 +743,86 @@ def test_partial_when_allowed_value_changes_after_put(harness: Harness) -> None:
         ("edit", "succeeded"),
         ("transition", "skipped"),
     ]
-    refreshed = checks_by_id(error["details"]["checklist"])
-    assert refreshed["auto_set:work_started"]["status"] == "fail"
+    refreshed = checks_by_id(error["details"])
+    assert refreshed["auto_set:review_flag"]["status"] == "fail"
     assert [r.method for r in harness.server.writes()] == ["PUT"]
     assert [p for p in harness.server.paths() if p == EDITMETA] == [EDITMETA, EDITMETA]
 
 
 def _commands(text: str) -> list[list[str]]:
-    return [shlex.split(c) for c in re.findall(r"`(atl [^`]*)`", text)]
+    return [shlex.split(c) for c in re.findall(r"`(yojo [^`]*)`", text)]
+
+
+def _partial_error(to: str) -> Any:
+    return workflow._partial(KEY, to, [], [], [], None, "skipped", "refresh failed", {})
 
 
 @pytest.mark.parametrize("to", ["Won't Do", 'Say "hi"', "a b; rm -rf ~", "$(x)"])
 def test_partial_fix_commands_are_shell_quoted(to: str) -> None:
-    error = workflow._partial(KEY, to, [], [], None, "skipped", "refresh failed", {})
+    error = _partial_error(to)
     assert _commands(error.fix) == [
-        ["atl", "jira", "requirements", KEY, "--to", to],
-        ["atl", "jira", "transition", KEY, "--to", to],
+        ["yojo", "jira", "issue", "get", KEY],
+        ["yojo", "jira", "requirements", KEY, "--to", to],
     ]
     assert "Do not roll back" in error.fix
-    assert "Inspect" in error.fix and "fresh" in error.fix and "ready: true" in error.fix
-    assert "POSIX shells" in error.fix and "details.recovery_argv" in error.fix
+    assert "Inspect" in error.fix and "ready: true" in error.fix
+    assert "POSIX shells" in error.fix
+    assert "retry" not in error.details and "retry_argv" not in error.details
 
 
 @pytest.mark.parametrize("to", SHELL_SENTINELS)
 def test_partial_fix_commands_stay_literal_in_a_real_posix_shell(to: str, tmp_path: Path) -> None:
-    error = workflow._partial(KEY, to, [], [], None, "skipped", "refresh failed", {})
-    commands = backticked(error.fix, "atl jira")
+    error = _partial_error(to)
+    commands = backticked(error.fix, "yojo jira")
     assert [run_in_posix_shell(c, tmp_path) for c in commands] == [
-        ["atl", "jira", "requirements", KEY, "--to", to],
-        ["atl", "jira", "transition", KEY, "--to", to],
+        ["yojo", "jira", "issue", "get", KEY],
+        ["yojo", "jira", "requirements", KEY, "--to", to],
     ]
-    # The inspect -> reconcile -> fresh ready: true -> transition order is preserved.
     fix = error.fix
     assert fix.index("Inspect") < fix.index("reconcile") < fix.index("ready: true")
-    assert fix.index(commands[0]) < fix.index("ready: true") < fix.index(commands[1])
+    assert fix.index(commands[0]) < fix.index(commands[1]) < fix.index("ready: true")
 
 
 @pytest.mark.parametrize("to", SHELL_SENTINELS)
-def test_partial_recovery_argv_is_literal_without_a_shell(to: str) -> None:
-    error = workflow._partial(KEY, to, [], [], None, "skipped", "refresh failed", {})
-    argv = error.details["recovery_argv"]
+def test_partial_recovery_argv_has_no_transition_retry(to: str) -> None:
+    argv = _partial_error(to).details["recovery_argv"]
     assert argv == {
-        "requirements": ["atl", "jira", "requirements", KEY, "--to", to],
-        "transition": ["atl", "jira", "transition", KEY, "--to", to],
+        "inspect": ["yojo", "jira", "issue", "get", KEY],
+        "requirements": ["yojo", "jira", "requirements", KEY, "--to", to],
     }
     assert [run_argv(a) for a in argv.values()] == list(argv.values())
 
 
-def test_requirements_hint_round_trips_apostrophe() -> None:
-    (argv,) = _commands(workflow._retry_hint(KEY, "Won't Do"))
-    assert argv == ["atl", "jira", "requirements", KEY, "--to", "Won't Do"]
+def test_recovery_argv_carries_the_sets() -> None:
+    argv = workflow.recovery_argv(KEY, "Done", ["Resolution=Won't Do"])
+    assert argv["requirements"][-2:] == ["--set", "Resolution=Won't Do"]
+
+
+@pytest.mark.parametrize("to", SHELL_SENTINELS)
+def test_refused_transition_retry_is_shell_quoted(harness: Harness, to: str) -> None:
+    setup(harness)
+    result = harness.run("jira", "transition", KEY, "--to", to)
+    assert result.code == 4
+    details = result.error["details"]
+    assert details["nothing_sent"] is True
+    if details["retry_argv"] is not None:
+        assert run_argv(details["retry_argv"]) == details["retry_argv"]
+        assert shlex.split(details["retry"]) == details["retry_argv"]
+    assert harness.server.writes() == []
+
+
+def test_refused_transition_retry_applies_the_suggestion(harness: Harness) -> None:
+    setup(harness)
+    result = harness.run("jira", "transition", KEY, "--to", "In Progres")
+    assert result.error["details"]["retry_argv"] == [
+        "yojo",
+        "jira",
+        "transition",
+        KEY,
+        "--to",
+        "In Progress",
+    ]
+    assert result.error["details"]["retry"] == "yojo jira transition EXAMPLE-1 --to 'In Progress'"
 
 
 @pytest.mark.parametrize("fields", ["x", [], None, "missing"])
@@ -713,4 +839,43 @@ def test_malformed_issue_fields_are_response_invalid(harness: Harness, fields: A
     assert result.code == 6
     assert result.error["code"] == "response_invalid"
     assert result.error["details"] == {"what": "issue"}
+    assert harness.server.writes() == []
+
+
+# --------------------------------------------------------------------------- field_set rule
+
+
+def _field_set_config(field: str, project_alias: bool = False) -> str:
+    text = config_text().replace(
+        '            - kind: attachment_filename\n              pattern: "{key}_Evidence_*"',
+        f"            - kind: field_set\n              field: {field}",
+    )
+    if project_alias:
+        text = text.replace(
+            "    - key: EXAMPLE\n",
+            "    - key: EXAMPLE\n      fields:\n        env: {jira_name: Environment}\n",
+        )
+    return text
+
+
+@pytest.mark.parametrize(("field", "alias"), [("environment", False), ("env", True)])
+@pytest.mark.parametrize(("value", "ready"), [("Firefox", True), ("  ", False), (None, False)])
+def test_field_set_rule_reads_the_current_value(
+    harness: Harness, field: str, alias: bool, value: Any, ready: bool
+) -> None:
+    harness.write_config(_field_set_config(field, alias))
+    harness.store()
+    issue = fixture("issue_in_progress.json")
+    issue["fields"]["customfield_10600"] = value
+    harness.server.add("GET", jira_path("/rest/api/2/field"), fixture("fields.json"))
+    harness.server.add("GET", ISSUE, issue)
+    harness.server.add("GET", TRANSITIONS, fixture("transitions_in_progress.json"))
+    data = harness.run("jira", "requirements", KEY, "--to", "Done").data
+    assert data["ready"] is ready
+    check = checks_by_id(data)[f"field_set:{field}"]
+    assert check["status"] == ("pass" if ready else "fail")
+    if not ready:
+        assert "yojo jira issue update EXAMPLE-1 --set 'Environment=<value>'" in check["fix"]
+    requested = harness.server.requests[1].url.params["fields"].split(",")
+    assert "customfield_10600" in requested
     assert harness.server.writes() == []

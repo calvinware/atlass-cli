@@ -8,15 +8,6 @@ from pathlib import Path
 import httpx
 import pytest
 
-from atlass_cli import transport
-from atlass_cli.auth import (
-    NATIVE_BACKENDS,
-    Credential,
-    CredentialStore,
-    ensure_native_backend,
-)
-from atlass_cli.contracts import AtlError
-from atlass_cli.transport import ServiceClient, build_ssl_context, sanitize_remote_errors
 from tests.conftest import (
     CONFLUENCE_TOKEN,
     JIRA,
@@ -27,6 +18,15 @@ from tests.conftest import (
     confluence_path,
     jira_path,
 )
+from yojo import transport
+from yojo.auth import (
+    NATIVE_BACKENDS,
+    Credential,
+    CredentialStore,
+    ensure_native_backend,
+)
+from yojo.contracts import YojoError
+from yojo.transport import ServiceClient, build_ssl_context, sanitize_remote_errors
 
 MYSELF = jira_path("/rest/api/2/myself")
 CURRENT_USER = confluence_path("/rest/api/user/current")
@@ -50,7 +50,7 @@ def _backend(module: str, name: str) -> object:
     ],
 )
 def test_non_native_backends_fail_closed(module: str, name: str) -> None:
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         ensure_native_backend(_backend(module, name))
     assert info.value.code == "keyring_unavailable"
     assert info.value.exit_code == 3
@@ -63,10 +63,10 @@ def test_chainer_requires_all_native() -> None:
         _backend("keyring.backends.macOS", "Keyring"),
         _backend("keyrings.alt.file", "PlaintextKeyring"),
     ]
-    with pytest.raises(AtlError):
+    with pytest.raises(YojoError):
         ensure_native_backend(chainer)
     chainer.backends = []
-    with pytest.raises(AtlError):
+    with pytest.raises(YojoError):
         ensure_native_backend(chainer)
     chainer.backends = [_backend("keyring.backends.macOS", "Keyring")]
     ensure_native_backend(chainer)
@@ -93,12 +93,12 @@ def test_store_round_trip_and_separation() -> None:
 def test_missing_and_corrupt_credentials() -> None:
     keyring = FakeKeyring()
     store = CredentialStore(keyring)
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         store.load("jira", JIRA)
     assert info.value.code == "auth_missing"
-    assert "atl login" in info.value.fix
+    assert "yojo login" in info.value.fix
     keyring.data[("atlass-cli", f"jira|{JIRA}")] = "not json"
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         store.load("jira", JIRA)
     assert info.value.code == "auth_missing"
 
@@ -108,7 +108,7 @@ def test_keyring_exceptions_are_redacted() -> None:
         def get_password(self, service: str, username: str) -> str | None:
             raise RuntimeError("dbus error with secret-ish detail")
 
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         CredentialStore(Broken()).load("jira", JIRA)
     assert info.value.code == "keyring_unavailable"
     assert "secret-ish" not in json.dumps(info.value.envelope())
@@ -168,7 +168,9 @@ def test_login_tty_prompt_goes_to_stderr_as_json(harness: Harness) -> None:
             "prompt": {
                 "kind": "token",
                 "service": "jira",
-                "message": "Enter jira personal access token (input hidden)",
+                "message": (
+                    "jira personal access token for https://jira.example.test/jira (input hidden)"
+                ),
             }
         }
     ]
@@ -259,7 +261,7 @@ def test_login_keyring_unavailable_fails_before_network(harness: Harness) -> Non
     harness.write_config()
 
     def unavailable() -> CredentialStore:
-        raise AtlError("keyring_unavailable", "no keyring", "use a native keyring")
+        raise YojoError("keyring_unavailable", "no keyring", "use a native keyring")
 
     result = harness.run(
         "login", "--service", "jira", "--token-stdin", stdin=b"tok\n", store_factory=unavailable
@@ -311,7 +313,7 @@ def test_tls_failure_maps_to_tls_error() -> None:
             raise httpx.ConnectError("handshake failed", request=request) from exc
 
     server = FakeServer().add("GET", jira_path("/rest/api/2/myself"), handler=fail)
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         _client(server).get("/rest/api/2/myself")
     assert info.value.code == "tls_error"
     assert "ca_bundle" in info.value.fix
@@ -323,7 +325,7 @@ def test_connect_error_is_transport_error() -> None:
         raise httpx.ConnectError("refused", request=request)
 
     server = FakeServer().add("POST", jira_path("/rest/api/2/issue"), handler=fail)
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         _client(server).request("POST", "/rest/api/2/issue", json_body={})
     assert info.value.code == "transport_error"
     assert info.value.write_outcome == "not_sent"
@@ -339,7 +341,7 @@ def test_write_disconnect_is_outcome_unknown_and_not_retried(
         raise exc_type("boom", request=request)  # type: ignore[call-arg]
 
     server = FakeServer().add("POST", jira_path("/rest/api/2/issue"), handler=fail)
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         _client(server).request("POST", "/rest/api/2/issue", json_body={})
     assert info.value.code == "outcome_unknown"
     assert info.value.exit_code == 6
@@ -352,7 +354,7 @@ def test_read_timeout_on_get_is_transport_error() -> None:
         raise httpx.ReadTimeout("slow", request=request)
 
     server = FakeServer().add("GET", jira_path("/rest/api/2/myself"), handler=fail)
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         _client(server).get("/rest/api/2/myself")
     assert info.value.code == "transport_error"
 
@@ -362,10 +364,10 @@ def test_server_errors() -> None:
     server.add("GET", jira_path("/rest/api/2/myself"), {"message": "oops"}, status=503)
     server.add("POST", jira_path("/rest/api/2/issue"), {"message": "oops"}, status=500)
     client = _client(server)
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         client.get("/rest/api/2/myself")
     assert info.value.code == "service_error"
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         client.request("POST", "/rest/api/2/issue", json_body={})
     assert info.value.code == "outcome_unknown"
 
@@ -376,7 +378,7 @@ def test_uncertain_write_status_is_outcome_unknown(status: int, method: str) -> 
     server = FakeServer().add(
         method, jira_path("/rest/api/2/issue"), {"message": "x"}, status=status
     )
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         _client(server).request(method, "/rest/api/2/issue", json_body={})
     assert info.value.code == "outcome_unknown"
     assert info.value.exit_code == 6
@@ -389,7 +391,7 @@ def test_uncertain_write_status_is_outcome_unknown(status: int, method: str) -> 
 @pytest.mark.parametrize("status", [408, 499])
 def test_uncertain_read_status_is_service_error(status: int) -> None:
     server = FakeServer().add("GET", jira_path("/rest/api/2/myself"), {"m": "x"}, status=status)
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         _client(server).get("/rest/api/2/myself")
     assert info.value.code == "service_error"
     assert info.value.exit_code == 6
@@ -406,7 +408,7 @@ def test_uncertain_read_status_is_service_error(status: int) -> None:
 )
 def test_definite_rejections_stay_rejected(status: int, code: str) -> None:
     server = FakeServer().add("POST", jira_path("/rest/api/2/issue"), {"m": "x"}, status=status)
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         _client(server).request("POST", "/rest/api/2/issue", json_body={})
     assert info.value.code == code
     assert info.value.write_outcome == "rejected"
@@ -418,7 +420,7 @@ def test_field_errors_are_sanitized() -> None:
         "errors": {"customfield_10100": "x" * 2000, "summary": "required\r\n"},
     }
     server = FakeServer().add("POST", jira_path("/rest/api/2/issue"), body, status=400)
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         _client(server).request("POST", "/rest/api/2/issue", json_body={})
     error = info.value
     assert error.code == "remote_validation"
@@ -428,6 +430,23 @@ def test_field_errors_are_sanitized() -> None:
     assert len(fields["customfield_10100"]) == 500
     assert "\r" not in fields["summary"] and "\n" not in fields["summary"]
     assert "\x1b" not in error.details["messages"][0]
+
+
+def test_bitbucket_error_list_is_extracted() -> None:
+    body = {
+        "errors": [
+            {"context": "title", "message": "Title is required\x1b[2J", "exceptionName": "x"},
+            {"context": None, "message": "Only one pull request may be open"},
+            {"message": 7},
+            "not an object",
+        ]
+    }
+    assert sanitize_remote_errors(body) == {
+        "fields": {"title": "Title is required [2J"},
+        "messages": ["Only one pull request may be open"],
+    }
+    many = {"errors": [{"context": None, "message": "e"}] * 100}
+    assert len(sanitize_remote_errors(many)["messages"]) == 50
 
 
 def test_sanitize_remote_errors_bounds_items() -> None:
@@ -451,7 +470,7 @@ def test_status_mapping(status: int, code: str) -> None:
     server = FakeServer().add(
         "GET", jira_path("/rest/api/2/myself"), {"errorMessages": []}, status=status
     )
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         _client(server).get("/rest/api/2/myself")
     assert info.value.code == code
     assert JIRA_TOKEN not in json.dumps(info.value.envelope())
@@ -463,7 +482,7 @@ def test_non_json_response() -> None:
         jira_path("/rest/api/2/myself"),
         handler=lambda r: httpx.Response(200, text="<html>login</html>"),
     )
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         _client(server).get("/rest/api/2/myself")
     assert info.value.code == "response_invalid"
 
@@ -475,7 +494,7 @@ def _oversized(request: httpx.Request) -> httpx.Response:
 def test_oversized_write_response_is_outcome_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(transport, "MAX_RESPONSE_BYTES", 1024)
     server = FakeServer().add("POST", jira_path("/rest/api/2/issue"), handler=_oversized)
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         _client(server).request("POST", "/rest/api/2/issue", json_body={})
     assert info.value.code == "outcome_unknown"
     assert info.value.exit_code == 6
@@ -488,7 +507,7 @@ def test_oversized_write_response_is_outcome_unknown(monkeypatch: pytest.MonkeyP
 def test_oversized_read_response_is_response_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(transport, "MAX_RESPONSE_BYTES", 1024)
     server = FakeServer().add("GET", MYSELF, handler=_oversized)
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         _client(server).get("/rest/api/2/myself")
     assert info.value.code == "response_invalid"
     assert info.value.write_outcome is None
@@ -505,7 +524,7 @@ def test_ssl_context_is_verified() -> None:
 def test_invalid_ca_bundle(tmp_path: Path) -> None:
     bad = tmp_path / "bad.pem"
     bad.write_text("not a certificate")
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         build_ssl_context(bad)
     assert info.value.code == "config_invalid"
 
@@ -538,7 +557,7 @@ def test_reflected_credentials_are_redacted(auth: str, status: int) -> None:
         headers={"x-seraph-loginreason": f"AUTHENTICATED_FAILED {JIRA_TOKEN}"},
     )
     client = ServiceClient("jira", JIRA, credential, transport=server.transport())
-    with pytest.raises(AtlError) as info:
+    with pytest.raises(YojoError) as info:
         client.request("POST", "/rest/api/2/issue", json_body={})
     rendered = json.dumps(info.value.envelope())
     forms = [JIRA_TOKEN, encoded]
