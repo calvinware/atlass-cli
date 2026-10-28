@@ -39,7 +39,8 @@ def test_check_mark_has_an_ascii_fallback(monkeypatch: pytest.MonkeyPatch) -> No
     with monkeypatch.context() as patch:
         patch.setattr(sys, "stdout", SimpleNamespace(encoding="ascii"))
         assert setup.check_mark() == "[x]"
-    assert setup.check_mark() == "✓"
+        patch.setattr(sys, "stdout", SimpleNamespace(encoding="utf-8"))
+        assert setup.check_mark() == "✓"
 
 
 class World:
