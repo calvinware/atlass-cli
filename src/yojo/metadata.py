@@ -1,14 +1,15 @@
-"""Live Jira metadata: targeted paginated createmeta, issues, transitions, and editmeta."""
+"""Live Jira metadata: createmeta, issues, transitions, editmeta, fields, links, permissions."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
-from atlass_cli.contracts import AtlError
-from atlass_cli.fields import FieldMeta
-from atlass_cli.transport import ServiceClient, seg
+from yojo.contracts import YojoError
+from yojo.fields import FieldMeta
+from yojo.transport import ServiceClient, seg
 
 META_PAGE_SIZE = 100
 MAX_META_PAGES = 50
@@ -28,6 +29,17 @@ class IssueSnapshot:
     issue_type: str
     summary: str
     attachments: tuple[str, ...]
+    assignee: str | None = None
+    updated: str | None = None
+    values: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LinkType:
+    id: str
+    name: str
+    inward: str
+    outward: str
 
 
 @dataclass(frozen=True)
@@ -38,19 +50,20 @@ class LiveTransition:
     fields: dict[str, FieldMeta]
 
 
-def _invalid(what: str) -> AtlError:
-    return AtlError(
+def _invalid(what: str) -> YojoError:
+    return YojoError(
         "response_invalid",
         f"Jira returned an unexpected {what} response.",
-        "Check that jira.base_url points at Jira Data Center 9+ including any context path.",
+        "Check that the Jira URL (--base-url or jira.base_url) points at Jira Data Center 9+ "
+        "including any context path.",
         {"what": what},
     )
 
 
-def incomplete(what: str, details: dict[str, Any] | None = None) -> AtlError:
-    return AtlError(
+def incomplete(what: str, details: dict[str, Any] | None = None) -> YojoError:
+    return YojoError(
         "metadata_incomplete",
-        f"Jira {what} metadata was truncated or inconsistent; atl will not guess.",
+        f"Jira {what} metadata was truncated or inconsistent; yojo will not guess.",
         "Retry; if it persists ask a Jira admin to check the Jira metadata endpoint (createmeta, "
         "transitions, or editmeta) and the fields on that screen.",
         {"what": what, **(details or {})},
@@ -128,11 +141,6 @@ def create_fields(client: ServiceClient, project: str, issue_type_id: str) -> di
     return fields
 
 
-def find_issue_type(types: list[IssueType], name: str) -> IssueType | None:
-    matches = [t for t in types if t.name == name]
-    return matches[0] if len(matches) == 1 else None
-
-
 def _parse_field(what: str, field_id: Any, raw: Any) -> FieldMeta:
     """Parse one field entry, refusing entries whose flags cannot be trusted."""
     if (
@@ -159,16 +167,26 @@ def _basename(filename: str) -> str:
     return PureWindowsPath(PurePosixPath(filename).name).name
 
 
-def get_issue(client: ServiceClient, key: str) -> IssueSnapshot:
-    raw = client.get(
-        f"/rest/api/2/issue/{seg(key)}",
-        {"fields": "status,attachment,project,issuetype,summary"},
-    )
+ISSUE_BASE_FIELDS = (
+    "status",
+    "attachment",
+    "project",
+    "issuetype",
+    "summary",
+    "assignee",
+    "updated",
+)
+
+
+def get_issue(client: ServiceClient, key: str, extra: Iterable[str] = ()) -> IssueSnapshot:
+    wanted = list(dict.fromkeys([*ISSUE_BASE_FIELDS, *extra]))
+    raw = client.get(f"/rest/api/2/issue/{seg(key)}", {"fields": ",".join(wanted)})
     if not isinstance(raw, dict) or not isinstance(raw.get("fields"), dict):
         raise _invalid("issue")
     try:
         fields = raw["fields"]
         attachments = fields.get("attachment") or []
+        assignee = fields.get("assignee")
         return IssueSnapshot(
             key=str(raw["key"]),
             project=str(fields["project"]["key"]),
@@ -180,8 +198,13 @@ def get_issue(client: ServiceClient, key: str) -> IssueSnapshot:
                 for a in attachments
                 if isinstance(a, dict) and isinstance(a.get("filename"), str)
             ),
+            assignee=str(assignee.get("displayName") or assignee.get("name"))
+            if isinstance(assignee, dict)
+            else None,
+            updated=fields["updated"] if isinstance(fields.get("updated"), str) else None,
+            values={f: fields.get(f) for f in extra},
         )
-    except (KeyError, TypeError):
+    except (KeyError, TypeError, AttributeError):
         raise _invalid("issue") from None
 
 
@@ -212,3 +235,58 @@ def get_editmeta(client: ServiceClient, key: str) -> dict[str, FieldMeta]:
     if not isinstance(raw, dict) or not isinstance(raw.get("fields"), dict):
         raise _invalid("editmeta")
     return _parse_field_map("edit field", raw["fields"])
+
+
+def all_fields(client: ServiceClient) -> dict[str, FieldMeta]:
+    """Every field Jira knows, by ID, for naming fields outside a create or edit screen."""
+    raw = client.get("/rest/api/2/field")
+    if not isinstance(raw, list):
+        raise _invalid("field list")
+    fields: dict[str, FieldMeta] = {}
+    for item in raw:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            raise incomplete("field list", {"reason": "malformed entry"})
+        fields[item["id"]] = FieldMeta.parse(item["id"], {**item, "required": False})
+    return fields
+
+
+def link_types(client: ServiceClient) -> list[LinkType]:
+    raw = client.get("/rest/api/2/issueLinkType")
+    items = raw.get("issueLinkTypes") if isinstance(raw, dict) else None
+    if not isinstance(items, list):
+        raise _invalid("issue link type")
+    types: list[LinkType] = []
+    for item in items:
+        values = [item.get(k) if isinstance(item, dict) else None for k in LINK_KEYS]
+        if not all(isinstance(v, str) and v for v in values):
+            raise incomplete("issue link type", {"reason": "missing id, name, inward or outward"})
+        types.append(LinkType(*(str(v) for v in values)))
+    return types
+
+
+LINK_KEYS = ("id", "name", "inward", "outward")
+
+
+def my_permissions(client: ServiceClient, key: str, names: Iterable[str]) -> dict[str, bool | None]:
+    """Whether the logged-in user holds each permission on ``key``; None when Jira did not say."""
+    raw = client.get("/rest/api/2/mypermissions", {"issueKey": key})
+    perms = raw.get("permissions") if isinstance(raw, dict) else None
+    result: dict[str, bool | None] = {}
+    for name in names:
+        entry = perms.get(name) if isinstance(perms, dict) else None
+        have = entry.get("havePermission") if isinstance(entry, dict) else None
+        result[name] = have if isinstance(have, bool) else None
+    return result
+
+
+def attachment_settings(client: ServiceClient) -> tuple[bool | None, int | None]:
+    """Return (attachments enabled, server upload limit in bytes); None when not reported."""
+    raw = client.get("/rest/api/2/attachment/meta")
+    if not isinstance(raw, dict):
+        return None, None
+    enabled = raw.get("enabled")
+    limit = raw.get("uploadLimit")
+    return (
+        enabled if isinstance(enabled, bool) else None,
+        limit if type(limit) is int and limit > 0 else None,
+    )

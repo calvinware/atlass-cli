@@ -13,7 +13,7 @@
     {
       "self": "https://jira.example.test/jira/rest/api/2/issuetype/10000",
       "id": "10000",
-      "name": "Feature",
+      "name": "Task",
       "subtask": false
     },
     {

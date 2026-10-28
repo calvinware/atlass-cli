@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import ssl
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -12,9 +12,9 @@ from urllib.parse import quote, urlsplit
 import httpx
 import truststore
 
-from atlass_cli import __version__
-from atlass_cli.auth import Credential
-from atlass_cli.contracts import AtlError
+from yojo import __version__
+from yojo.auth import Credential
+from yojo.contracts import YojoError
 
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 MAX_DETAIL_CHARS = 500
@@ -29,6 +29,12 @@ UNCERTAIN_STATUSES = frozenset({408, 499})
 def seg(value: str) -> str:
     """Encode a single URL path segment (issue key, page ID)."""
     return quote(value, safe="")
+
+
+def jql_quote(value: str) -> str:
+    """Quote a value as a JQL or CQL string literal."""
+    cleaned = "".join(ch for ch in value if ch.isprintable())
+    return '"' + cleaned.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 REDACTED = "[REDACTED]"
@@ -87,7 +93,7 @@ def build_ssl_context(ca_bundle: Path | None) -> ssl.SSLContext:
         else:
             context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     except (ssl.SSLError, OSError) as exc:
-        raise AtlError(
+        raise YojoError(
             "config_invalid",
             "The configured CA bundle could not be loaded.",
             "Point ca_bundle at a readable PEM file containing the team CA certificates.",
@@ -127,11 +133,13 @@ class ServiceClient:
         self.base_url = base_url.rstrip("/")
         headers = {
             "Accept": "application/json",
-            "User-Agent": f"atlass-cli/{__version__}",
+            "User-Agent": f"yojo/{__version__}",
         }
         if credential is not None:
             headers["Authorization"] = credential.authorization_header()
         self._redact = credential_redactions(credential)
+        # Called with a plain-language summary just before a write is sent (terminal progress).
+        self.announce: Callable[[str], None] = lambda _message: None
         verify: ssl.SSLContext | bool = build_ssl_context(ca_bundle) if transport is None else True
         self._client = httpx.Client(
             headers=headers,
@@ -193,19 +201,19 @@ class ServiceClient:
 
     # ------------------------------------------------------------------ failures
 
-    def _connect_failure(self, exc: BaseException, is_write: bool) -> AtlError:
+    def _connect_failure(self, exc: BaseException, is_write: bool) -> YojoError:
         outcome = "not_sent" if is_write else None
         if _is_tls_failure(exc):
-            return AtlError(
+            return YojoError(
                 "tls_error",
                 f"TLS verification failed for {self.service} ({self._host()}).",
                 "Confirm the base_url host name, and if the server uses an internal CA set "
-                f"{self.service}.ca_bundle in atl.yaml to that CA's PEM file. Certificate "
+                f"{self.service}.ca_bundle in yojo.yaml to that CA's PEM file. Certificate "
                 "verification is never disabled.",
                 {"service": self.service, "host": self._host(), "error_type": type(exc).__name__},
                 write_outcome=outcome,
             )
-        return AtlError(
+        return YojoError(
             "transport_error",
             f"Could not connect to {self.service} ({self._host()}).",
             f"Check network/VPN access to {self._host()} and retry.",
@@ -213,24 +221,24 @@ class ServiceClient:
             write_outcome=outcome,
         )
 
-    def _dispatch_failure(self, exc: BaseException, is_write: bool) -> AtlError:
+    def _dispatch_failure(self, exc: BaseException, is_write: bool) -> YojoError:
         if is_write:
             return self.unknown_outcome(type(exc).__name__)
-        return AtlError(
+        return YojoError(
             "transport_error",
             f"The connection to {self.service} failed during the request.",
             "Retry the read-only command; check network stability if it repeats.",
             {"service": self.service, "host": self._host(), "error_type": type(exc).__name__},
         )
 
-    def unknown_outcome(self, reason: str, fix: str | None = None) -> AtlError:
-        return AtlError(
+    def unknown_outcome(self, reason: str, fix: str | None = None) -> YojoError:
+        return YojoError(
             "outcome_unknown",
             f"The {self.service} write was dispatched but its outcome is unknown.",
             fix
             or "Inspect the remote item to see whether the change was applied before retrying; "
             "see 'Writes and retries' in docs/commands.md for how to inspect each write "
-            "(comments and attachments need the issue view). atl does not retry writes.",
+            "(comments and attachments need the issue view). yojo does not retry writes.",
             {"service": self.service, "reason": sanitize_text(reason, 200)},
             write_outcome="unknown",
         )
@@ -247,7 +255,7 @@ class ServiceClient:
                 if total > MAX_RESPONSE_BYTES:
                     if is_write:
                         raise self.unknown_outcome(f"response exceeded {MAX_RESPONSE_BYTES} bytes")
-                    raise AtlError(
+                    raise YojoError(
                         "response_invalid",
                         f"The {self.service} response exceeded {MAX_RESPONSE_BYTES} bytes.",
                         "Narrow the request (smaller --limit or more specific query).",
@@ -268,7 +276,7 @@ class ServiceClient:
             except ValueError:
                 if is_write:
                     raise self.unknown_outcome("non-JSON success response") from None
-                raise AtlError(
+                raise YojoError(
                     "response_invalid",
                     f"{self.service} returned a non-JSON response.",
                     "Check that base_url points at the Data Center application root "
@@ -290,19 +298,19 @@ class ServiceClient:
             details["redirect_host"] = urlsplit(location).netloc or None
             if is_write:
                 raise self.unknown_outcome(f"redirect {status}")
-            raise AtlError(
+            raise YojoError(
                 "redirect_refused",
-                f"{self.service} answered with a redirect ({status}); atl does not follow "
+                f"{self.service} answered with a redirect ({status}); yojo does not follow "
                 "redirects.",
                 "Set base_url to the final HTTPS URL including the context path, and make sure "
                 "SSO is not intercepting REST calls (use a PAT).",
                 details,
             )
         if status == 401:
-            raise AtlError(
+            raise YojoError(
                 "auth_failed",
                 f"{self.service} rejected the stored credential.",
-                f"Run `atl login --service {self.service}` with a valid token or password.",
+                f"Run `yojo login --service {self.service}` with a valid token or password.",
                 details,
                 write_outcome=rejected,
             )
@@ -310,7 +318,7 @@ class ServiceClient:
             reason = response.headers.get("x-seraph-loginreason")
             if reason:
                 details["login_reason"] = sanitize_text(reason, 100, self._redact)
-            raise AtlError(
+            raise YojoError(
                 "forbidden",
                 f"{self.service} denied the request.",
                 "Confirm your account has permission for this project/space. If login_reason "
@@ -319,7 +327,7 @@ class ServiceClient:
                 write_outcome=rejected,
             )
         if status == 404:
-            raise AtlError(
+            raise YojoError(
                 "not_found",
                 f"{self.service} returned 404 Not Found.",
                 "Check the key or ID and that your account can view it.",
@@ -327,7 +335,7 @@ class ServiceClient:
                 write_outcome=rejected,
             )
         if status == 409:
-            raise AtlError(
+            raise YojoError(
                 "conflict",
                 f"{self.service} reported a conflict.",
                 "Re-read the current remote state, reconcile, and resubmit.",
@@ -335,10 +343,10 @@ class ServiceClient:
                 write_outcome=rejected,
             )
         if status == 413:
-            raise AtlError(
+            raise YojoError(
                 "remote_limit_exceeded",
                 f"{self.service} rejected the request as too large.",
-                "The server or proxy limit is lower than atl's; reduce the payload size.",
+                "The server or proxy limit is lower than yojo's; reduce the payload size.",
                 details,
                 write_outcome=rejected,
             )
@@ -346,7 +354,7 @@ class ServiceClient:
             details["retry_after"] = sanitize_text(
                 response.headers.get("retry-after", ""), 20, self._redact
             )
-            raise AtlError(
+            raise YojoError(
                 "rate_limited",
                 f"{self.service} rate-limited the request.",
                 "Wait for the retry_after interval, then run the command again.",
@@ -360,13 +368,13 @@ class ServiceClient:
                 )
                 error.details.update(remote)
                 raise error
-            raise AtlError(
+            raise YojoError(
                 "service_error",
                 f"{self.service} returned error {status}.",
                 "Retry later; contact the Atlassian administrators if it persists.",
                 details,
             )
-        raise AtlError(
+        raise YojoError(
             "remote_validation",
             f"{self.service} rejected the request ({status}).",
             "Correct the values listed in details.fields/details.messages and retry.",

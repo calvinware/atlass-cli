@@ -8,14 +8,14 @@ from typing import Any
 
 import pytest
 
-from atlass_cli.config import parse_config_file
-from atlass_cli.contracts import COMMANDS_BY_PATH, ERROR_CODES, EXIT_CODES_DOC
 from scripts import generate_command_reference as gen
 from scripts.mkdocs_hooks import DocsRenderError, render_os_tabs, rewrite_external_links
+from yojo.config import parse_config_file
+from yojo.contracts import COMMANDS_BY_PATH, ERROR_CODES, EXIT_CODES_DOC
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
-REPO_URL = "https://github.com/calvinware/atlass-cli"
+REPO_URL = "https://github.com/calvinware/yojo"
 SHARED_MARKDOWN = [ROOT / "README.md", ROOT / "AGENTS.md", *sorted(DOCS.rglob("*.md"))]
 
 
@@ -103,8 +103,8 @@ def test_missing_example_is_reported(
     [
         (lambda e: e["success"]["data"].pop("key"), "success"),
         (lambda e: e["error"]["error"].update(code="partial_transition"), "not in this command"),
-        (lambda e: e["input"].pop("summary"), "input"),
-        (lambda e: e.update(argv=["jira", "story", "create"]), "argv"),
+        (lambda e: e.update(input={"summary": 5}), "input"),
+        (lambda e: e.update(argv=["jira", "widget", "create"]), "argv"),
         (lambda e: e["success"]["data"].update(url="https://jira.corp.invalid/x"), "URL host"),
         (lambda e: e.update(note="Authorization: Bearer abc"), "credential"),
     ],
@@ -117,7 +117,7 @@ def test_invalid_examples_are_reported(
 ) -> None:
     contracts, _ = discovered
     broken = copy.deepcopy(examples)
-    mutate(broken["jira story create"])
+    mutate(broken["jira issue create"])
     problems = gen.validate_examples(contracts, broken)
     assert any(expected in p for p in problems), problems
 
@@ -138,14 +138,14 @@ def _set(path: list[Any], value: Any) -> Any:
     [
         ("jira transition", _set(["argv", 2], "EXAMPLE-43"), "argv gives key='EXAMPLE-43'"),
         ("jira transition", _set(["argv", 4], "In Progress"), "argv gives to='In Progress'"),
-        ("jira feature find", _set(["argv", 4], "audit log"), "argv gives text='audit log'"),
+        ("jira issue link", _set(["argv", 6], "relates"), "argv gives type='relates'"),
         ("jira search", _set(["argv", 5], "25"), "argv gives limit=25"),
         ("jira search", _set(["arguments", "start"], 0), None),
         ("jira search", _set(["arguments", "start"], 40), "argv gives start=0"),
         ("schema", _set(["argv", 1], "jira search"), "argv gives command='jira search'"),
         ("jira transition", _set(["success", "data", "key"], "EXAMPLE-43"), "success.data.key"),
         ("jira requirements", _set(["success", "data", "to"], "Done"), "success.data.to"),
-        ("jira feature find", _set(["success", "data", "query"], "sso"), "success.data.query"),
+        ("jira issue get", _set(["success", "data", "key"], "EXAMPLE-43"), "success.data.key"),
         ("confluence page read", _set(["success", "data", "id"], "123457"), "success.data.id"),
         (
             "confluence page update",
@@ -160,7 +160,7 @@ def _set(path: list[Any], value: Any) -> Any:
         ),
         ("confluence page create", _set(["success", "data", "title"], "Other"), "data.title"),
         (
-            "jira story create",
+            "jira issue create",
             _set(["success", "data", "url"], "https://jira.example.test/x"),
             "url",
         ),
@@ -171,13 +171,13 @@ def _set(path: list[Any], value: Any) -> Any:
         ),
         ("jira requirements", _set(["success", "data", "ready"], False), "ready is False"),
         (
-            "jira transition",
-            _set(["error", "error", "details", "checklist", "ready"], True),
-            "ready is True",
+            "jira issue create",
+            _set(["error", "error", "details", "retry"], "yojo jira issue create EXAMPLE"),
+            "retry is not the shell-quoted",
         ),
         (
             "jira transition",
-            _set(["error", "error", "details", "checklist", "checks", 2, "status"], "pass"),
+            _set(["error", "error", "details", "checks", 0, "status"], "pass"),
             "at least one failing check",
         ),
         (
@@ -251,8 +251,8 @@ def test_missing_error_fix_is_reported(
     assert any("unknown codes" in p and "made_up_code" in p for p in problems)
 
 
-def _fake_atl(paths: list[str]) -> Any:
-    real = gen.run_atl
+def _fake_yojo(paths: list[str]) -> Any:
+    real = gen.run_yojo
 
     def fake(*args: str) -> Any:
         if args == ("commands",):
@@ -266,14 +266,14 @@ def _fake_atl(paths: list[str]) -> Any:
 
 def test_duplicate_command_paths_fail(monkeypatch: pytest.MonkeyPatch) -> None:
     paths = [*COMMANDS_BY_PATH, "jira search"]
-    monkeypatch.setattr(gen, "run_atl", _fake_atl(paths))
+    monkeypatch.setattr(gen, "run_yojo", _fake_yojo(paths))
     with pytest.raises(gen.GenerationError, match="duplicate"):
         gen.discover()
 
 
 def test_registry_drift_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     paths = [*COMMANDS_BY_PATH, "jira issue delete"]
-    monkeypatch.setattr(gen, "run_atl", _fake_atl(paths))
+    monkeypatch.setattr(gen, "run_yojo", _fake_yojo(paths))
     with pytest.raises(gen.GenerationError, match="does not match COMMANDS_BY_PATH"):
         gen.discover()
 
@@ -284,7 +284,9 @@ def test_check_mode_fails_on_stale_file_without_writing(
     stale_commands = tmp_path / "commands.md"
     stale_errors = tmp_path / "errors.md"
     stale_commands.write_text(
-        gen.COMMANDS_MD.read_text(encoding="utf-8").replace("`atl jira search`", "`atl jira find`"),
+        gen.COMMANDS_MD.read_text(encoding="utf-8").replace(
+            "`yojo jira search`", "`yojo jira find`"
+        ),
         encoding="utf-8",
     )
     stale_errors.write_text(gen.ERRORS_MD.read_text(encoding="utf-8"), encoding="utf-8")
@@ -366,14 +368,14 @@ def test_getting_started_has_github_readable_os_sections() -> None:
 
 def test_links_outside_docs_point_at_github_source() -> None:
     markdown = (
-        "See [`AGENTS.md`](../../AGENTS.md#contract), [cli](../../src/atlass_cli/cli.py), "
+        "See [`AGENTS.md`](../../AGENTS.md#contract), [cli](../../src/yojo/cli.py), "
         "[page](../configuration.md#drift-checks), [anchor](#local), "
         "[web](https://example.test/x), and `[code](../AGENTS.md)`.\n"
         "```\n[fenced](../AGENTS.md)\n```"
     )
     out = rewrite_external_links(markdown, "guides/page.md", REPO_URL)
     assert f"[`AGENTS.md`]({REPO_URL}/blob/main/AGENTS.md#contract)" in out
-    assert f"({REPO_URL}/blob/main/src/atlass_cli/cli.py)" in out
+    assert f"({REPO_URL}/blob/main/src/yojo/cli.py)" in out
     assert "(../configuration.md#drift-checks)" in out
     assert "(#local)" in out and "(https://example.test/x)" in out
     assert "`[code](../AGENTS.md)`" in out
@@ -398,7 +400,7 @@ def test_shared_markdown_has_no_site_only_syntax(path: Path) -> None:
 
 
 README_BLOB_URL = f"{REPO_URL}/blob/main/"
-README_RAW_URL = "https://raw.githubusercontent.com/calvinware/atlass-cli/main/"
+README_RAW_URL = "https://raw.githubusercontent.com/calvinware/yojo/main/"
 # Inline links (with optional <...> and title), reference definitions, and HTML attributes.
 README_TARGET_RE = re.compile(
     r"\]\(\s*<?([^)\s<>]+)>?(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)"
@@ -501,32 +503,34 @@ def test_example_json_files_are_valid_json() -> None:
 
 # --------------------------------------------------------------------------- agent wrapper
 
-READY_CHECKLIST = {
-    "key": "EXAMPLE-42",
-    "to": "Done",
-    "ready": True,
-    "checks": [{"id": "source_status", "status": "pass", "fix": None}],
-}
-NOT_READY_CHECKLIST = {
-    **READY_CHECKLIST,
-    "ready": False,
-    "checks": [
-        {"id": "source_status", "status": "pass", "fix": None},
-        {"id": "field:resolution", "status": "not_applicable", "fix": None},
-        {"id": "attachment:{key}_TestResults_*", "status": "fail", "fix": "Attach test results."},
-    ],
-}
-
 
 def _ok(data: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     return 0, {"ok": True, "data": data}
 
 
-def _err(exit_code: int, code: str, fix: str) -> tuple[int, dict[str, Any]]:
+def _err(
+    exit_code: int, code: str, fix: str, details: dict[str, Any] | None = None
+) -> tuple[int, dict[str, Any]]:
     return exit_code, {
         "ok": False,
-        "error": {"code": code, "message": "m", "fix": fix, "details": {}},
+        "error": {"code": code, "message": "m", "fix": fix, "details": details or {}},
     }
+
+
+REFUSED = {
+    "nothing_sent": True,
+    "checks": [
+        {
+            "id": "attachment:{key}_Evidence_*",
+            "status": "fail",
+            "message": "No matching attachment.",
+            "fix": "Attach a supporting file.",
+        }
+    ],
+    "passed": 2,
+    "retry": "yojo jira transition EXAMPLE-42 --to Done",
+    "retry_argv": ["yojo", "jira", "transition", "EXAMPLE-42", "--to", "Done"],
+}
 
 
 @pytest.fixture
@@ -542,7 +546,7 @@ def agent_wrapper(tmp_path: Path) -> dict[str, Any]:
 
 
 def _fake_cli(
-    monkeypatch: pytest.MonkeyPatch, replies: dict[str, tuple[int, dict[str, Any]]]
+    monkeypatch: pytest.MonkeyPatch, reply: tuple[int, dict[str, Any]]
 ) -> list[list[str]]:
     import subprocess
     from types import SimpleNamespace
@@ -550,85 +554,82 @@ def _fake_cli(
     calls: list[list[str]] = []
 
     def run(argv: list[str], **kwargs: Any) -> SimpleNamespace:
-        assert argv[0] == "atl" and kwargs.get("shell") is not True
+        assert argv[0] == "yojo" and argv[-1] == "--json" and kwargs.get("shell") is not True
         calls.append(argv)
-        exit_code, envelope = replies[argv[2]]
+        exit_code, envelope = reply
         return SimpleNamespace(returncode=exit_code, stdout=json.dumps(envelope) + "\n")
 
     monkeypatch.setattr(subprocess, "run", run)
     return calls
 
 
-def test_agent_wrapper_transitions_when_ready(
+def test_agent_wrapper_transitions_in_one_call(
     agent_wrapper: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    done = {"key": "EXAMPLE-42", "to": "Done", "operations": []}
-    calls = _fake_cli(monkeypatch, {"requirements": _ok(READY_CHECKLIST), "transition": _ok(done)})
-    assert agent_wrapper["transition"]("EXAMPLE-42", "Done") == done
-    assert [c[2] for c in calls] == ["requirements", "transition"]
+    done = {"key": "EXAMPLE-42", "status": "Done", "operations": []}
+    calls = _fake_cli(monkeypatch, _ok(done))
+    assert agent_wrapper["transition"]("EXAMPLE-42", "Done", "Resolution=Won't Do") == done
+    assert calls == [
+        [
+            "yojo",
+            "jira",
+            "transition",
+            "EXAMPLE-42",
+            "--to",
+            "Done",
+            "--set",
+            "Resolution=Won't Do",
+            "--json",
+        ]
+    ]
 
 
 @pytest.mark.parametrize(
-    ("replies", "message", "commands"),
+    ("reply", "messages"),
     [
         (
-            {"requirements": _err(3, "auth_missing", "Ask a human to run atl login.")},
-            "Ask a human to run atl login.",
-            ["requirements"],
+            _err(3, "auth_missing", "Ask a human to run yojo login."),
+            ["Ask a human to run yojo login."],
         ),
         (
-            {"requirements": _ok(NOT_READY_CHECKLIST)},
-            "attachment:{key}_TestResults_*: Attach test results.",
-            ["requirements"],
+            _err(4, "requirements_unmet", "Apply each check's fix.", REFUSED),
+            [
+                "Apply each check's fix.",
+                "attachment:{key}_Evidence_*: Attach a supporting file.",
+                "yojo jira transition EXAMPLE-42 --to Done",
+            ],
         ),
         (
-            {
-                "requirements": _ok(READY_CHECKLIST),
-                "transition": _err(4, "requirements_unmet", "Resolve each failed check."),
-            },
-            "Resolve each failed check.",
-            ["requirements", "transition"],
+            _err(6, "outcome_unknown", "Inspect the issue."),
+            ["Inspect the issue.", "Writes and retries"],
         ),
         (
-            {
-                "requirements": _ok(READY_CHECKLIST),
-                "transition": _err(6, "outcome_unknown", "Inspect the issue."),
-            },
-            "Writes and retries",
-            ["requirements", "transition"],
-        ),
-        (
-            {
-                "requirements": _ok(READY_CHECKLIST),
-                "transition": _err(7, "partial_transition", "Do not roll back."),
-            },
-            "Writes and retries",
-            ["requirements", "transition"],
+            _err(7, "partial_transition", "Do not roll back."),
+            ["Do not roll back.", "Writes and retries"],
         ),
     ],
-    ids=["requirements-error", "not-ready", "transition-error", "exit-6", "exit-7"],
+    ids=["auth-error", "refused", "exit-6", "exit-7"],
 )
 def test_agent_wrapper_stops_with_the_fix(
     agent_wrapper: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
-    replies: dict[str, tuple[int, dict[str, Any]]],
-    message: str,
-    commands: list[str],
+    reply: tuple[int, dict[str, Any]],
+    messages: list[str],
 ) -> None:
-    calls = _fake_cli(monkeypatch, replies)
+    calls = _fake_cli(monkeypatch, reply)
     with pytest.raises(agent_wrapper["Stop"]) as raised:
         agent_wrapper["transition"]("EXAMPLE-42", "Done")
-    assert message in str(raised.value)
-    if "transition" in replies and not replies["transition"][1]["ok"]:
-        assert replies["transition"][1]["error"]["fix"] in str(raised.value)
-    assert "source_status" not in str(raised.value)
-    assert [c[2] for c in calls] == commands
+    for message in messages:
+        assert message in str(raised.value)
+    assert len(calls) == 1
+    if reply[1]["error"]["code"] in ("outcome_unknown", "partial_transition"):
+        assert "retry" not in str(raised.value).lower().replace("writes and retries", "")
 
 
 def test_agent_wrapper_rejects_mismatched_exit_and_envelope(
     agent_wrapper: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _fake_cli(monkeypatch, {"requirements": (0, {"ok": False, "error": {}})})
+    _fake_cli(monkeypatch, (0, {"ok": False, "error": {}}))
     with pytest.raises(agent_wrapper["Stop"], match="does not match"):
         agent_wrapper["transition"]("EXAMPLE-42", "Done")
 
@@ -665,8 +666,8 @@ def built_site(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     plugins = {ep.name for ep in importlib.metadata.entry_points(group="mkdocs.plugins")}
     if importlib.util.find_spec("material") is None or "gh-admonitions" not in plugins:
-        if os.environ.get("ATL_REQUIRE_SITE_BUILD") == "1":
-            pytest.fail("ATL_REQUIRE_SITE_BUILD=1 but the docs extra is not installed")
+        if os.environ.get("YOJO_REQUIRE_SITE_BUILD") == "1":
+            pytest.fail("YOJO_REQUIRE_SITE_BUILD=1 but the docs extra is not installed")
         pytest.skip("install the docs extra to build the site")
     site = tmp_path_factory.mktemp("site")
     proc = subprocess.run(  # noqa: S603 - fixed argv: this interpreter running MkDocs

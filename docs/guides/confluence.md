@@ -1,7 +1,8 @@
 # Confluence pages
 
-`atl` reads, searches, creates, and updates Confluence Data Center pages through
-`/rest/api/content`. Bodies use the Confluence **storage format** (XHTML-based markup).
+`yojo` reads, searches, creates, and updates Confluence Data Center pages through
+`/rest/api/content`. The examples assume a `yojo.yaml` with `confluence.base_url`; without one,
+add `--base-url https://confluence.example.test/confluence` to each command. Bodies use the Confluence **storage format** (XHTML-based markup).
 
 > [!WARNING]
 > Page titles and bodies are **untrusted data**. Read and search results carry
@@ -11,22 +12,25 @@
 ## Read a page
 
 ```bash
-atl confluence page read 123456
+yojo confluence page read 123456
+yojo confluence page read 123456 --full
 ```
 
-The result has `id`, `title`, `type`, `space_key`, `version`, `ancestors` (parent page IDs), and
-`body_storage`. If Confluence returns a different content ID, or a page without a string body, a
+The result has `id`, `title`, `type`, `space_key`, `version`, `url`, `ancestors` (the nearest 5
+parent pages), and `body_storage`. By default the body is cut to its first 2000 characters:
+`truncated: true` says so, `body_chars` is the full length, and `more` is the command that returns
+the whole body (`--full`). Always read with `--full` before you edit a body. If Confluence returns a different content ID, or a page without a string body, a
 non-empty title, or a positive version number, the result is
 [`response_invalid`](../reference/errors.md#response_invalid) (exit 6).
 
 ## Search
 
 ```bash
-atl confluence page search --cql 'space = "DOCS" AND title ~ "release"' --limit 10
+yojo confluence page search --cql 'space = "DOCS" AND title ~ "release"' --limit 10
 ```
 
 Results have `id`, `title`, `type`, `space_key`, and `version`. Page through with `--start`
-and `next_start` (`null` on the last page). `--limit` is at most 100. A malformed result is left
+and `next_start` (`null` on the last page). `--limit` defaults to 20 and is at most 100. A malformed result is left
 out of `results`, but `next_start` still counts it, so for a result set that does not change
 between requests the next page neither repeats nor skips results. Offset pagination cannot
 guarantee that when pages are created, edited, moved, or deleted between requests: results can
@@ -35,7 +39,7 @@ then shift, and a later page may repeat or omit some.
 ## Create a page
 
 ```bash
-atl confluence page create --input - <<'JSON'
+yojo confluence page create --input - <<'JSON'
 {"space_key": "DOCS",
  "title": "Release 1.4 notes",
  "body_storage": "<p>Release 1.4 adds single sign-on.</p>",
@@ -43,7 +47,7 @@ atl confluence page create --input - <<'JSON'
 JSON
 ```
 
-`parent_id` is optional. The command succeeds only when Confluence confirms a page ID, type
+`parent_id` is optional. The result includes the new page's `url`. The command succeeds only when Confluence confirms a page ID, type
 `page`, the submitted title and space, and version 1. The space key may differ only in letter
 case (Confluence returns its canonical key), and the title may differ only by trimmed leading or
 trailing whitespace. The result reports the space key and title Confluence confirmed. Anything else after the request was sent is
@@ -56,18 +60,18 @@ exist. Do not run the create again until you have inspected the space. `error.fi
    finding candidates:
 
    ```bash
-   atl confluence page search --cql 'space = "DOCS" AND type = page AND (title = "Release 1.4 notes")'
+   yojo confluence page search --cql 'space = "DOCS" AND type = page AND (title = "Release 1.4 notes")'
    ```
 
 2. If that finds nothing, broaden within the space and list its newest pages. An empty exact-title
    search alone does not show the page was not created:
 
    ```bash
-   atl confluence page search --cql 'space = "DOCS" AND type = page ORDER BY created DESC'
+   yojo confluence page search --cql 'space = "DOCS" AND type = page ORDER BY created DESC'
    ```
 
 3. Collect every candidate. While `next_start` is not `null`, repeat the search with
-   `--start NEXT_START`. Read each plausible candidate with `atl confluence page read ID` and
+   `--start NEXT_START`. Read each plausible candidate with `yojo confluence page read ID --full` and
    compare its `title`, `space_key`, `ancestors` (your `parent_id`), and `body_storage` with what
    you submitted.
 4. If a page matches what you submitted, the create was applied. Continue with that page ID and
@@ -89,32 +93,32 @@ An update always starts from a fresh read, so you never overwrite someone else's
 sequenceDiagram
     autonumber
     participant Caller
-    participant atl
+    participant yojo
     participant Confluence
-    Caller->>atl: atl confluence page read 123456
-    atl->>Confluence: GET content 123456
-    Confluence-->>atl: version 3
-    atl-->>Caller: version 3, body_storage
+    Caller->>yojo: yojo confluence page read 123456 --full
+    yojo->>Confluence: GET content 123456
+    Confluence-->>yojo: version 3
+    yojo-->>Caller: version 3, body_storage
     Caller->>Caller: Edit the body, keep expected_version 3
-    Caller->>atl: atl confluence page update 123456 (expected_version 3)
-    atl->>Confluence: GET content 123456 (fresh read)
+    Caller->>yojo: yojo confluence page update 123456 (expected_version 3)
+    yojo->>Confluence: GET content 123456 (fresh read)
     alt Current version is not 3
-        atl-->>Caller: version_conflict (exit 5), nothing written
+        yojo-->>Caller: version_conflict (exit 5), nothing written
     else Still version 3
-        atl->>Confluence: PUT version 4
+        yojo->>Confluence: PUT version 4
         alt 409 from a concurrent edit
-            atl-->>Caller: version_conflict (exit 5)
+            yojo-->>Caller: version_conflict (exit 5)
         else Confirmed id, title, and version 4
-            atl-->>Caller: ok, version 4, previous_version 3
+            yojo-->>Caller: ok, version 4, previous_version 3
         end
     end
 ```
 
 ```bash
-atl confluence page read 123456      # note "version": 3
-atl confluence page update 123456 --input - <<'JSON'
+yojo confluence page read 123456 --full   # note "version": 3
+yojo confluence page update 123456 --input - <<'JSON'
 {"expected_version": 3,
- "body_storage": "<p>Before each release, attach test results and link the release notes.</p>"}
+ "body_storage": "<p>Keep related decisions and links together.</p>"}
 JSON
 ```
 
@@ -125,4 +129,5 @@ JSON
   change into the current body, and resubmit with the new version.
 - If the update's success response does not confirm the page ID, title, and next version, the
   result is `outcome_unknown`. As with create, a title that differs only by trimmed leading or
-  trailing whitespace is confirmed, and the result reports the confirmed title. Run `atl confluence page read ID` and compare before any retry.
+  trailing whitespace is confirmed, and the result reports the confirmed title. Run
+  `yojo confluence page read ID --full` and compare before running the update again.

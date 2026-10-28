@@ -3,9 +3,9 @@ requires = ["setuptools>=84.1", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "atlass-cli"
-version = "1.0.0"
-description = "Agent-first JSON CLI for Atlassian Jira and Confluence Data Center with team-defined workflow rules."
+name = "yojo"
+version = "0.1.0"
+description = "Generic, agent-first command line for Jira and Confluence Data Center: one JSON envelope, friendly terminal output."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Calvinware" }]
 keywords = ["atlassian", "jira", "confluence", "data-center", "cli", "automation", "ai-agents"]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
@@ -34,10 +34,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/calvinware/atlass-cli"
-Documentation = "https://github.com/calvinware/atlass-cli/tree/main/docs"
-Repository = "https://github.com/calvinware/atlass-cli"
-Issues = "https://github.com/calvinware/atlass-cli/issues"
+Homepage = "https://github.com/calvinware/yojo"
+Documentation = "https://github.com/calvinware/yojo/tree/main/docs"
+Repository = "https://github.com/calvinware/yojo"
+Issues = "https://github.com/calvinware/yojo/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -58,13 +58,13 @@ docs = [
 ]
 
 [project.scripts]
-atl = "atlass_cli.cli:main"
+yojo = "yojo.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-atlass_cli = ["py.typed"]
+yojo = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

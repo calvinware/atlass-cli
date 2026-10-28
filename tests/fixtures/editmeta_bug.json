@@ -1,0 +1,230 @@
+{
+  "fields": {
+    "summary": {
+      "required": true,
+      "schema": {
+        "type": "string",
+        "system": "summary"
+      },
+      "name": "Summary",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ]
+    },
+    "description": {
+      "required": false,
+      "schema": {
+        "type": "string",
+        "system": "description"
+      },
+      "name": "Description",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ]
+    },
+    "priority": {
+      "required": false,
+      "schema": {
+        "type": "priority",
+        "system": "priority"
+      },
+      "name": "Priority",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ],
+      "allowedValues": [
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/priority/1",
+          "name": "Highest",
+          "id": "1"
+        },
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/priority/2",
+          "name": "High",
+          "id": "2"
+        },
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/priority/3",
+          "name": "Medium",
+          "id": "3"
+        },
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/priority/4",
+          "name": "Low",
+          "id": "4"
+        }
+      ]
+    },
+    "assignee": {
+      "required": false,
+      "schema": {
+        "type": "user",
+        "system": "assignee"
+      },
+      "name": "Assignee",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ]
+    },
+    "labels": {
+      "required": false,
+      "schema": {
+        "type": "array",
+        "items": "string",
+        "system": "labels"
+      },
+      "name": "Labels",
+      "hasDefaultValue": false,
+      "operations": [
+        "add",
+        "set",
+        "remove"
+      ]
+    },
+    "fixVersions": {
+      "required": false,
+      "schema": {
+        "type": "array",
+        "items": "version",
+        "system": "fixVersions"
+      },
+      "name": "Fix Version/s",
+      "hasDefaultValue": false,
+      "operations": [
+        "set",
+        "add",
+        "remove"
+      ],
+      "allowedValues": [
+        {
+          "id": "10100",
+          "name": "1.0",
+          "released": true,
+          "archived": false
+        },
+        {
+          "id": "10101",
+          "name": "2.0",
+          "released": false,
+          "archived": false
+        }
+      ]
+    },
+    "customfield_10500": {
+      "required": false,
+      "schema": {
+        "type": "option",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:select",
+        "customId": 10500
+      },
+      "name": "Severity",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ],
+      "allowedValues": [
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/customFieldOption/20",
+          "value": "Critical",
+          "id": "20",
+          "disabled": false
+        },
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/customFieldOption/21",
+          "value": "Major",
+          "id": "21",
+          "disabled": false
+        },
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/customFieldOption/22",
+          "value": "Minor",
+          "id": "22",
+          "disabled": false
+        }
+      ]
+    },
+    "customfield_10600": {
+      "required": false,
+      "schema": {
+        "type": "string",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:textarea",
+        "customId": 10600
+      },
+      "name": "Environment",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ]
+    },
+    "customfield_10002": {
+      "required": false,
+      "schema": {
+        "type": "number",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:float",
+        "customId": 10002
+      },
+      "name": "Story Points",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ]
+    },
+    "customfield_10700": {
+      "required": false,
+      "schema": {
+        "type": "string",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:textfield",
+        "customId": 10700
+      },
+      "name": "Component Owner",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ]
+    },
+    "customfield_10701": {
+      "required": false,
+      "schema": {
+        "type": "string",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:textfield",
+        "customId": 10701
+      },
+      "name": "Component owner",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ]
+    },
+    "customfield_10300": {
+      "required": false,
+      "schema": {
+        "type": "option",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:select",
+        "customId": 10300
+      },
+      "name": "Review Flag",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ],
+      "allowedValues": [
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/customFieldOption/1",
+          "value": "Yes",
+          "id": "1",
+          "disabled": false
+        },
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/customFieldOption/2",
+          "value": "No",
+          "id": "2",
+          "disabled": false
+        }
+      ]
+    }
+  }
+}

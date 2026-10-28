@@ -6,21 +6,21 @@ import re
 import shlex
 from typing import Any
 
-from atlass_cli.contracts import PAGE_ID_PATTERN, AtlError
-from atlass_cli.features import jql_quote
-from atlass_cli.transport import ServiceClient, sanitize_text, seg
+from yojo.contracts import PAGE_ID_PATTERN, YojoError
+from yojo.response import TextBudget
+from yojo.transport import ServiceClient, jql_quote, sanitize_text, seg
 
 PAGE_ID_RE = re.compile(PAGE_ID_PATTERN)
 
 READ_EXPAND = "body.storage,version,space,ancestors"
 
 
-def _invalid(what: str) -> AtlError:
-    return AtlError(
+def _invalid(what: str) -> YojoError:
+    return YojoError(
         "response_invalid",
         f"Confluence returned an unexpected {what} response.",
-        "Check that confluence.base_url points at Confluence Data Center including any context "
-        "path.",
+        "Check that the Confluence URL (--base-url or confluence.base_url) points at Confluence "
+        "Data Center including any context path.",
         {"what": what},
     )
 
@@ -66,30 +66,42 @@ def _get_page(client: ServiceClient, page_id: str) -> dict[str, Any]:
     if not isinstance(page, dict) or not isinstance(page.get("id"), str):
         raise _invalid("page")
     if page["id"] != page_id:
-        raise AtlError(
+        raise YojoError(
             "response_invalid",
             f"Confluence returned content {sanitize_text(page['id'], 40)} when page {page_id} "
             "was requested.",
-            f"Confirm {page_id} is the intended page ID with `atl confluence page search`, and "
-            "check that confluence.base_url is not routed through a rewriting proxy.",
+            f"Confirm {page_id} is the intended page ID with `yojo confluence page search`, and "
+            "check that the Confluence URL is not routed through a rewriting proxy.",
             {"what": "page id", "requested_id": page_id},
         )
     return page
 
 
-def read(client: ServiceClient, page_id: str) -> dict[str, Any]:
+def page_url(client: ServiceClient, page_id: str) -> str:
+    return client.url(f"/pages/viewpage.action?pageId={seg(page_id)}")
+
+
+def read(client: ServiceClient, page_id: str, full: bool = False) -> dict[str, Any]:
     page = _get_page(client, page_id)
     ancestors = [
         str(a["id"]) for a in page.get("ancestors") or [] if isinstance(a, dict) and "id" in a
     ]
+    body = _storage(page)
+    shown, truncated = TextBudget(full).fit(body)
     return {
         "id": page["id"],
         "title": _title(page),
         "type": str(page.get("type", "")),
         "space_key": _space_key(page),
         "version": _version(page),
-        "ancestors": ancestors,
-        "body_storage": _storage(page),
+        "url": page_url(client, page_id),
+        "ancestors": ancestors[-5:],
+        "body_storage": shown,
+        "body_chars": len(body),
+        "truncated": truncated,
+        "more": shlex.join(["yojo", "confluence", "page", "read", page_id, "--full"])
+        if truncated
+        else None,
         "content_trust": "untrusted",
     }
 
@@ -117,7 +129,6 @@ def search(client: ServiceClient, cql: str, start: int, limit: int) -> dict[str,
         )
     has_next = isinstance(raw.get("_links"), dict) and "next" in raw["_links"]
     return {
-        "cql": cql,
         "start": start,
         "limit": limit,
         "size": len(results),
@@ -137,8 +148,9 @@ def create(client: ServiceClient, doc: dict[str, Any]) -> dict[str, Any]:
     if "parent_id" in doc:
         body["ancestors"] = [{"id": doc["parent_id"]}]
     try:
+        client.announce(f"Creating page {sanitize_text(doc['title'], 80)!r} in {doc['space_key']}")
         created = client.request("POST", "/rest/api/content", json_body=body)
-    except AtlError as exc:
+    except YojoError as exc:
         if exc.code == "outcome_unknown":
             recovery = _create_unknown(
                 client,
@@ -158,10 +170,11 @@ def create(client: ServiceClient, doc: dict[str, Any]) -> dict[str, Any]:
         "title": created["title"],
         "space_key": created["space"]["key"],
         "version": 1,
+        "url": page_url(client, created["id"]),
     }
 
 
-def _create_unknown(client: ServiceClient, reason: str, space_key: str, title: str) -> AtlError:
+def _create_unknown(client: ServiceClient, reason: str, space_key: str, title: str) -> YojoError:
     """Build recovery guidance covering every title the create confirmation would accept."""
     titles = list(dict.fromkeys(t for t in (title, title.strip()) if t))
     exact = (
@@ -171,20 +184,21 @@ def _create_unknown(client: ServiceClient, reason: str, space_key: str, title: s
     )
     broad = f"space = {jql_quote(space_key)} AND type = page ORDER BY created DESC"
     argv = {
-        "exact_search": ["atl", "confluence", "page", "search", "--cql", exact],
-        "broad_search": ["atl", "confluence", "page", "search", "--cql", broad],
+        "exact_search": ["yojo", "confluence", "page", "search", "--cql", exact],
+        "broad_search": ["yojo", "confluence", "page", "search", "--cql", broad],
     }
     error = client.unknown_outcome(
         reason,
         f"Do not retry yet. Search for the page under its submitted and edge-trimmed titles: "
         f"`{shlex.join(argv['exact_search'])}`. If that finds nothing, list the space's newest "
         f"pages: `{shlex.join(argv['broad_search'])}`. Read every plausible match with "
-        "`atl confluence page read ID` to confirm whether it is yours. An empty exact-title "
-        "search alone does not show the page was not created, and results can shift between "
-        "pages, so a scan with no match does not show it either. If no page matches or you "
-        "cannot tell, ask a human to confirm the page does not exist before any retry. atl does "
-        "not retry writes. The commands above are quoted for POSIX shells (sh, bash, zsh) only; in "
-        "cmd.exe, PowerShell, or a program, pass each list in details.recovery_argv as separate "
+        "`yojo confluence page read ID --full` to confirm whether it is yours. An empty "
+        "exact-title search alone does not show the page was not created, and results can "
+        "shift between pages, so a scan with no match does not show it either. If no page "
+        "matches or you cannot tell, ask a human to confirm the page does not exist before any "
+        "retry. yojo does not retry writes. The commands above are quoted for POSIX shells (sh, "
+        "bash, zsh) only; in cmd.exe, PowerShell, or a program, pass each list in "
+        "details.recovery_argv as separate "
         "arguments.",
     )
     error.details["recovery_argv"] = argv
@@ -221,11 +235,12 @@ def _create_mismatch(created: Any, title: str, space_key: str) -> str | None:
     return None
 
 
-def _stale(page_id: str, expected: int, current: int) -> AtlError:
-    return AtlError(
+def _stale(page_id: str, expected: int, current: int) -> YojoError:
+    return YojoError(
         "version_conflict",
         f"Page {page_id} is at version {current}, not the expected version {expected}.",
-        f"Re-read the page with `atl confluence page read {page_id}`, merge your changes into the "
+        f"Re-read the page with `yojo confluence page read {page_id} --full`, merge your changes "
+        "into the "
         f"current content, and resubmit with expected_version {current}.",
         {"id": page_id, "expected_version": expected, "current_version": current},
     )
@@ -235,11 +250,11 @@ def update(client: ServiceClient, page_id: str, doc: dict[str, Any]) -> dict[str
     expected = doc["expected_version"]
     current = _get_page(client, page_id)
     if current.get("type") != "page":
-        raise AtlError(
+        raise YojoError(
             "input_invalid",
             f"Content {page_id} is not a page (type {sanitize_text(current.get('type'), 40)}); "
             "nothing was written.",
-            "Pass the ID of a Confluence page; `atl confluence page update` does not edit blog "
+            "Pass the ID of a Confluence page; `yojo confluence page update` does not edit blog "
             "posts or other content types.",
             {"id": page_id, "type": sanitize_text(current.get("type"), 40)},
         )
@@ -256,13 +271,15 @@ def update(client: ServiceClient, page_id: str, doc: dict[str, Any]) -> dict[str
         "body": {"storage": {"value": storage, "representation": "storage"}},
     }
     try:
+        client.announce(f"Updating page {page_id} to version {expected + 1}")
         updated = client.request("PUT", f"/rest/api/content/{seg(page_id)}", json_body=body)
-    except AtlError as exc:
+    except YojoError as exc:
         if exc.code == "conflict":
-            raise AtlError(
+            raise YojoError(
                 "version_conflict",
                 f"Page {page_id} changed while updating (409 Conflict); nothing was overwritten.",
-                f"Re-read the page with `atl confluence page read {page_id}`, merge, and resubmit "
+                f"Re-read the page with `yojo confluence page read {page_id} --full`, merge, and "
+                "resubmit "
                 "with the new expected_version.",
                 {"id": page_id, "expected_version": expected, **exc.details},
                 write_outcome="rejected",
@@ -272,8 +289,8 @@ def update(client: ServiceClient, page_id: str, doc: dict[str, Any]) -> dict[str
     if reason is not None:
         raise client.unknown_outcome(
             reason,
-            f"Run `atl confluence page read {page_id}` and compare its title, version, and body "
-            f"with what you submitted (version {expected + 1} expected) before retrying. atl "
+            f"Run `yojo confluence page read {page_id} --full` and compare its title, version, and "
+            f"body with what you submitted (version {expected + 1} expected) before retrying. yojo "
             "does not retry writes.",
         )
     assert isinstance(updated, dict)
@@ -282,6 +299,7 @@ def update(client: ServiceClient, page_id: str, doc: dict[str, Any]) -> dict[str
         "title": updated["title"],
         "version": expected + 1,
         "previous_version": expected,
+        "url": page_url(client, page_id),
     }
 
 
