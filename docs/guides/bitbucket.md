@@ -141,9 +141,11 @@ yojo bitbucket pr comment 42 --repo PROJ/web --body 'Ready for review.'
 yojo bitbucket pr comment 42 --repo PROJ/web --body-file notes.txt
 ```
 
-The comment is plain text. `yojo` checks that the pull request exists and that it has no comment
-with exactly the same text, so running the same command again after the first one landed is
-refused. The check runs before posting, so two calls sent at the same time can both post; do not
+The comment is plain text. `yojo` checks that the pull request exists, that Bitbucket reports it
+as open, merged, or declined (comments are allowed in all three states, as in the Bitbucket UI),
+and that no comment or reply in its activity has exactly the same text, so running the same
+command again after the first one landed is refused. A pull request whose state is missing or
+unrecognized is refused as unverified, with nothing sent. The check runs before posting, so two calls sent at the same time can both post; do not
 send the same comment concurrently. A successful POST is read back through that pull request's
 comment endpoint before `yojo` reports success. If the read cannot confirm the comment, the
 result is `outcome_unknown` and needs inspection.

@@ -542,7 +542,7 @@ Error: an alias in yojo.yaml names a field Jira does not have (a typo) ([`config
   "error": {
     "code": "config_drift",
     "message": "yojo.yaml no longer matches live Jira (2 check(s)).",
-    "fix": "Apply each drift check's fix (update yojo.yaml or the Jira configuration), then re-run `yojo config check`.",
+    "fix": "Apply each drift check's fix in details.checks (each names the yojo.yaml key or service setting to change), then re-run `yojo config check`.",
     "details": {
       "status": "drift",
       "summary": {

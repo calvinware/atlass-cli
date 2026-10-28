@@ -314,15 +314,20 @@ def test_global_repo_list_and_last_page(harness: Harness) -> None:
 @pytest.mark.parametrize(
     "body",
     [
-        {"isLastPage": False, "start": 0, "values": []},
-        {"isLastPage": False, "start": 0, "nextPageStart": 0, "values": []},
-        {"isLastPage": False, "start": 0, "nextPageStart": "20", "values": []},
-        {"start": 0, "values": []},
-        {"isLastPage": True, "start": 40, "values": []},
-        {"isLastPage": True, "values": []},
-        {"isLastPage": True, "start": "0", "values": []},
-        {"isLastPage": True, "start": 0, "values": [{}] * 21},
+        {"size": 0, "isLastPage": False, "start": 0, "values": []},
+        {"size": 0, "isLastPage": False, "start": 0, "nextPageStart": 0, "values": []},
+        {"size": 0, "isLastPage": False, "start": 0, "nextPageStart": "20", "values": []},
+        {"size": 0, "start": 0, "values": []},
+        {"size": 0, "isLastPage": True, "start": 40, "values": []},
+        {"size": 0, "isLastPage": True, "values": []},
+        {"size": 0, "isLastPage": True, "start": "0", "values": []},
+        {"size": 21, "isLastPage": True, "start": 0, "values": [{}] * 21},
         {"isLastPage": True, "start": 0, "values": "nope"},
+        {"isLastPage": True, "start": 0, "values": []},
+        {"size": 2, "isLastPage": True, "start": 0, "values": [{}]},
+        {"size": -1, "isLastPage": True, "start": 0, "values": []},
+        {"size": "0", "isLastPage": True, "start": 0, "values": []},
+        {"size": True, "isLastPage": True, "start": 0, "values": [{}]},
     ],
     ids=[
         "missing",
@@ -334,6 +339,11 @@ def test_global_repo_list_and_last_page(harness: Harness) -> None:
         "start-not-int",
         "too-many",
         "values",
+        "no-size",
+        "size-mismatch",
+        "size-negative",
+        "size-not-int",
+        "size-bool",
     ],
 )
 def test_malformed_pagination_fails_closed(harness: Harness, body: dict[str, Any]) -> None:
@@ -453,26 +463,84 @@ def test_pr_get_rejects_another_pull_request(harness: Harness) -> None:
 # --------------------------------------------------------------------------- diff
 
 
+def _diff_path_body(path: str) -> dict[str, Any]:
+    return {"components": path.split("/"), "toString": path}
+
+
 def test_pr_diff_is_unified_and_complete_when_small(harness: Harness) -> None:
     config(harness)
-    harness.server.add("GET", DIFF, fixture("bitbucket_diff.json"))
+    diff = fixture("bitbucket_diff.json")
+    diff["diffs"] += [
+        {
+            "source": _diff_path_body("docs/old.md"),
+            "destination": None,
+            "hunks": [
+                {
+                    "sourceLine": 1,
+                    "sourceSpan": 1,
+                    "destinationLine": 0,
+                    "destinationSpan": 0,
+                    "segments": [{"type": "REMOVED", "lines": [{"line": "# Old"}]}],
+                }
+            ],
+        },
+        {
+            "source": _diff_path_body("img/logo.png"),
+            "destination": _diff_path_body("img/logo.png"),
+            "binary": True,
+        },
+    ]
+    harness.server.add("GET", DIFF, diff)
     result = harness.run("bitbucket", "pr", "diff", "42", "--repo", "PROJ/web")
     data = result.data
-    assert data["complete"] is True and data["more"] is None
+    assert data["complete"] is True and data["more"] is None and data["inspect"] is None
+    assert data["files_total"] == 4
     assert data["files"] == [
         {"path": "src/app.py", "old_path": None, "change": "modified", "added": 2, "removed": 1},
         {"path": "docs/login.md", "old_path": None, "change": "added", "added": 1, "removed": 0},
+        {"path": "docs/old.md", "old_path": None, "change": "deleted", "added": 0, "removed": 1},
+        {"path": "img/logo.png", "old_path": None, "change": "modified", "added": 0, "removed": 0},
     ]
-    assert data["diff"].splitlines()[:6] == [
-        "diff --git a/src/app.py b/src/app.py",
-        "--- a/src/app.py",
-        "+++ b/src/app.py",
-        "@@ -10,2 +10,3 @@",
-        " def login(user):",
-        "-    return check(user)",
-    ]
-    assert "--- /dev/null" in data["diff"]
+    assert data["diff"] == (
+        "diff --git a/src/app.py b/src/app.py\n"
+        "--- a/src/app.py\n"
+        "+++ b/src/app.py\n"
+        "@@ -10,2 +10,3 @@\n"
+        " def login(user):\n"
+        "-    return check(user)\n"
+        "+    if not user:\n"
+        "+        return False\n"
+        "diff --git a/docs/login.md b/docs/login.md\n"
+        "--- /dev/null\n"
+        "+++ b/docs/login.md\n"
+        "@@ -0,0 +1,1 @@\n"
+        "+# Login\n"
+        "diff --git a/docs/old.md b/docs/old.md\n"
+        "--- a/docs/old.md\n"
+        "+++ /dev/null\n"
+        "@@ -1,1 +0,0 @@\n"
+        "-# Old\n"
+        "diff --git a/img/logo.png b/img/logo.png\n"
+        "--- a/img/logo.png\n"
+        "+++ b/img/logo.png\n"
+        "Binary files differ\n"
+    )
+    assert data["diff_chars"] == len(data["diff"])
     assert harness.server.requests[0].url.params["withComments"] == "false"
+
+
+@pytest.mark.parametrize("side", ["sourceSpan", "destinationSpan"])
+def test_pr_diff_with_hunk_spans_that_do_not_add_up_is_incomplete(
+    harness: Harness, side: str
+) -> None:
+    config(harness)
+    diff = fixture("bitbucket_diff.json")
+    diff["diffs"][0]["hunks"][0][side] += 5
+    harness.server.add("GET", DIFF, diff)
+    data = harness.run("bitbucket", "pr", "diff", "42", "--repo", "PROJ/web", "--full").data
+    assert data["complete"] is False and data["server_truncated"] is True
+    assert data["truncated_files"] == ["src/app.py"]
+    assert data["inspect"] == f"git diff {diff['fromHash']} {diff['toHash']} -- src/app.py"
 
 
 def test_pr_diff_marks_local_truncation(harness: Harness) -> None:
@@ -480,6 +548,7 @@ def test_pr_diff_marks_local_truncation(harness: Harness) -> None:
     diff = fixture("bitbucket_diff.json")
     lines = diff["diffs"][0]["hunks"][0]["segments"][2]["lines"]
     lines += [{"line": f"    step_{n} = {n}", "truncated": False} for n in range(400)]
+    diff["diffs"][0]["hunks"][0]["destinationSpan"] += 400
     harness.server.add("GET", DIFF, diff)
     data = harness.run("bitbucket", "pr", "diff", "42", "--repo", "PROJ/web").data
     assert data["truncated"] is True and data["complete"] is False
@@ -962,7 +1031,7 @@ def test_create_refuses_same_source_and_target(harness: Harness) -> None:
 def test_create_refuses_when_the_duplicate_scan_cannot_finish(harness: Harness) -> None:
     setup_create(harness)
     harness.server.routes[("GET", PRS)] = []
-    harness.server.add("GET", PRS, {"isLastPage": False, "start": 0, "values": []})
+    harness.server.add("GET", PRS, {"size": 0, "isLastPage": False, "start": 0, "values": []})
     details = refusal(harness.run(*CREATE_ARGV))
     (check,) = details["checks"]
     assert (check["id"], check["status"]) == ("duplicate", "unverified")
@@ -985,6 +1054,26 @@ def test_create_refuses_when_a_later_page_does_not_echo_its_start(
     harness.server.routes[("GET", PRS)] = []
     harness.server.add("GET", PRS, page([other], next_start=1))
     harness.server.add("GET", PRS, later)
+    details = refusal(harness.run(*CREATE_ARGV))
+    (check,) = details["checks"]
+    assert (check["id"], check["status"]) == ("duplicate", "unverified")
+    assert harness.server.writes() == []
+
+
+@pytest.mark.parametrize("on_later_page", [False, True])
+def test_create_refuses_when_a_page_size_does_not_count_its_values(
+    harness: Harness, on_later_page: bool
+) -> None:
+    setup_create(harness)
+    other = fixture("bitbucket_pull_request.json")
+    other["id"] = 41
+    other["toRef"]["id"] = "refs/heads/release"
+    harness.server.routes[("GET", PRS)] = []
+    if on_later_page:
+        harness.server.add("GET", PRS, page([other], next_start=1))
+        harness.server.add("GET", PRS, page([], start=1) | {"size": 1})
+    else:
+        harness.server.add("GET", PRS, page([other]) | {"size": 2})
     details = refusal(harness.run(*CREATE_ARGV))
     (check,) = details["checks"]
     assert (check["id"], check["status"]) == ("duplicate", "unverified")
@@ -1353,6 +1442,112 @@ def test_comment_refuses_when_an_activity_cannot_be_compared(
     (check,) = details["checks"]
     assert (check["id"], check["status"]) == ("duplicate", "unverified")
     assert harness.server.writes() == []
+
+
+@pytest.mark.parametrize("on_later_page", [False, True])
+def test_comment_refuses_when_a_page_size_does_not_count_its_values(
+    harness: Harness, on_later_page: bool
+) -> None:
+    setup_comment(harness)
+    harness.server.routes[("GET", ACTIVITIES)] = []
+    if on_later_page:
+        harness.server.add("GET", ACTIVITIES, page([{"action": "OPENED"}], next_start=1))
+        harness.server.add("GET", ACTIVITIES, page([], start=1) | {"size": 1})
+    else:
+        harness.server.add("GET", ACTIVITIES, page([{"action": "OPENED"}]) | {"size": 2})
+    details = refusal(harness.run(*COMMENT_ARGV, "--body", "New note"))
+    (check,) = details["checks"]
+    assert (check["id"], check["status"]) == ("duplicate", "unverified")
+    assert harness.server.writes() == []
+
+
+def _with_reply(text: str) -> dict[str, Any]:
+    activities: dict[str, Any] = fixture("bitbucket_activities.json")
+    comment = activities["values"][0]["comment"]
+    reply = {**copy.deepcopy(comment), "id": 503, "text": "Thanks.", "comments": []}
+    reply["comments"] = [{**copy.deepcopy(comment), "id": 504, "text": text, "comments": []}]
+    comment["comments"] = [reply]
+    return activities
+
+
+def test_comment_refuses_an_identical_nested_reply(harness: Harness) -> None:
+    setup_comment(harness)
+    harness.server.routes[("GET", ACTIVITIES)] = []
+    harness.server.add("GET", ACTIVITIES, _with_reply("Fixed in the next commit."))
+    details = refusal(harness.run(*COMMENT_ARGV, "--body", "Fixed in the next commit."))
+    (check,) = details["checks"]
+    assert (check["id"], check["status"]) == ("duplicate", "fail")
+    assert check["details"] == {"comment_id": 504}
+    assert harness.server.writes() == []
+
+
+@pytest.mark.parametrize("broken", [{"id": 505}, None, {"id": 505, "text": "x", "comments": {}}])
+def test_comment_refuses_when_a_nested_reply_cannot_be_compared(
+    harness: Harness, broken: Any
+) -> None:
+    setup_comment(harness)
+    activities = _with_reply("Thanks again.")
+    activities["values"][0]["comment"]["comments"][0]["comments"].append(broken)
+    harness.server.routes[("GET", ACTIVITIES)] = []
+    harness.server.add("GET", ACTIVITIES, activities)
+    details = refusal(harness.run(*COMMENT_ARGV, "--body", "New note"))
+    (check,) = details["checks"]
+    assert (check["id"], check["status"]) == ("duplicate", "unverified")
+    assert harness.server.writes() == []
+
+
+@pytest.mark.parametrize("state", ["MERGED", "DECLINED"])
+def test_comment_on_merged_or_declined_pull_request(harness: Harness, state: str) -> None:
+    setup_comment(harness)
+    harness.server.routes[("GET", PR)] = []
+    harness.server.add("GET", PR, {**fixture("bitbucket_pull_request.json"), "state": state})
+    result = harness.run(*COMMENT_ARGV, "--body", "Ready for review.")
+    assert result.code == 0, result.out
+    assert len(harness.server.writes()) == 1
+
+
+@pytest.mark.parametrize("state", [None, "SUPERSEDED", 3])
+def test_comment_refuses_when_the_pull_request_state_is_unknown(
+    harness: Harness, state: Any
+) -> None:
+    setup_comment(harness)
+    pr = fixture("bitbucket_pull_request.json")
+    if state is None:
+        del pr["state"]
+    else:
+        pr["state"] = state
+    harness.server.routes[("GET", PR)] = []
+    harness.server.add("GET", PR, pr)
+    details = refusal(harness.run(*COMMENT_ARGV, "--body", "  "))
+    assert [(c["id"], c["status"]) for c in details["checks"]] == [
+        ("body", "fail"),
+        ("pull_request", "unverified"),
+    ]
+    assert "yojo bitbucket pr get 42 --repo PROJ/web" in details["checks"][1]["fix"]
+    assert harness.server.writes() == []
+
+
+@pytest.mark.parametrize(
+    ("status", "code", "exit_code"),
+    [(400, "remote_validation", 5), (403, "forbidden", 3), (409, "conflict", 5)],
+)
+def test_comment_server_rejection_is_definite(
+    harness: Harness, status: int, code: str, exit_code: int
+) -> None:
+    setup_comment(harness)
+    harness.server.routes[("POST", COMMENTS)] = []
+    harness.server.add(
+        "POST", COMMENTS, {"errors": [{"message": "Comments are locked"}]}, status=status
+    )
+    result = harness.run(*COMMENT_ARGV, "--body", "Ready for review.")
+    assert result.code == exit_code, result.out
+    error = result.error
+    assert error["code"] == code
+    assert error["details"]["status"] == status
+    assert "Comments are locked" in error["details"]["messages"]
+    assert not {"retry", "retry_argv", "recovery_argv"} & error["details"].keys()
+    assert len(harness.server.writes()) == 1
+    assert harness.server.requests[-1].method == "POST"
 
 
 def test_comment_scans_every_activity_page(harness: Harness) -> None:

@@ -149,7 +149,7 @@
 
 **Exit 4.** The preflight inside a write command found one or more problems: a missing or unknown field, an ambiguous name, a disallowed value, a missing permission, or a failed team rule. Every problem is reported at once, and nothing was sent.
 
-**Fix:** Apply each failing check's `fix`, then run `details.retry` (fill in any `<placeholder>`). The retry is your own command with the corrections applied; it is omitted when a value came from `--input`.
+**Fix:** Apply each failing check's `fix`, then run `details.retry` when it is present (fill in any `<placeholder>`). The retry is your own command with the corrections applied. It is `null` when a value came from `--input` or when no rerun would help, such as a duplicate that already exists; then follow each check's `fix` only.
 
 **Details:** `details.nothing_sent` is `true`; `details.checks[]` lists the failing checks and `details.passed` counts the rest. `details.retry` is quoted for POSIX shells; `details.retry_argv` is the same command as an argument list.
 
@@ -157,9 +157,9 @@
 
 ### `config_drift`
 
-**Exit 4.** `yojo config check` found at least one difference between `yojo.yaml` and live Jira metadata.
+**Exit 4.** `yojo config check` found at least one difference between `yojo.yaml` and the live services: Jira metadata, or a `bitbucket.base_url` whose server does not identify itself as Bitbucket Data Center.
 
-**Fix:** Apply each `drift` check's fix, either by updating `yojo.yaml` (through team review) or by asking a Jira admin to change the screen or workflow, then re-run `yojo config check`. See [Troubleshooting](../troubleshooting.md).
+**Fix:** Apply each `drift` check's fix. For a Jira check, update `yojo.yaml` (through team review) or ask a Jira admin to change the screen or workflow. For `bitbucket:application`, set `bitbucket.base_url` to the Bitbucket application root including any context path. Then re-run `yojo config check`. See [Troubleshooting](../troubleshooting.md).
 
 **Details:** `details.checks[]` holds every check with `pass`, `drift`, or `unverified`; `details.summary` counts them.
 
