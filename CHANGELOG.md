@@ -35,6 +35,8 @@ First release under the name `yojo`. It replaces `atlass-cli` 1.0.0, which stays
 - `yojo init` drafts a version 1 `yojo.yaml` from live metadata with the stored logins. It
   previews by default, saves only with `--save`, and replaces a file only with
   `--replace --expected-sha256`. Team rules come only from `--input` and are checked live.
+  `--ca-bundle PEM` on login and init supports private CA certificates during bootstrap and
+  records the bundle in the draft.
 - `yojo agent print` and `yojo agent install --target agents|claude|cursor|copilot|gemini`
   generate agent instructions from the command registry, with every command's signature and a
   `--json` example in under 12 KiB. Installs replace only the marked yojo section.

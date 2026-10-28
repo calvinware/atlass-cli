@@ -15,7 +15,7 @@ import re
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, BinaryIO, NoReturn, TextIO, cast
 
@@ -270,6 +270,7 @@ def build_parser() -> _Parser:
     p.add_argument("--service", required=True, choices=["jira", "confluence", "bitbucket", "all"])
     p.add_argument("--auth", default="pat", choices=["pat", "basic"])
     p.add_argument("--username")
+    p.add_argument("--ca-bundle", metavar="PEM")
     stdin_group = p.add_mutually_exclusive_group()
     stdin_group.add_argument("--token-stdin", action="store_true")
     stdin_group.add_argument("--password-stdin", action="store_true")
@@ -282,6 +283,7 @@ def build_parser() -> _Parser:
     p.add_argument("--project", action="append", type=_project_key, metavar="KEY")
     p.add_argument("--confluence-url", metavar="URL")
     p.add_argument("--bitbucket-url", metavar="URL")
+    p.add_argument("--ca-bundle", metavar="PEM")
     p.add_argument("--repo", action="append", type=_repo, metavar="PROJECT/slug")
     p.add_argument("--policy-input", "--input", dest="input", metavar="FILE")
     p.add_argument("--output", metavar="PATH")
@@ -756,6 +758,17 @@ def cmd_login(args: argparse.Namespace, rt: Runtime) -> Any:
         )
     services = ["jira", "confluence"] if args.service == "all" else [args.service]
     targets = [(s, _service(rt, args, s)) for s in services]
+    if args.ca_bundle:
+        ca_bundle = Path(args.ca_bundle).expanduser()
+        if not ca_bundle.is_absolute():
+            ca_bundle = rt.cwd / ca_bundle
+        if not ca_bundle.is_file():
+            raise YojoError(
+                "usage_error",
+                f"CA bundle file does not exist: {ca_bundle}.",
+                "Pass --ca-bundle with a readable PEM file containing the trusted CA certificates.",
+            )
+        targets = [(service, replace(cfg, ca_bundle=ca_bundle)) for service, cfg in targets]
     if args.auth == "pat" and args.password_stdin:
         raise YojoError(
             "usage_error",
@@ -934,6 +947,7 @@ def cmd_init(args: argparse.Namespace, rt: Runtime) -> Any:
             projects=tuple(args.project or ()),
             confluence_url=args.confluence_url,
             bitbucket_url=args.bitbucket_url,
+            ca_bundle=args.ca_bundle,
             repos=tuple(args.repo or ()),
             input=args.input,
             output=args.output,

@@ -72,7 +72,8 @@ def all_live(harness: Harness) -> None:
     harness.server.add("GET", PROPS, fixture("bitbucket_application_properties.json"))
     harness.server.add("GET", RECENT, {"values": [], "isLastPage": True})
     harness.server.add("GET", REPO, fixture("bitbucket_repo.json"))
-    harness.server.add("GET", REPO + "/branches/default", {"displayId": "main"})
+    default_branch = fixture("bitbucket_branches.json")["values"][0]
+    harness.server.add("GET", REPO + "/branches/default", default_branch)
 
 
 def policy_live(harness: Harness) -> None:
@@ -122,6 +123,48 @@ def test_preview_drafts_only_what_was_named(harness: Harness) -> None:
     assert not (harness.tmp_path / "yojo.yaml").exists()
     assert harness.server.writes() == []
     no_tokens(result.stdout)
+
+
+def test_custom_ca_bundle_is_used_for_live_checks_and_saved(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jira_live(harness)
+    bundle = harness.tmp_path / "team-ca.pem"
+    bundle.write_text("example CA fixture")
+    from yojo import cli
+
+    original_client = cli._client
+    observed = []
+
+    def recording_client(rt: Any, service: str, cfg: Any) -> Any:
+        observed.append((service, cfg.ca_bundle))
+        return original_client(rt, service, cfg)
+
+    monkeypatch.setattr(cli, "_client", recording_client)
+    result = harness.run(*INIT, "--ca-bundle", "team-ca.pem", "--save")
+    assert result.code == 0, result.out
+    assert observed == [("jira", bundle)]
+    assert yaml.safe_load(result.data["yaml"])["jira"]["ca_bundle"] == "team-ca.pem"
+    saved_config = parse_config_file(harness.tmp_path / "yojo.yaml")
+    assert saved_config.jira is not None
+    assert saved_config.jira.ca_bundle == bundle
+    assert result.data["action"] == "created"
+
+
+def test_missing_custom_ca_bundle_fails_before_network_or_save(harness: Harness) -> None:
+    result = harness.run(*INIT, "--ca-bundle", "missing.pem", "--save")
+    assert result.error["code"] == "input_invalid"
+    assert "--ca-bundle" in result.error["fix"]
+    assert harness.server.requests == []
+    assert not (harness.tmp_path / "yojo.yaml").exists()
+
+
+def test_custom_ca_missing_login_fix_keeps_the_ca_option(harness: Harness) -> None:
+    (harness.tmp_path / "team-ca.pem").write_text("example CA fixture")
+    result = harness.run(*INIT, "--ca-bundle", "team-ca.pem")
+    assert result.error["code"] == "auth_missing"
+    assert "yojo --json login --service jira" in result.error["fix"]
+    assert "--ca-bundle team-ca.pem" in result.error["fix"]
 
 
 def test_preview_checks_every_service_and_reports_repos_without_saving_them(
@@ -446,6 +489,26 @@ def test_a_file_that_appears_mid_save_is_not_overwritten(
     result = harness.run(*INIT, "--save")
     assert result.error["code"] == "file_conflict"
     assert path.read_text() == "written by someone else\n"
+    assert leftovers(harness.tmp_path) == []
+
+
+def test_external_deletion_during_replace_reports_conflict(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jira_live(harness)
+    path = harness.tmp_path / "yojo.yaml"
+    path.write_text("version: 1\nconfluence:\n  base_url: https://confluence.example.test\n")
+    digest = files.sha256(path.read_bytes())
+    real_publish = files._publish_locked
+
+    def racing_publish(dest: Path, data: bytes, expected: bytes | None) -> None:
+        dest.unlink()
+        real_publish(dest, data, expected)
+
+    monkeypatch.setattr(files, "_publish_locked", racing_publish)
+    result = harness.run(*INIT, "--save", "--replace", "--expected-sha256", digest)
+    assert result.error["code"] == "file_conflict"
+    assert not path.exists()
     assert leftovers(harness.tmp_path) == []
 
 

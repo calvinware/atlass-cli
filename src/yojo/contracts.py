@@ -519,7 +519,8 @@ COMMANDS: list[CommandSpec] = [
         ),
         usage=(
             "yojo login --service jira|confluence|bitbucket|all [--base-url URL] "
-            "[--auth pat|basic] [--username NAME] [--token-stdin | --password-stdin]"
+            "[--auth pat|basic] [--username NAME] [--ca-bundle PEM] "
+            "[--token-stdin | --password-stdin]"
         ),
         example="yojo --json login --service jira --base-url https://jira.example.test/jira",
         arguments=_obj(
@@ -527,6 +528,10 @@ COMMANDS: list[CommandSpec] = [
                 "service": {"enum": ["jira", "confluence", "bitbucket", "all"]},
                 "auth": {"enum": ["pat", "basic"], "default": "pat"},
                 "username": {"type": "string", "description": "Basic auth username (not secret)."},
+                "ca_bundle": {
+                    "type": "string",
+                    "description": "Readable PEM CA bundle for login; relative to cwd.",
+                },
                 "token_stdin": BOOL,
                 "password_stdin": BOOL,
             },
@@ -583,7 +588,7 @@ COMMANDS: list[CommandSpec] = [
         ),
         usage=(
             "yojo init [--jira-url URL] [--project KEY]... [--confluence-url URL] "
-            "[--bitbucket-url URL] [--repo PROJECT/slug]... "
+            "[--bitbucket-url URL] [--repo PROJECT/slug]... [--ca-bundle PEM] "
             "[--policy-input FILE|- | --input FILE|-] [--output PATH] "
             "[--save] [--replace --expected-sha256 HEX]"
         ),
@@ -598,6 +603,13 @@ COMMANDS: list[CommandSpec] = [
                 },
                 "confluence_url": {"type": "string", "description": "Confluence HTTPS root."},
                 "bitbucket_url": {"type": "string", "description": "Bitbucket HTTPS root."},
+                "ca_bundle": {
+                    "type": "string",
+                    "description": (
+                        "Readable PEM CA bundle for live checks and each selected service in the "
+                        "draft; relative to --output."
+                    ),
+                },
                 "repo": {
                     "type": "array",
                     "items": {"type": "string", "pattern": REPO_PATTERN},

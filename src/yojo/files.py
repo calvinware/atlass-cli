@@ -1,10 +1,12 @@
 """Conflict-checked, atomic writes of small local text files (yojo.yaml, agent instructions).
 
 A new file is staged next to its destination, flushed to disk, and published with a hard link,
-which fails if the destination appeared in the meantime. A changed file is replaced with an atomic
-rename only if its bytes still equal what the caller read. Symbolic links are never written
-through. Cooperating ``yojo`` writers share a per-destination lock file; a non-``yojo`` writer that
-changes the file between the final comparison and the rename is not detected.
+which fails if the destination appeared in the meantime. A changed file is compared with the bytes
+the caller read immediately before an atomic rename. Symbolic links are never written through.
+Cooperating ``yojo`` writers share a per-destination lock file. Portable filesystems do not offer
+an atomic content-compare-and-replace operation: a non-``yojo`` writer that changes the file
+between the final comparison and the rename is not detected. Callers must avoid concurrent editors
+when replacing an existing file.
 """
 
 from __future__ import annotations
@@ -150,7 +152,21 @@ def publish(path: Path, data: bytes, expected: bytes | None) -> None:
 
 
 def _publish_locked(path: Path, data: bytes, expected: bytes | None) -> None:
-    mode = _new_file_mode() if expected is None else stat.S_IMODE(path.stat().st_mode)
+    if expected is None:
+        mode = _new_file_mode()
+    else:
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            raise _changed(path) from None
+        except OSError:
+            raise _invalid(
+                path, f"Cannot inspect {path}.", "Check the path and its permissions."
+            ) from None
+        if not stat.S_ISREG(info.st_mode):
+            refuse_symlinks(path)
+            raise _changed(path)
+        mode = stat.S_IMODE(info.st_mode)
     try:
         staged: Path | None = _stage(path, data, mode)
     except OSError:

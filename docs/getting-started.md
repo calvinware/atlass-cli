@@ -257,6 +257,10 @@ rules are added only when you pass them with `--policy-input` (or `--input`; see
 against live Jira. To write the file by hand instead, start from
 [`yojo.example.yaml`](../yojo.example.yaml) and the [cookbook](admin-cookbook.md).
 
+If your instance uses a private CA, pass `--ca-bundle certs/team-ca.pem` to `init`; it uses that
+bundle for the live check and adds it to the draft. Pass the same option to the first `yojo login`.
+See [Configuration](configuration.md#draft-it-with-yojo-init).
+
 ```bash
 yojo config check          # read-only: does yojo.yaml still match live Jira?
 yojo jira transition PROJ-123 --to "In Progress"

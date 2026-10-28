@@ -28,14 +28,24 @@ yojo --json init --jira-url https://jira.example.test/jira --project PROJ
 yojo --json init --jira-url https://jira.example.test/jira --project PROJ --save
 ```
 
+For an instance signed by a private CA, add `--ca-bundle certs/team-ca.pem` to both commands.
+`init` checks that the PEM file exists, uses it for the live connection, and records it under
+`ca_bundle` for each selected service. A relative path is resolved from the output file's folder.
+The bundle contains public CA certificates, never a token or client private key.
+For the first login, pass the same bundle to
+`yojo login --service jira --base-url https://jira.example.test/jira --ca-bundle certs/team-ca.pem`.
+Login resolves a relative bundle path from the current directory.
+
 - Without `--save`, nothing is written. `existing_sha256` is the digest of any file already at the
   destination (`yojo.yaml` in the current directory, or `--output PATH`).
 - `--save` creates the file only if it is absent, and reports `unchanged` when the file already
   matches the draft.
 - `--save --replace --expected-sha256 HEX` replaces an existing file only while its digest still
-  equals `HEX`. Use the `existing_sha256` from the preview you reviewed. A different file is
-  refused with [`file_conflict`](reference/errors.md#file_conflict) and kept as it is. The file's
-  permissions are kept.
+  equals `HEX` at yojo's final check. Use the `existing_sha256` from the preview you reviewed.
+  A different file detected at that check is refused with
+  [`file_conflict`](reference/errors.md#file_conflict). The file's permissions are kept. Close other
+  editors or processes that may write the same file during replacement: portable file operations
+  cannot make the content check and replacement one indivisible step against an unrelated writer.
 - A symbolic link at the destination or in a folder on its path is refused, and a lone `atl.yaml`
   next to the destination stops the save with `config_legacy`.
 

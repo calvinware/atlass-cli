@@ -20,9 +20,6 @@ from yojo import bitbucket, files, jira, retry
 from yojo.config import (
     CONFIG_FILENAME,
     LEGACY_FILENAME,
-    BitbucketConfig,
-    ConfluenceConfig,
-    JiraConfig,
     ServiceConfig,
     StrictSafeLoader,
     legacy_config,
@@ -47,6 +44,7 @@ class InitRequest:
     projects: tuple[str, ...] = ()
     confluence_url: str | None = None
     bitbucket_url: str | None = None
+    ca_bundle: str | None = None
     repos: tuple[str, ...] = ()
     input: str | None = None
     output: str | None = None
@@ -64,6 +62,8 @@ class InitRequest:
             out += ["--confluence-url", self.confluence_url]
         if self.bitbucket_url:
             out += ["--bitbucket-url", self.bitbucket_url]
+        if self.ca_bundle:
+            out += ["--ca-bundle", self.ca_bundle]
         for ref in self.repos:
             out += ["--repo", ref]
         if self.input is not None:
@@ -125,6 +125,7 @@ def normalize(request: InitRequest) -> InitRequest:
         projects=tuple(dict.fromkeys(request.projects)),
         confluence_url=_url("--confluence-url", request.confluence_url),
         bitbucket_url=_url("--bitbucket-url", request.bitbucket_url),
+        ca_bundle=request.ca_bundle,
         repos=tuple(dict.fromkeys(request.repos)),
         input=request.input,
         output=request.output,
@@ -164,6 +165,8 @@ def document(request: InitRequest, policy: dict[str, Any] | None) -> dict[str, A
     doc: dict[str, Any] = {"version": 1}
     if request.jira_url:
         section: dict[str, Any] = {"base_url": request.jira_url}
+        if request.ca_bundle:
+            section["ca_bundle"] = request.ca_bundle
         rules = (policy or {}).get("jira", {})
         if "fields" in rules:
             section["fields"] = rules["fields"]
@@ -173,8 +176,12 @@ def document(request: InitRequest, policy: dict[str, Any] | None) -> dict[str, A
         doc["jira"] = section
     if request.confluence_url:
         doc["confluence"] = {"base_url": request.confluence_url}
+        if request.ca_bundle:
+            doc["confluence"]["ca_bundle"] = request.ca_bundle
     if request.bitbucket_url:
         doc["bitbucket"] = {"base_url": request.bitbucket_url}
+        if request.ca_bundle:
+            doc["bitbucket"]["ca_bundle"] = request.ca_bundle
     return doc
 
 
@@ -186,12 +193,21 @@ def render_yaml(doc: dict[str, Any], dest: Path) -> str:
         if exc.code != "config_invalid":
             raise
         where = exc.details.get("where")
+        fix = (
+            "Pass --ca-bundle with a readable PEM file, relative to --output or as an "
+            "absolute path."
+            if isinstance(where, str) and where.endswith(".ca_bundle")
+            else (
+                f"Correct {where or 'the policy'} in the --input document; "
+                "see docs/configuration.md."
+            )
+        )
         raise YojoError(
             "input_invalid",
             f"The draft would not be a valid yojo.yaml: {exc.details.get('problem')}"
             + (f" at {where}" if where else "")
             + "; nothing was written.",
-            f"Correct {where or 'the policy'} in the --input document; see docs/configuration.md.",
+            fix,
             {"where": where, "problem": exc.details.get("problem")},
         ) from None
     text = HEADER + yaml.safe_dump(
@@ -269,11 +285,13 @@ def verify(
     open_client: OpenClient,
     verify_user: VerifyUser,
 ) -> dict[str, list[dict[str, Any]]]:
+    config = validate_config(doc, dest)
     services: list[dict[str, Any]] = []
     projects: list[dict[str, str]] = []
     repos: list[dict[str, str]] = []
     if request.jira_url:
-        with open_client("jira", JiraConfig(base_url=request.jira_url, ca_bundle=None)) as client:
+        assert config.jira is not None
+        with open_client("jira", config.jira) as client:
             user = verify_user(client, "jira")
             services.append(
                 {"service": "jira", "base_url": request.jira_url, "user": user, "version": None}
@@ -282,7 +300,8 @@ def verify(
             if request.input is not None:
                 _policy_problems(client, doc, dest)
     if request.confluence_url:
-        confluence_cfg = ConfluenceConfig(base_url=request.confluence_url, ca_bundle=None)
+        assert config.confluence is not None
+        confluence_cfg = config.confluence
         with open_client("confluence", confluence_cfg) as client:
             user = verify_user(client, "confluence")
             services.append(
@@ -294,7 +313,8 @@ def verify(
                 }
             )
     if request.bitbucket_url:
-        bitbucket_cfg = BitbucketConfig(base_url=request.bitbucket_url, ca_bundle=None)
+        assert config.bitbucket is not None
+        bitbucket_cfg = config.bitbucket
         with open_client("bitbucket", bitbucket_cfg) as client:
             version = bitbucket.verify_login(client)
             services.append(
@@ -386,7 +406,34 @@ def draft(
     doc = document(request, policy)
     text = render_yaml(doc, dest)
     data = text.encode("utf-8")
-    observed = verify(request, doc, dest, open_client, verify_user)
+    try:
+        observed = verify(request, doc, dest, open_client, verify_user)
+    except YojoError as exc:
+        if exc.code != "auth_missing" or not request.ca_bundle:
+            raise
+        service = exc.details.get("service")
+        base_url = exc.details.get("base_url")
+        if not isinstance(service, str) or not isinstance(base_url, str):
+            raise
+        login = retry.posix(
+            [
+                retry.PROGRAM,
+                "--json",
+                "login",
+                "--service",
+                service,
+                "--base-url",
+                base_url,
+                "--ca-bundle",
+                request.ca_bundle,
+            ]
+        )
+        raise YojoError(
+            exc.code,
+            exc.message,
+            f"Ask a human to run `{login}` in a terminal and enter the token at the hidden prompt.",
+            exc.details,
+        ) from None
     files.refuse_symlinks(dest)
     current = files.read_current(dest)
     existing = files.sha256(current) if current is not None else None

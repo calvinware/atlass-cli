@@ -374,7 +374,7 @@ Error: a command path that does not exist ([`usage_error`](errors.md#usage_error
 Check a personal access token (or username and password) against the service and store it in the OS keyring for that URL. Secrets come from stdin or a hidden prompt, never arguments. Bitbucket takes a token only; `all` means Jira and Confluence.
 
 ```text
-yojo login --service SERVICE [--auth AUTH] [--username USERNAME] [--token-stdin | --password-stdin] [--config PATH] [--base-url URL] [--json]
+yojo login --service SERVICE [--auth AUTH] [--username USERNAME] [--ca-bundle PEM] [--token-stdin | --password-stdin] [--config PATH] [--base-url URL] [--json]
 ```
 
 **Arguments**
@@ -384,6 +384,7 @@ yojo login --service SERVICE [--auth AUTH] [--username USERNAME] [--token-stdin 
 | `service` | `--service SERVICE` | one of `jira`, `confluence`, `bitbucket`, `all` | yes |   |
 | `auth` | `--auth AUTH` | one of `pat`, `basic` | no | default `pat` |
 | `username` | `--username USERNAME` | string | no | Basic auth username (not secret). |
+| `ca_bundle` | `--ca-bundle PEM` | string | no | Readable PEM CA bundle for login; relative to cwd. |
 | `token_stdin` | `--token-stdin` | boolean | no |   |
 | `password_stdin` | `--password-stdin` | boolean | no |   |
 
@@ -620,7 +621,7 @@ Error: an alias in yojo.yaml names a field Jira does not have (a typo) ([`config
 Draft a version 1 yojo.yaml from live Jira, Confluence, and Bitbucket metadata, using the logins already stored for each URL. Shows a preview by default; --save creates the file only if it is absent, and --replace needs the current file's sha256. Team rules come only from --policy-input (or --input); nothing is inferred and no secret is written.
 
 ```text
-yojo init [--jira-url URL] [--project KEY...] [--confluence-url URL] [--bitbucket-url URL] [--repo PROJECT/slug...] [--policy-input FILE] [--output PATH] [--save] [--replace] [--expected-sha256 HEX] [--config PATH] [--base-url URL] [--json]
+yojo init [--jira-url URL] [--project KEY...] [--confluence-url URL] [--bitbucket-url URL] [--ca-bundle PEM] [--repo PROJECT/slug...] [--policy-input FILE] [--output PATH] [--save] [--replace] [--expected-sha256 HEX] [--config PATH] [--base-url URL] [--json]
 ```
 
 **Arguments**
@@ -631,6 +632,7 @@ yojo init [--jira-url URL] [--project KEY...] [--confluence-url URL] [--bitbucke
 | `project` | `--project KEY...` | array of strings | no | Jira project key to list in jira.projects; needs jira_url. |
 | `confluence_url` | `--confluence-url URL` | string | no | Confluence HTTPS root. |
 | `bitbucket_url` | `--bitbucket-url URL` | string | no | Bitbucket HTTPS root. |
+| `ca_bundle` | `--ca-bundle PEM` | string | no | Readable PEM CA bundle for live checks and each selected service in the draft; relative to --output. |
 | `repo` | `--repo PROJECT/slug...` | array of strings | no | PROJECT/slug to check; reported, not saved (no config key). |
 | `input` | `--policy-input FILE` | string | no | min length 1; Path to a UTF-8 JSON file, or '-' for stdin. |
 | `output` | `--output PATH` | string | no | min length 1; Where to save; default yojo.yaml in the current directory. |

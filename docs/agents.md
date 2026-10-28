@@ -17,7 +17,9 @@ act from it without calling `commands`, `schema`, or `--help`.
 Only the lines between `<!-- yojo:begin ... -->` and `<!-- yojo:end -->` belong to `yojo`. A new
 install adds that section, a later one replaces it, and the rest of the file is kept byte for
 byte. An unchanged file is not rewritten. Missing or repeated markers, a symbolic link, or a file
-that changes during the write are refused with nothing written.
+that changes before the final comparison is refused with nothing written. Close unrelated editors
+before replacing a file: their writes are not covered by yojo's lock, and a write in the small
+interval between comparison and replacement can be lost.
 
 ## The loop
 
