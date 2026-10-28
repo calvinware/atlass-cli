@@ -167,8 +167,11 @@ def test_custom_ca_missing_login_fix_keeps_the_ca_option(harness: Harness) -> No
     bundle.write_text("example CA fixture")
     result = harness.run(*INIT, "--ca-bundle", "team-ca.pem")
     assert result.error["code"] == "auth_missing"
-    assert "yojo --json login --service jira" in result.error["fix"]
-    assert f"--ca-bundle {bundle}" in result.error["fix"]
+    login = backticked(result.error["fix"], "yojo --json login")
+    assert len(login) == 1
+    args = shlex.split(login[0])
+    assert args[:5] == ["yojo", "--json", "login", "--service", "jira"]
+    assert args[args.index("--ca-bundle") + 1] == str(bundle)
 
 
 def test_custom_ca_login_fix_names_the_bundle_init_validated(harness: Harness) -> None:
@@ -415,9 +418,9 @@ def test_output_path_is_relative_to_the_current_directory(harness: Harness) -> N
     saved = harness.tmp_path / "config" / "team.yaml"
     parse_config_file(saved)
     check, install, read = result.data["next"]
-    assert check == f"yojo --json config check --config {saved}"
+    assert shlex.split(check) == ["yojo", "--json", "config", "check", "--config", str(saved)]
     assert install == "yojo --json agent install --target agents"
-    assert read.endswith(f"--limit 5 --config {saved}")
+    assert shlex.split(read)[-4:] == ["--limit", "5", "--config", str(saved)]
 
 
 def test_next_steps_after_a_custom_output_run_from_the_same_directory(harness: Harness) -> None:
