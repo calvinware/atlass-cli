@@ -10,6 +10,8 @@ import pytest
 
 from scripts import generate_command_reference as gen
 from scripts.mkdocs_hooks import DocsRenderError, render_os_tabs, rewrite_external_links
+from tests.conftest import JIRA, Harness
+from yojo.cli import NO_SERVICE_OPTIONS, build_parser
 from yojo.config import parse_config_file
 from yojo.contracts import COMMANDS_BY_PATH, ERROR_CODES, EXIT_CODES_DOC
 
@@ -41,6 +43,20 @@ def test_discovery_matches_registry(discovered: tuple[list[gen.Contract], dict[s
     contracts, exit_codes = discovered
     assert [c.path for c in contracts] == list(COMMANDS_BY_PATH)
     assert exit_codes == EXIT_CODES_DOC
+
+
+@pytest.mark.parametrize("path", list(COMMANDS_BY_PATH))
+def test_synopsis_offers_service_options_only_where_accepted(path: str, harness: Harness) -> None:
+    parser = gen.leaf_parsers(build_parser())[path]
+    line = gen.synopsis(path, parser)
+    accepted = path not in NO_SERVICE_OPTIONS
+    assert ("[--config PATH] [--base-url URL]" in line) == accepted, line
+    assert line.endswith("[--json]")
+    if not accepted:
+        for option in ("--config", "--base-url"):
+            result = harness.run(*path.split(), option, "value", "--jira-url", JIRA)
+            assert result.error["code"] == "usage_error", (path, option)
+            assert harness.server.requests == []
 
 
 def test_committed_reference_is_current(

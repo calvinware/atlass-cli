@@ -18,7 +18,7 @@ from tests.conftest import (
     confluence_path,
     jira_path,
 )
-from yojo import transport
+from yojo import cli, transport
 from yojo.auth import (
     NATIVE_BACKENDS,
     Credential,
@@ -137,6 +137,41 @@ def test_login_pat_stdin_verifies_then_stores(harness: Harness) -> None:
     stored = json.loads(harness.stored("jira") or "")
     assert stored["secret"] == JIRA_TOKEN
     assert JIRA_TOKEN not in result.stdout + result.stderr
+
+
+def test_login_uses_explicit_ca_bundle_before_config_exists(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = harness.tmp_path / "team-ca.pem"
+    bundle.write_text("example CA fixture")
+    harness.server.add("GET", MYSELF, {"name": "jdoe"})
+    original_client = ServiceClient
+    observed: list[Path | None] = []
+
+    def recording_client(*args: object, **kwargs: object) -> ServiceClient:
+        ca_bundle = kwargs.get("ca_bundle")
+        observed.append(ca_bundle if isinstance(ca_bundle, Path) else None)
+        return original_client(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(cli, "ServiceClient", recording_client)
+    result = harness.run(
+        "login", "--service", "jira", "--base-url", JIRA, "--ca-bundle", "team-ca.pem",
+        "--token-stdin", stdin=(JIRA_TOKEN + "\n").encode(),
+    )
+    assert result.code == 0, result.out
+    assert observed == [bundle]
+    assert harness.stored("jira") is not None
+
+
+def test_login_refuses_missing_ca_bundle_before_reading_secret(harness: Harness) -> None:
+    result = harness.run(
+        "login", "--service", "jira", "--base-url", JIRA, "--ca-bundle", "missing.pem",
+        "--token-stdin", stdin=(JIRA_TOKEN + "\n").encode(),
+    )
+    assert result.error["code"] == "usage_error"
+    assert "--ca-bundle" in result.error["fix"]
+    assert harness.stored("jira") is None
+    assert harness.server.requests == []
 
 
 def test_login_rejected_credential_is_not_stored(harness: Harness) -> None:

@@ -373,6 +373,152 @@
         }
       }
     },
+    "init": {
+      "argv": [
+        "init",
+        "--jira-url",
+        "https://jira.example.test/jira",
+        "--project",
+        "PROJ"
+      ],
+      "arguments": {
+        "jira_url": "https://jira.example.test/jira",
+        "project": [
+          "PROJ"
+        ]
+      },
+      "input": null,
+      "note": "A preview: nothing is written. Add `--save` to create yojo.yaml, which never overwrites a file. To replace an existing file, add `--save --replace --expected-sha256 HEX` with the preview's `existing_sha256`, and keep other editors off the file while it is replaced. Team aliases and rules come only from `--input`.",
+      "success": {
+        "ok": true,
+        "data": {
+          "action": "preview",
+          "path": "/work/repo/yojo.yaml",
+          "yaml": "# Drafted by `yojo init` from live metadata. Review it, then run `yojo config check`.\nversion: 1\njira:\n  base_url: https://jira.example.test/jira\n  projects:\n  - key: PROJ\n",
+          "sha256": "64f455d77825922053a2dba98c40cb627d7d5e30e655bf58e6ed268c89ef7c53",
+          "existing_sha256": null,
+          "services": [
+            {
+              "service": "jira",
+              "base_url": "https://jira.example.test/jira",
+              "user": "example-user",
+              "version": null
+            }
+          ],
+          "projects": [
+            {
+              "key": "PROJ",
+              "name": "Example Project"
+            }
+          ],
+          "repos": [],
+          "notes": [
+            "Nothing was written. Review the YAML, then run the next command to save it.",
+            "No team aliases or rules were added; yojo never infers them. Pass them with --input (see docs/configuration.md)."
+          ],
+          "next": [
+            "yojo --json init --jira-url https://jira.example.test/jira --project PROJ --save"
+          ],
+          "content_trust": "untrusted"
+        }
+      },
+      "error_scenario": "no Jira login is stored for that URL yet",
+      "error": {
+        "ok": false,
+        "error": {
+          "code": "auth_missing",
+          "message": "No stored jira credential for https://jira.example.test/jira.",
+          "fix": "Ask a human to run `yojo login --service jira --base-url https://jira.example.test/jira` in a terminal (it prompts for the token without echo), or pipe the token to `yojo login --service jira --base-url https://jira.example.test/jira --token-stdin`.",
+          "details": {
+            "service": "jira",
+            "base_url": "https://jira.example.test/jira"
+          }
+        }
+      }
+    },
+    "agent print": {
+      "argv": [
+        "agent",
+        "print"
+      ],
+      "arguments": {},
+      "input": null,
+      "note": "`data.text` is shortened here; the real text lists every command and is about 10 KB.",
+      "success": {
+        "ok": true,
+        "data": {
+          "text": "## yojo: Jira, Confluence, and Bitbucket Data Center\n\nUse `yojo` instead of calling the REST APIs. Each command below is complete: pick the one that\nfits the task and run it once. You do not need ...",
+          "bytes": 10132,
+          "approx_tokens": 2533,
+          "commands": 28
+        }
+      },
+      "error_scenario": "an option the command does not take",
+      "error": {
+        "ok": false,
+        "error": {
+          "code": "usage_error",
+          "message": "yojo: unrecognized arguments",
+          "fix": "Use `yojo commands` to list commands.",
+          "details": {
+            "usage": "usage: yojo [--config PATH] [--base-url URL] [--json] COMMAND ..."
+          }
+        }
+      }
+    },
+    "agent install": {
+      "argv": [
+        "agent",
+        "install",
+        "--target",
+        "agents",
+        "--target",
+        "claude"
+      ],
+      "arguments": {
+        "target": [
+          "agents",
+          "claude"
+        ]
+      },
+      "input": null,
+      "note": "Running it again changes nothing: an unchanged file is reported as `unchanged` and not rewritten. Text outside the marked yojo section is kept.",
+      "success": {
+        "ok": true,
+        "data": {
+          "files": [
+            {
+              "target": "agents",
+              "path": "AGENTS.md",
+              "action": "created",
+              "managed_bytes": 10231
+            },
+            {
+              "target": "claude",
+              "path": ".claude/skills/yojo/SKILL.md",
+              "action": "created",
+              "managed_bytes": 10432
+            }
+          ],
+          "core_bytes": 10132,
+          "approx_tokens": 2533
+        }
+      },
+      "error_scenario": "AGENTS.md has a yojo:end marker line without a yojo:begin line",
+      "error": {
+        "ok": false,
+        "error": {
+          "code": "file_conflict",
+          "message": "/work/repo/AGENTS.md has 0 yojo:begin and 1 yojo:end marker lines; nothing was written.",
+          "fix": "Edit /work/repo/AGENTS.md so it has one `<!-- yojo:begin ...-->` line followed by one `<!-- yojo:end -->` line, or remove both, then run the command again.",
+          "details": {
+            "path": "/work/repo/AGENTS.md",
+            "begins": 0,
+            "ends": 1
+          }
+        }
+      }
+    },
     "jira issue create": {
       "argv": [
         "jira",

@@ -15,14 +15,14 @@ import re
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, BinaryIO, NoReturn, TextIO, cast
 
 import httpx
 from jsonschema import Draft202012Validator, ValidationError
 
-from yojo import __version__, bitbucket, confluence, jira, retry, workflow
+from yojo import __version__, agents, bitbucket, confluence, init, jira, retry, workflow
 from yojo.auth import (
     Credential,
     CredentialStore,
@@ -40,6 +40,7 @@ from yojo.config import (
     select_service,
 )
 from yojo.contracts import (
+    AGENT_TARGETS,
     BITBUCKET_PROJECT_PATTERN,
     COMMANDS,
     COMMANDS_BY_PATH,
@@ -52,6 +53,7 @@ from yojo.contracts import (
     PROJECT_KEY_PATTERN,
     REPO_PATTERN,
     SCHEMA_VERSION,
+    SHA256_PATTERN,
     CommandSpec,
     ExitCode,
     YojoError,
@@ -73,10 +75,13 @@ PROJECT_KEY_RE = re.compile(PROJECT_KEY_PATTERN)
 PAGE_ID_RE = re.compile(PAGE_ID_PATTERN)
 REPO_RE = re.compile(REPO_PATTERN)
 BITBUCKET_PROJECT_RE = re.compile(BITBUCKET_PROJECT_PATTERN)
+SHA256_RE = re.compile(SHA256_PATTERN)
 MAX_DIFF_PATH = 1024
 ROOT_SUMMARY = "Generic command line for Jira, Confluence, and Bitbucket Data Center."
 SECRET_LABELS = {"token": "personal access token", "password": "password"}
 VALUE_OPTIONS = ("--config", "--base-url")
+# Commands that name their own URLs and output file, so they refuse --config and --base-url.
+NO_SERVICE_OPTIONS = frozenset({"init"})
 
 
 @dataclass
@@ -196,6 +201,12 @@ def _diff_path(value: str) -> str:
     return value
 
 
+def _sha256(value: str) -> str:
+    if not SHA256_RE.fullmatch(value.lower()):
+        raise argparse.ArgumentTypeError("must be a 64-character hex sha256")
+    return value.lower()
+
+
 def _pr_state(value: str) -> str:
     return value.upper()
 
@@ -261,12 +272,31 @@ def build_parser() -> _Parser:
     p.add_argument("--service", required=True, choices=["jira", "confluence", "bitbucket", "all"])
     p.add_argument("--auth", default="pat", choices=["pat", "basic"])
     p.add_argument("--username")
+    p.add_argument("--ca-bundle", metavar="PEM")
     stdin_group = p.add_mutually_exclusive_group()
     stdin_group.add_argument("--token-stdin", action="store_true")
     stdin_group.add_argument("--password-stdin", action="store_true")
 
     config_group = group(groups, "config")
     leaf(config_group, "check", "config check")
+
+    p = leaf(groups, "init", "init")
+    p.add_argument("--jira-url", metavar="URL")
+    p.add_argument("--project", action="append", type=_project_key, metavar="KEY")
+    p.add_argument("--confluence-url", metavar="URL")
+    p.add_argument("--bitbucket-url", metavar="URL")
+    p.add_argument("--ca-bundle", metavar="PEM")
+    p.add_argument("--repo", action="append", type=_repo, metavar="PROJECT/slug")
+    p.add_argument("--policy-input", "--input", dest="input", metavar="FILE")
+    p.add_argument("--output", metavar="PATH")
+    p.add_argument("--save", action="store_true")
+    p.add_argument("--replace", action="store_true")
+    p.add_argument("--expected-sha256", type=_sha256, metavar="HEX")
+
+    agent_group = group(groups, "agent")
+    leaf(agent_group, "print", "agent print")
+    p = leaf(agent_group, "install", "agent install")
+    p.add_argument("--target", action="append", required=True, choices=AGENT_TARGETS)
 
     jira_group = group(groups, "jira")
     issue = group(jira_group, "issue")
@@ -320,7 +350,7 @@ def build_parser() -> _Parser:
     confluence_group = group(groups, "confluence")
     page = group(confluence_group, "page")
     p = leaf(page, "read", "confluence page read")
-    p.add_argument("id", type=_page_id)
+    p.add_argument("id", type=_page_id, metavar="PAGE_ID")
     p.add_argument("--full", action="store_true")
     p = leaf(page, "search", "confluence page search")
     p.add_argument("--cql", required=True, type=_query)
@@ -328,7 +358,7 @@ def build_parser() -> _Parser:
     p.add_argument("--limit", type=_bounded(1, MAX_SEARCH_LIMIT), default=20)
     leaf(page, "create", "confluence page create").add_argument("--input", required=True)
     p = leaf(page, "update", "confluence page update")
-    p.add_argument("id", type=_page_id)
+    p.add_argument("id", type=_page_id, metavar="PAGE_ID")
     p.add_argument("--input", required=True)
 
     def paging(parser: _Parser) -> None:
@@ -730,6 +760,17 @@ def cmd_login(args: argparse.Namespace, rt: Runtime) -> Any:
         )
     services = ["jira", "confluence"] if args.service == "all" else [args.service]
     targets = [(s, _service(rt, args, s)) for s in services]
+    if args.ca_bundle:
+        ca_bundle = Path(args.ca_bundle).expanduser()
+        if not ca_bundle.is_absolute():
+            ca_bundle = rt.cwd / ca_bundle
+        if not ca_bundle.is_file():
+            raise YojoError(
+                "usage_error",
+                f"CA bundle file does not exist: {ca_bundle}.",
+                "Pass --ca-bundle with a readable PEM file containing the trusted CA certificates.",
+            )
+        targets = [(service, replace(cfg, ca_bundle=ca_bundle)) for service, cfg in targets]
     if args.auth == "pat" and args.password_stdin:
         raise YojoError(
             "usage_error",
@@ -892,6 +933,43 @@ def _bitbucket_config_checks(
             return bitbucket.config_check(client, str(config.path))
     except YojoError as exc:
         return [workflow.Check("bitbucket:auth", "unverified", exc.message, exc.fix)]
+
+
+def cmd_init(args: argparse.Namespace, rt: Runtime) -> Any:
+    if getattr(args, "base_url", None) is not None or getattr(args, "config", None) is not None:
+        raise YojoError(
+            "usage_error",
+            "yojo init takes one URL flag per service, not --base-url or --config.",
+            "Use --jira-url, --confluence-url, or --bitbucket-url, and --output PATH for the file, "
+            "e.g. `yojo --json init --jira-url https://jira.example.com/jira --project PROJ`.",
+        )
+    request = init.normalize(
+        init.InitRequest(
+            jira_url=args.jira_url,
+            projects=tuple(args.project or ()),
+            confluence_url=args.confluence_url,
+            bitbucket_url=args.bitbucket_url,
+            ca_bundle=args.ca_bundle,
+            repos=tuple(args.repo or ()),
+            input=args.input,
+            output=args.output,
+            save=args.save,
+            replace=args.replace,
+            expected_sha256=args.expected_sha256,
+        )
+    )
+    policy = read_json_input(rt, args.input, COMMANDS_BY_PATH["init"]) if args.input else None
+    return init.draft(
+        request, policy, rt.cwd, lambda service, cfg: _client(rt, service, cfg), _verify_login
+    )
+
+
+def cmd_agent_print(args: argparse.Namespace, rt: Runtime) -> Any:
+    return agents.print_data()
+
+
+def cmd_agent_install(args: argparse.Namespace, rt: Runtime) -> Any:
+    return agents.install(args.target, rt.cwd)
 
 
 def cmd_issue_create(args: argparse.Namespace, rt: Runtime) -> Any:
@@ -1120,6 +1198,9 @@ HANDLERS: dict[str, Callable[[argparse.Namespace, Runtime], Any]] = {
     "schema": cmd_schema,
     "login": cmd_login,
     "config check": cmd_config_check,
+    "init": cmd_init,
+    "agent print": cmd_agent_print,
+    "agent install": cmd_agent_install,
     "jira issue create": cmd_issue_create,
     "jira issue get": cmd_issue_get,
     "jira issue update": cmd_issue_update,

@@ -2,7 +2,7 @@
 
 # Command reference
 
-`yojo` has **25 commands**. This page is generated from `yojo commands`, `yojo schema '<command>'`, and the checked examples in [`docs/examples/commands.json`](../examples/commands.json). The JSON Schemas remain the source of truth; run `yojo schema '<command>'` for the exact contract.
+`yojo` has **28 commands**. This page is generated from `yojo commands`, `yojo schema '<command>'`, and the checked examples in [`docs/examples/commands.json`](../examples/commands.json). The JSON Schemas remain the source of truth; run `yojo schema '<command>'` for the exact contract.
 
 > [!NOTE]
 > Examples use synthetic data (`EXAMPLE-*` keys, `*.example.test` hosts) and were captured from real runs against test fixtures. They are pretty-printed here; when stdout is piped or `--json` is given, `yojo` prints each envelope on one line. On a terminal it shows a readable view of the same envelope, with the same exit code. Invocations use POSIX shell syntax.
@@ -37,6 +37,9 @@ Each error code, with its meaning and fix, is in the [error catalog](errors.md).
 | [`yojo schema`](#yojo-schema) | Print argument, input, success, and error JSON Schemas for a command. Offline. | no |
 | [`yojo login`](#yojo-login) | Check a personal access token (or username and password) against the service and store it in the OS keyring for that URL. Secrets come from stdin or a hidden prompt, never arguments. Bitbucket takes a token only; `all` means Jira and Confluence. | no |
 | [`yojo config check`](#yojo-config-check) | Compare yojo.yaml aliases, create rules, and transition rules with live Jira fields, projects, and statuses, and check that a configured Bitbucket answers and accepts the stored token. Read-only. | no |
+| [`yojo init`](#yojo-init) | Draft a version 1 yojo.yaml from live Jira, Confluence, and Bitbucket metadata, using the logins already stored for each URL. Shows a preview by default; --save creates the file only if it is absent, and --replace needs the current file's sha256 and no other editor writing the file. Team rules come only from --policy-input (or --input); nothing is inferred and no secret is written. | yes |
+| [`yojo agent print`](#yojo-agent-print) | Print the yojo instructions for an AI agent: every command's signature and a --json example, plus the safety rules. Offline; paste the text into any chat. | no |
+| [`yojo agent install`](#yojo-agent-install) | Write the agent instructions where each tool looks for them: agents (AGENTS.md), claude (.claude/skills/yojo/SKILL.md), cursor (.cursor/rules/yojo.mdc), copilot (.github/copilot-instructions.md), gemini (GEMINI.md). Only the marked yojo section is replaced; other text is kept, and an unchanged file is not rewritten. Claude and Cursor files without front matter get yojo's; front matter without the keys the tool needs is refused. | no |
 | [`yojo jira issue create`](#yojo-jira-issue-create) | Create an issue of any type. Checks the project's live create screen and any yojo.yaml rules first, and refuses with every problem listed if anything is missing; nothing is written then. | yes |
 | [`yojo jira issue get`](#yojo-jira-issue-get) | Read an issue's key, summary, status, type, assignee, and link. --fields adds more fields by name; long text is trimmed unless --full. | no |
 | [`yojo jira issue update`](#yojo-jira-issue-update) | Change fields on an issue. Checks the live edit screen first, refuses with every problem listed, then reads the issue back to confirm the new values. | yes |
@@ -371,7 +374,7 @@ Error: a command path that does not exist ([`usage_error`](errors.md#usage_error
 Check a personal access token (or username and password) against the service and store it in the OS keyring for that URL. Secrets come from stdin or a hidden prompt, never arguments. Bitbucket takes a token only; `all` means Jira and Confluence.
 
 ```text
-yojo login --service SERVICE [--auth AUTH] [--username USERNAME] [--token-stdin | --password-stdin] [--config PATH] [--base-url URL] [--json]
+yojo login --service SERVICE [--auth AUTH] [--username USERNAME] [--ca-bundle PEM] [--token-stdin | --password-stdin] [--config PATH] [--base-url URL] [--json]
 ```
 
 **Arguments**
@@ -381,6 +384,7 @@ yojo login --service SERVICE [--auth AUTH] [--username USERNAME] [--token-stdin 
 | `service` | `--service SERVICE` | one of `jira`, `confluence`, `bitbucket`, `all` | yes |   |
 | `auth` | `--auth AUTH` | one of `pat`, `basic` | no | default `pat` |
 | `username` | `--username USERNAME` | string | no | Basic auth username (not secret). |
+| `ca_bundle` | `--ca-bundle PEM` | string | no | Readable PEM CA bundle for login; relative to cwd. |
 | `token_stdin` | `--token-stdin` | boolean | no |   |
 | `password_stdin` | `--password-stdin` | boolean | no |   |
 
@@ -611,6 +615,289 @@ Error: an alias in yojo.yaml names a field Jira does not have (a typo) ([`config
 | 4 | [`config_drift`](errors.md#config_drift), [`config_unverified`](errors.md#config_unverified) |
 | 5 | [`not_found`](errors.md#not_found) |
 | 6 | [`internal_error`](errors.md#internal_error), [`interrupted`](errors.md#interrupted), [`rate_limited`](errors.md#rate_limited), [`redirect_refused`](errors.md#redirect_refused), [`response_invalid`](errors.md#response_invalid), [`service_error`](errors.md#service_error), [`tls_error`](errors.md#tls_error), [`transport_error`](errors.md#transport_error) |
+
+## `yojo init`
+
+Draft a version 1 yojo.yaml from live Jira, Confluence, and Bitbucket metadata, using the logins already stored for each URL. Shows a preview by default; --save creates the file only if it is absent, and --replace needs the current file's sha256 and no other editor writing the file. Team rules come only from --policy-input (or --input); nothing is inferred and no secret is written.
+
+```text
+yojo init [--jira-url URL] [--project KEY...] [--confluence-url URL] [--bitbucket-url URL] [--ca-bundle PEM] [--repo PROJECT/slug...] [--policy-input FILE] [--output PATH] [--save] [--replace] [--expected-sha256 HEX] [--json]
+```
+
+**Arguments**
+
+| Argument | CLI | Type | Required | Notes |
+|---|---|---|---|---|
+| `jira_url` | `--jira-url URL` | string | no | Jira HTTPS application root. |
+| `project` | `--project KEY...` | array of strings | no | Jira project key to list in jira.projects; needs jira_url. |
+| `confluence_url` | `--confluence-url URL` | string | no | Confluence HTTPS root. |
+| `bitbucket_url` | `--bitbucket-url URL` | string | no | Bitbucket HTTPS root. |
+| `ca_bundle` | `--ca-bundle PEM` | string | no | Readable PEM CA bundle for live checks and each selected service in the draft; relative to --output. |
+| `repo` | `--repo PROJECT/slug...` | array of strings | no | PROJECT/slug to check; reported, not saved (no config key). |
+| `input` | `--policy-input FILE` | string | no | min length 1; Path to a UTF-8 JSON file, or '-' for stdin. |
+| `output` | `--output PATH` | string | no | min length 1; Where to save; default yojo.yaml in the current directory. |
+| `save` | `--save` | boolean | no | default `false`; Write the file. |
+| `replace` | `--replace` | boolean | no | default `false`; Allow --save to replace an existing file; needs the sha256. |
+| `expected_sha256` | `--expected-sha256 HEX` | string | no | pattern `^[0-9a-f]{64}(?![\s\S])`; existing_sha256 from a preview. |
+
+**Input**
+
+A JSON object from `--input PATH`, or from stdin with `--input -`. Unknown properties and duplicate keys are rejected. Where the command also has flags, the input is an alternative to them; a flag and an input property that disagree are refused.
+
+| Property | Type | Required | Notes |
+|---|---|---|---|
+| `jira` | object | yes |   |
+| `jira.fields` | object (field name to any or any) | no | Alias (lowercase snake_case) to {jira_name: NAME} or {id: FIELD_ID}. |
+| `jira.projects` | array of objects | no |   |
+
+**Output**
+
+Success `data` fields:
+
+| Field | Type | Always present |
+|---|---|---|
+| `action` | one of `preview`, `created`, `replaced`, `unchanged` | yes |
+| `path` | string | yes |
+| `yaml` | string | yes |
+| `sha256` | string | yes |
+| `existing_sha256` | null or string | yes |
+| `services` | array of objects | yes |
+| `projects` | array of objects | yes |
+| `repos` | array of objects | yes |
+| `notes` | array of strings | yes |
+| `next` | array of strings | yes |
+| `content_trust` | constant `untrusted` | yes |
+
+**Example**
+
+```bash
+yojo init --jira-url https://jira.example.test/jira --project PROJ
+```
+
+A preview: nothing is written. Add `--save` to create yojo.yaml, which never overwrites a file. To replace an existing file, add `--save --replace --expected-sha256 HEX` with the preview's `existing_sha256`, and keep other editors off the file while it is replaced. Team aliases and rules come only from `--input`.
+
+Success (exit 0):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "action": "preview",
+    "path": "/work/repo/yojo.yaml",
+    "yaml": "# Drafted by `yojo init` from live metadata. Review it, then run `yojo config check`.\nversion: 1\njira:\n  base_url: https://jira.example.test/jira\n  projects:\n  - key: PROJ\n",
+    "sha256": "64f455d77825922053a2dba98c40cb627d7d5e30e655bf58e6ed268c89ef7c53",
+    "existing_sha256": null,
+    "services": [
+      {
+        "service": "jira",
+        "base_url": "https://jira.example.test/jira",
+        "user": "example-user",
+        "version": null
+      }
+    ],
+    "projects": [
+      {
+        "key": "PROJ",
+        "name": "Example Project"
+      }
+    ],
+    "repos": [],
+    "notes": [
+      "Nothing was written. Review the YAML, then run the next command to save it.",
+      "No team aliases or rules were added; yojo never infers them. Pass them with --input (see docs/configuration.md)."
+    ],
+    "next": [
+      "yojo --json init --jira-url https://jira.example.test/jira --project PROJ --save"
+    ],
+    "content_trust": "untrusted"
+  }
+}
+```
+
+Error: no Jira login is stored for that URL yet ([`auth_missing`](errors.md#auth_missing), exit 3):
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "auth_missing",
+    "message": "No stored jira credential for https://jira.example.test/jira.",
+    "fix": "Ask a human to run `yojo login --service jira --base-url https://jira.example.test/jira` in a terminal (it prompts for the token without echo), or pipe the token to `yojo login --service jira --base-url https://jira.example.test/jira --token-stdin`.",
+    "details": {
+      "service": "jira",
+      "base_url": "https://jira.example.test/jira"
+    }
+  }
+}
+```
+
+**Error codes**
+
+| Exit | Error codes |
+|------|-------------|
+| 2 | [`config_invalid`](errors.md#config_invalid), [`config_legacy`](errors.md#config_legacy), [`file_conflict`](errors.md#file_conflict), [`file_invalid`](errors.md#file_invalid), [`input_invalid`](errors.md#input_invalid), [`usage_error`](errors.md#usage_error) |
+| 3 | [`auth_failed`](errors.md#auth_failed), [`auth_missing`](errors.md#auth_missing), [`forbidden`](errors.md#forbidden), [`keyring_unavailable`](errors.md#keyring_unavailable) |
+| 5 | [`not_found`](errors.md#not_found) |
+| 6 | [`internal_error`](errors.md#internal_error), [`interrupted`](errors.md#interrupted), [`metadata_incomplete`](errors.md#metadata_incomplete), [`rate_limited`](errors.md#rate_limited), [`redirect_refused`](errors.md#redirect_refused), [`response_invalid`](errors.md#response_invalid), [`service_error`](errors.md#service_error), [`tls_error`](errors.md#tls_error), [`transport_error`](errors.md#transport_error) |
+
+## `yojo agent print`
+
+Print the yojo instructions for an AI agent: every command's signature and a --json example, plus the safety rules. Offline; paste the text into any chat.
+
+```text
+yojo agent print [--config PATH] [--base-url URL] [--json]
+```
+
+**Arguments**
+
+None.
+
+**Input**
+
+No JSON input.
+
+**Output**
+
+Success `data` fields:
+
+| Field | Type | Always present |
+|---|---|---|
+| `text` | string | yes |
+| `bytes` | integer | yes |
+| `approx_tokens` | integer | yes |
+| `commands` | integer | yes |
+
+**Example**
+
+```bash
+yojo agent print
+```
+
+`data.text` is shortened here; the real text lists every command and is about 10 KB.
+
+Success (exit 0):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "text": "## yojo: Jira, Confluence, and Bitbucket Data Center\n\nUse `yojo` instead of calling the REST APIs. Each command below is complete: pick the one that\nfits the task and run it once. You do not need ...",
+    "bytes": 10132,
+    "approx_tokens": 2533,
+    "commands": 28
+  }
+}
+```
+
+Error: an option the command does not take ([`usage_error`](errors.md#usage_error), exit 2):
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "usage_error",
+    "message": "yojo: unrecognized arguments",
+    "fix": "Use `yojo commands` to list commands.",
+    "details": {
+      "usage": "usage: yojo [--config PATH] [--base-url URL] [--json] COMMAND ..."
+    }
+  }
+}
+```
+
+**Error codes**
+
+| Exit | Error codes |
+|------|-------------|
+| 2 | [`usage_error`](errors.md#usage_error) |
+| 6 | [`internal_error`](errors.md#internal_error), [`interrupted`](errors.md#interrupted) |
+
+## `yojo agent install`
+
+Write the agent instructions where each tool looks for them: agents (AGENTS.md), claude (.claude/skills/yojo/SKILL.md), cursor (.cursor/rules/yojo.mdc), copilot (.github/copilot-instructions.md), gemini (GEMINI.md). Only the marked yojo section is replaced; other text is kept, and an unchanged file is not rewritten. Claude and Cursor files without front matter get yojo's; front matter without the keys the tool needs is refused.
+
+```text
+yojo agent install --target TARGET... [--config PATH] [--base-url URL] [--json]
+```
+
+**Arguments**
+
+| Argument | CLI | Type | Required | Notes |
+|---|---|---|---|---|
+| `target` | `--target TARGET...` | array of one of `agents`, `claude`, `cursor`, `copilot`, `gemini` | yes | Repeat --target for each tool. |
+
+**Input**
+
+No JSON input.
+
+**Output**
+
+Success `data` fields:
+
+| Field | Type | Always present |
+|---|---|---|
+| `files` | array of objects | yes |
+| `core_bytes` | integer | yes |
+| `approx_tokens` | integer | yes |
+
+**Example**
+
+```bash
+yojo agent install --target agents --target claude
+```
+
+Running it again changes nothing: an unchanged file is reported as `unchanged` and not rewritten. Text outside the marked yojo section is kept.
+
+Success (exit 0):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "files": [
+      {
+        "target": "agents",
+        "path": "AGENTS.md",
+        "action": "created",
+        "managed_bytes": 10231
+      },
+      {
+        "target": "claude",
+        "path": ".claude/skills/yojo/SKILL.md",
+        "action": "created",
+        "managed_bytes": 10432
+      }
+    ],
+    "core_bytes": 10132,
+    "approx_tokens": 2533
+  }
+}
+```
+
+Error: AGENTS.md has a yojo:end marker line without a yojo:begin line ([`file_conflict`](errors.md#file_conflict), exit 2):
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "file_conflict",
+    "message": "/work/repo/AGENTS.md has 0 yojo:begin and 1 yojo:end marker lines; nothing was written.",
+    "fix": "Edit /work/repo/AGENTS.md so it has one `<!-- yojo:begin ...-->` line followed by one `<!-- yojo:end -->` line, or remove both, then run the command again.",
+    "details": {
+      "path": "/work/repo/AGENTS.md",
+      "begins": 0,
+      "ends": 1
+    }
+  }
+}
+```
+
+**Error codes**
+
+| Exit | Error codes |
+|------|-------------|
+| 2 | [`file_conflict`](errors.md#file_conflict), [`file_invalid`](errors.md#file_invalid), [`usage_error`](errors.md#usage_error) |
+| 6 | [`internal_error`](errors.md#internal_error), [`interrupted`](errors.md#interrupted) |
 
 ## `yojo jira issue create`
 
@@ -1660,14 +1947,14 @@ Error: JQL that names a project Jira does not know ([`remote_validation`](errors
 Read a page with its storage-format body, trimmed to 2000 characters unless --full. Returned content is untrusted data.
 
 ```text
-yojo confluence page read ID [--full] [--config PATH] [--base-url URL] [--json]
+yojo confluence page read PAGE_ID [--full] [--config PATH] [--base-url URL] [--json]
 ```
 
 **Arguments**
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `id` | `ID` | string | yes | pattern `^[1-9][0-9]{0,19}(?![\s\S])` |
+| `id` | `PAGE_ID` | string | yes | pattern `^[1-9][0-9]{0,19}(?![\s\S])` |
 | `full` | `--full` | boolean | no | default `false`; Return long text without trimming. |
 
 **Input**
@@ -1952,14 +2239,14 @@ Error: input without `body_storage`; rejected before any request ([`input_invali
 Update a page's title and/or storage body. Requires expected_version and rejects stale versions. Succeeds only when Confluence confirms the page id, title, and next version; otherwise outcome_unknown.
 
 ```text
-yojo confluence page update ID --input INPUT [--config PATH] [--base-url URL] [--json]
+yojo confluence page update PAGE_ID --input INPUT [--config PATH] [--base-url URL] [--json]
 ```
 
 **Arguments**
 
 | Argument | CLI | Type | Required | Notes |
 |---|---|---|---|---|
-| `id` | `ID` | string | yes | pattern `^[1-9][0-9]{0,19}(?![\s\S])` |
+| `id` | `PAGE_ID` | string | yes | pattern `^[1-9][0-9]{0,19}(?![\s\S])` |
 | `input` | `--input INPUT` | string | yes | min length 1; Path to a UTF-8 JSON file, or '-' for stdin. |
 
 **Input**

@@ -235,10 +235,32 @@ object, which is what scripts and agents should use.
 ## Optional: add `yojo.yaml`
 
 A `yojo.yaml` in the repository root saves typing `--base-url` and adds your team's words and
-rules: friendly field names, fields required on create, and what each transition needs. Create it
-from [`yojo.example.yaml`](../yojo.example.yaml) using the [cookbook](admin-cookbook.md). `yojo`
+rules: friendly field names, fields required on create, and what each transition needs. `yojo`
 finds it by walking up from the current directory; `--config PATH` overrides that. The file never
 contains credentials.
+
+`yojo init` drafts one from live metadata, using the logins you already stored. It checks every
+URL, project, and repository you name, shows the YAML, and writes nothing until you add `--save`:
+
+```bash
+yojo init --jira-url https://jira.example.test/jira --project PROJ \
+  --bitbucket-url https://bitbucket.example.test/bitbucket --repo PROJ/web
+yojo init --jira-url https://jira.example.test/jira --project PROJ \
+  --bitbucket-url https://bitbucket.example.test/bitbucket --repo PROJ/web --save
+```
+
+`--save` never overwrites a file. To replace an existing `yojo.yaml`, preview first, then add
+`--save --replace --expected-sha256 HEX` with the preview's `existing_sha256`; a file that changed
+in between is refused. Close any editor that may write `yojo.yaml` first: a change made in the
+moment between the final check and the replacement is not detected and can be lost. The draft holds only the URLs and project keys you named. Aliases and
+rules are added only when you pass them with `--policy-input` (or `--input`; see
+[Configuration](configuration.md#draft-it-with-yojo-init)), and every name in them is checked
+against live Jira. To write the file by hand instead, start from
+[`yojo.example.yaml`](../yojo.example.yaml) and the [cookbook](admin-cookbook.md).
+
+If your instance uses a private CA, pass `--ca-bundle certs/team-ca.pem` to `init`; it uses that
+bundle for the live check and adds it to the draft. Pass the same option to the first `yojo login`.
+See [Configuration](configuration.md#draft-it-with-yojo-init).
 
 ```bash
 yojo config check          # read-only: does yojo.yaml still match live Jira?
@@ -247,6 +269,45 @@ yojo jira transition PROJ-123 --to "In Progress"
 
 `pass` everywhere means `yojo.yaml` matches live Jira. `drift` or `unverified` checks each carry a
 `fix`; see [Troubleshooting](troubleshooting.md).
+
+## Connect your agent
+
+`yojo agent install` writes the instructions where your AI coding tool looks for them. The text is
+generated from the command list, so it always matches this version of `yojo`, and it carries every
+command's signature and an example, so the agent needs no lookup call first:
+
+```bash
+yojo agent install --target agents --target claude
+```
+
+| `--target` | File |
+|------------|------|
+| `agents` | `AGENTS.md` (read by many tools) |
+| `claude` | `.claude/skills/yojo/SKILL.md` |
+| `cursor` | `.cursor/rules/yojo.mdc` |
+| `copilot` | `.github/copilot-instructions.md` |
+| `gemini` | `GEMINI.md` |
+
+Only the section between the `yojo:begin` and `yojo:end` marker lines belongs to `yojo`; the rest
+of each file is kept as it is. Running the command again rewrites nothing unless `yojo` changed.
+For any other chat or tool, `yojo agent print` prints the same text to paste.
+
+## Setup without a terminal app
+
+Every setup step has a plain command, for scripts, CI, and agents:
+
+| Step | Command |
+|------|---------|
+| Connect to each instance | `yojo init --jira-url URL --confluence-url URL --bitbucket-url URL` |
+| Log in (a person) | `yojo login --service jira --base-url URL` |
+| Choose projects and repositories | `yojo init ... --project KEY --repo PROJECT/slug` |
+| Map fields and rules | `yojo init ... --policy-input policy.json` |
+| Review and save | `yojo init ...` (preview), then the same with `--save` |
+| Connect your agent | `yojo agent install --target agents` |
+| Try it | `yojo --json jira search --jql 'project = PROJ' --limit 5` |
+
+Run the login step before `init`: `init` uses the stored logins and stops with the login command
+to run when one is missing.
 
 Next:
 

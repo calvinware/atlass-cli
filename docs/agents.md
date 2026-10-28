@@ -3,6 +3,31 @@
 This page expands on [`AGENTS.md`](../AGENTS.md), the operational contract for any AI coding
 agent or automation that drives `yojo`. If the two ever disagree, `AGENTS.md` wins.
 
+## Install the instructions
+
+`yojo agent install --target agents|claude|cursor|copilot|gemini` writes compact instructions
+where the tool looks for them: an `AGENTS.md` section, a Claude skill
+(`.claude/skills/yojo/SKILL.md`), a Cursor rule (`.cursor/rules/yojo.mdc`),
+`.github/copilot-instructions.md`, or `GEMINI.md`. `yojo agent print` returns the same text for
+pasting into any chat. The text is generated from the command registry: every command's
+signature, the shape of its `--input` document, and one `--json` example, plus the rules on this
+page. It stays under 12 KiB (about 2,600 tokens at four characters per token), and an agent can
+act from it without calling `commands`, `schema`, or `--help`.
+
+Only the lines between `<!-- yojo:begin ... -->` and `<!-- yojo:end -->` belong to `yojo`. A new
+install adds that section, a later one replaces it, and the rest of the file is kept byte for
+byte. An unchanged file is not rewritten. Claude and Cursor only find a skill or rule through
+its front matter (`name` and `description` for Claude, `description` for Cursor), so an existing
+file without front matter gets `yojo`'s wrapper added at the top, and existing front matter with
+those keys is kept as it is. Every target file is read and checked before any is written, so
+missing or repeated markers, front matter that is unclosed, not YAML, or missing a needed key, a
+symbolic link, or an unreadable file stops the call with nothing written. Each file is then replaced atomically on its own, not as a set: if a file
+changes before its final comparison, that file is refused, and when earlier targets in the same
+call were already written the error says so and lists them in `details.written`. Review those
+files; running the same command again reports them `unchanged` and retries the rest. Close
+unrelated editors before replacing a file: their writes are not covered by yojo's lock, and a
+write in the small interval between comparison and replacement can be lost.
+
 ## The loop
 
 ```mermaid
