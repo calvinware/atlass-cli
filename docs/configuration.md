@@ -28,6 +28,11 @@ yojo --json init --jira-url https://jira.example.test/jira --project PROJ
 yojo --json init --jira-url https://jira.example.test/jira --project PROJ --save
 ```
 
+In a terminal, [`yojo setup`](getting-started.md#set-up-in-a-terminal-yojo-setup) builds the same
+draft step by step, lets you pick aliases and rules by their Jira names, and shows the diff
+against the current file. It saves exactly the bytes you reviewed, and refuses (nothing written)
+if the file or the live metadata changed after the preview.
+
 For an instance signed by a private CA, add `--ca-bundle certs/team-ca.pem` to both commands.
 `init` checks that the PEM file exists, uses it for the live connection, and records it under
 `ca_bundle` for each selected service. A relative path is resolved from the output file's folder.

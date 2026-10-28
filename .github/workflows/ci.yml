@@ -65,6 +65,18 @@ jobs:
           "$BIN/yojo" --json schema 'jira issue create' > schema.json
           "$BIN/python" -c "import json; from yojo.contracts import COMMANDS; d=json.load(open('commands.json')); assert d['ok'] and [c['path'] for c in d['data']['commands']] == [c.path for c in COMMANDS]"
           python -c "import json; d=json.load(open('schema.json')); assert d['ok'] and d['data']['command'] == 'jira issue create'"
+          "$BIN/python" -c "import yojo, textual; from importlib.resources import files; assert files('yojo').joinpath('setup.tcss').is_file()"
+          # Off a terminal, setup starts nothing: one usage_error envelope and exit 2.
+          check_setup() {
+            set +e
+            "$BIN/yojo" "$@" < /dev/null > setup.json
+            code=$?
+            set -e
+            test "$code" -eq 2
+            python -c "import json; d=json.load(open('setup.json')); assert d['ok'] is False and d['error']['code'] == 'usage_error' and d['error']['details']['steps']"
+          }
+          check_setup --json setup
+          check_setup setup
 
   docs:
     name: docs (reference, site, links, py${{ matrix.python }})

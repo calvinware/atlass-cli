@@ -350,6 +350,8 @@ bitbucket:
   base_url: {BITBUCKET}
 """
 OFFLINE = {"commands", "schema", "agent print", "agent install"}
+# Opens a person's terminal app; an agent's --json call gets the step-by-step route instead.
+TERMINAL_ONLY = {"setup"}
 LOCAL_WRITES = {"agent install"}
 REMOTE_WRITES = {
     "jira issue create",
@@ -620,6 +622,7 @@ GOLDEN_SETUP: dict[str, Any] = {
     "login": _login,
     "config check": _config_check,
     "init": _init,
+    "setup": None,
     "agent print": None,
     "agent install": None,
     "jira issue create": _issue_create,
@@ -668,6 +671,12 @@ def test_every_example_succeeds_in_one_call(harness: Harness, path: str) -> None
     # A human runs login at a terminal; the one call gets only the hidden token.
     login = path == "login"
     result = harness.run(*argv[1:], tty=login, hidden=["jira-secret-token-456"] if login else None)
+    if path in TERMINAL_ONLY:
+        assert result.code == 2, result.out
+        assert result.error["code"] == "usage_error"
+        assert result.error["details"]["steps"]
+        assert harness.server.requests == []
+        return
     assert result.code == 0, result.out
     if path in OFFLINE:
         assert harness.server.requests == []

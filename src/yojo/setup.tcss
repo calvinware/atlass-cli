@@ -1,0 +1,209 @@
+/* yojo setup. Colors come from the active theme (light or dark); meaning never depends on color
+   alone, so the app stays usable with NO_COLOR, where Textual renders it in monochrome. */
+
+Screen {
+    background: $background;
+}
+
+#top {
+    height: auto;
+    padding: 0 2;
+    background: $boost;
+}
+
+#brand {
+    text-style: bold;
+    color: $primary;
+    padding-top: 1;
+}
+
+#progress {
+    height: auto;
+}
+
+.crumb {
+    width: auto;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+.crumb.-done {
+    color: $success;
+}
+
+.crumb.-current {
+    text-style: bold reverse;
+    color: $primary;
+}
+
+#step-title {
+    text-style: bold;
+    padding-bottom: 1;
+}
+
+/* Narrow terminals: the step title already says "Step N of 7", so drop the breadcrumb. */
+.-narrow #progress {
+    display: none;
+}
+
+#steps {
+    height: 1fr;
+}
+
+#steps > VerticalScroll {
+    padding: 1 2;
+}
+
+.lead {
+    margin-bottom: 1;
+}
+
+.hint {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+.row {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.row Input {
+    width: 1fr;
+}
+
+.row Select {
+    width: 1fr;
+}
+
+.row Button {
+    margin-right: 2;
+}
+
+.field-label {
+    width: 12;
+    padding: 1 1 0 0;
+    text-style: bold;
+}
+
+.-narrow .field-label {
+    width: 100%;
+    padding: 0;
+}
+
+.-narrow .row {
+    layout: vertical;
+}
+
+.card {
+    height: auto;
+    border: round $primary 50%;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+.card-title {
+    text-style: bold;
+}
+
+.status {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.status.-ok {
+    color: $success;
+}
+
+.status.-warn {
+    color: $warning;
+}
+
+.status.-error {
+    color: $error;
+    text-style: bold;
+}
+
+.status.-busy {
+    color: $text-muted;
+    text-style: italic;
+}
+
+.command {
+    background: $boost;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+SelectionList {
+    height: auto;
+    max-height: 14;
+}
+
+/* A checked box differs by weight as well as color. */
+SelectionList > .selection-list--button {
+    text-style: dim;
+}
+
+SelectionList > .selection-list--button-selected,
+SelectionList > .selection-list--button-selected-highlighted {
+    text-style: bold;
+}
+
+ListView#rule-list {
+    height: auto;
+    max-height: 12;
+    margin-bottom: 1;
+}
+
+#rules-editor {
+    height: auto;
+}
+
+TabbedContent {
+    height: auto;
+}
+
+#diff, #yaml {
+    height: auto;
+}
+
+DataTable {
+    height: auto;
+    max-height: 9;
+    margin-bottom: 1;
+}
+
+/* Focus must be visible without color. */
+Button:focus {
+    text-style: bold reverse;
+}
+
+#nav {
+    height: auto;
+    padding: 0 2;
+    background: $boost;
+}
+
+#nav-hint {
+    width: 1fr;
+    padding: 1 2 0 2;
+    color: $warning;
+}
+
+LeaveScreen {
+    align: center middle;
+}
+
+#leave {
+    width: 70;
+    max-width: 100%;
+    height: auto;
+    border: thick $warning;
+    background: $surface;
+    padding: 1 2;
+}
+
+#leave Static {
+    margin-bottom: 1;
+}

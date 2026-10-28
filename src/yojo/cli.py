@@ -81,7 +81,7 @@ ROOT_SUMMARY = "Generic command line for Jira, Confluence, and Bitbucket Data Ce
 SECRET_LABELS = {"token": "personal access token", "password": "password"}
 VALUE_OPTIONS = ("--config", "--base-url")
 # Commands that name their own URLs and output file, so they refuse --config and --base-url.
-NO_SERVICE_OPTIONS = frozenset({"init"})
+NO_SERVICE_OPTIONS = frozenset({"init", "setup"})
 
 
 @dataclass
@@ -100,6 +100,8 @@ class Runtime:
     environ: Mapping[str, str] = field(default_factory=dict)
     json_mode: bool = True
     command_context: tuple[str, ...] = ()
+    # Runs the full-screen setup app and returns its summary; None loads the Textual app.
+    launch_setup: Callable[[Runtime], dict[str, Any]] | None = None
 
 
 def default_runtime() -> Runtime:
@@ -276,6 +278,8 @@ def build_parser() -> _Parser:
     stdin_group = p.add_mutually_exclusive_group()
     stdin_group.add_argument("--token-stdin", action="store_true")
     stdin_group.add_argument("--password-stdin", action="store_true")
+
+    leaf(groups, "setup", "setup")
 
     config_group = group(groups, "config")
     leaf(config_group, "check", "config check")
@@ -742,6 +746,26 @@ def _verify_login(client: ServiceClient, service: str) -> str | None:
     return user
 
 
+def verify_and_store(
+    rt: Runtime,
+    store: CredentialStore,
+    service: str,
+    cfg: ServiceConfig,
+    credential: Credential,
+) -> dict[str, str | None]:
+    """Confirm ``credential`` with the service, then keep it in the keyring; nothing on failure."""
+    client = ServiceClient(
+        service, cfg.base_url, credential, ca_bundle=cfg.ca_bundle, transport=rt.transport
+    )
+    with client:
+        if service == "bitbucket":
+            confirmed = {"user": None, "version": bitbucket.verify_login(client)}
+        else:
+            confirmed = {"user": _verify_login(client, service)}
+    store.save(service, cfg.base_url, credential)
+    return confirmed
+
+
 def cmd_login(args: argparse.Namespace, rt: Runtime) -> Any:
     if args.service == "bitbucket" and (args.auth == "basic" or args.password_stdin):
         raise YojoError(
@@ -834,15 +858,7 @@ def cmd_login(args: argparse.Namespace, rt: Runtime) -> Any:
             credential = Credential(
                 auth=args.auth, secret=validate_secret(secret, label), username=username
             )
-            client = ServiceClient(
-                service, cfg.base_url, credential, ca_bundle=cfg.ca_bundle, transport=rt.transport
-            )
-            with client:
-                if service == "bitbucket":
-                    outcome["version"] = bitbucket.verify_login(client)
-                else:
-                    outcome["user"] = _verify_login(client, service)
-            store.save(service, cfg.base_url, credential)
+            outcome.update(verify_and_store(rt, store, service, cfg, credential))
             outcome["status"] = "stored"
         except YojoError as exc:
             if len(targets) == 1:
@@ -962,6 +978,56 @@ def cmd_init(args: argparse.Namespace, rt: Runtime) -> Any:
     return init.draft(
         request, policy, rt.cwd, lambda service, cfg: _client(rt, service, cfg), _verify_login
     )
+
+
+SETUP_STEPS = (
+    "yojo login --service jira --base-url URL",
+    "yojo --json init --jira-url URL --project KEY --save",
+    "yojo --json agent install --target agents",
+)
+
+
+def interactive_terminal(rt: Runtime) -> bool:
+    """A person is at a terminal: human output, a terminal on stdin, and not a dumb terminal."""
+    if rt.json_mode or rt.environ.get("TERM") == "dumb":
+        return False
+    try:
+        return bool(rt.stdin_isatty())
+    except (OSError, ValueError):
+        return False
+
+
+def _setup_needs_terminal() -> YojoError:
+    return YojoError(
+        "usage_error",
+        "yojo setup needs an interactive terminal; nothing was started or changed.",
+        "Run `yojo setup` in a terminal without --json, or set up step by step: "
+        + "; then ".join(f"`{step}`" for step in SETUP_STEPS)
+        + ". Each step's output names the next one.",
+        {"usage": "yojo setup", "steps": list(SETUP_STEPS)},
+    )
+
+
+def launch_setup(rt: Runtime) -> dict[str, Any]:
+    if not interactive_terminal(rt):
+        raise _setup_needs_terminal()
+    if rt.launch_setup is not None:
+        return rt.launch_setup(rt)
+    # Imported here so that commands that never open the app never load Textual.
+    from yojo import setup
+
+    return setup.run_app(rt)
+
+
+def cmd_setup(args: argparse.Namespace, rt: Runtime) -> Any:
+    if getattr(args, "base_url", None) is not None or getattr(args, "config", None) is not None:
+        raise YojoError(
+            "usage_error",
+            "yojo setup asks for each service URL itself, not --base-url or --config.",
+            "Run `yojo setup` with no options.",
+            {"usage": "yojo setup"},
+        )
+    return launch_setup(rt)
 
 
 def cmd_agent_print(args: argparse.Namespace, rt: Runtime) -> Any:
@@ -1199,6 +1265,7 @@ HANDLERS: dict[str, Callable[[argparse.Namespace, Runtime], Any]] = {
     "login": cmd_login,
     "config check": cmd_config_check,
     "init": cmd_init,
+    "setup": cmd_setup,
     "agent print": cmd_agent_print,
     "agent install": cmd_agent_install,
     "jira issue create": cmd_issue_create,
@@ -1233,14 +1300,22 @@ def _no_command() -> YojoError:
         "usage_error",
         "No command given.",
         "Run `yojo commands` to list commands, for example "
-        "`yojo jira issue get PROJ-123 --base-url https://jira.example.com`.",
+        "`yojo jira issue get PROJ-123 --base-url https://jira.example.com`. "
+        "In a terminal, `yojo setup` walks through first-time setup.",
         {"usage": "yojo [--json] [--base-url URL] [--config PATH] COMMAND ..."},
     )
+
+
+def _first_run(rt: Runtime) -> bool:
+    """No yojo.yaml is found from here; a legacy or invalid file raises its own error."""
+    return load_config(None, rt.cwd) is None
 
 
 def run(argv: list[str], rt: Runtime) -> Any:
     if any(token in ("-h", "--help") for token in argv):
         return _help(argv)
+    if not argv and interactive_terminal(rt) and _first_run(rt):
+        return launch_setup(rt)
     if not _words(argv):
         raise _no_command()
     args = build_parser().parse_args(argv)
@@ -1352,7 +1427,8 @@ def main(argv: list[str] | None = None, runtime: Runtime | None = None) -> int:
         if rt.json_mode:
             text = json.dumps(envelope, ensure_ascii=True, separators=(",", ":")) + "\n"
         else:
-            text = render(envelope, command_path(tokens), Style(color_enabled(rt.environ)))
+            path = command_path(tokens) if tokens else "setup"
+            text = render(envelope, path, Style(color_enabled(rt.environ)))
         rt.stdout.write(text)
         rt.stdout.flush()
     except (BrokenPipeError, OSError):

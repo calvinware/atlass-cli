@@ -2,7 +2,7 @@
 
 # Command reference
 
-`yojo` has **28 commands**. This page is generated from `yojo commands`, `yojo schema '<command>'`, and the checked examples in [`docs/examples/commands.json`](../examples/commands.json). The JSON Schemas remain the source of truth; run `yojo schema '<command>'` for the exact contract.
+`yojo` has **29 commands**. This page is generated from `yojo commands`, `yojo schema '<command>'`, and the checked examples in [`docs/examples/commands.json`](../examples/commands.json). The JSON Schemas remain the source of truth; run `yojo schema '<command>'` for the exact contract.
 
 > [!NOTE]
 > Examples use synthetic data (`EXAMPLE-*` keys, `*.example.test` hosts) and were captured from real runs against test fixtures. They are pretty-printed here; when stdout is piped or `--json` is given, `yojo` prints each envelope on one line. On a terminal it shows a readable view of the same envelope, with the same exit code. Invocations use POSIX shell syntax.
@@ -38,6 +38,7 @@ Each error code, with its meaning and fix, is in the [error catalog](errors.md).
 | [`yojo login`](#yojo-login) | Check a personal access token (or username and password) against the service and store it in the OS keyring for that URL. Secrets come from stdin or a hidden prompt, never arguments. Bitbucket takes a token only; `all` means Jira and Confluence. | no |
 | [`yojo config check`](#yojo-config-check) | Compare yojo.yaml aliases, create rules, and transition rules with live Jira fields, projects, and statuses, and check that a configured Bitbucket answers and accepts the stored token. Read-only. | no |
 | [`yojo init`](#yojo-init) | Draft a version 1 yojo.yaml from live Jira, Confluence, and Bitbucket metadata, using the logins already stored for each URL. Shows a preview by default; --save creates the file only if it is absent, and --replace needs the current file's sha256 and no other editor writing the file. Team rules come only from --policy-input (or --input); nothing is inferred and no secret is written. | yes |
+| [`yojo setup`](#yojo-setup) | A person's full-screen first-time setup in a terminal; piped or with --json it starts nothing and returns usage_error listing the equivalent login, init, and agent install steps. In the app: connect each instance, log in (the token goes straight to the OS keyring), pick projects and repositories, map fields and rules by their Jira names, review the yojo.yaml diff and save, install agent instructions, and try one read-only command. Bare `yojo` opens it on first run in a terminal. | no |
 | [`yojo agent print`](#yojo-agent-print) | Print the yojo instructions for an AI agent: every command's signature and a --json example, plus the safety rules. Offline; paste the text into any chat. | no |
 | [`yojo agent install`](#yojo-agent-install) | Write the agent instructions where each tool looks for them: agents (AGENTS.md), claude (.claude/skills/yojo/SKILL.md), cursor (.cursor/rules/yojo.mdc), copilot (.github/copilot-instructions.md), gemini (GEMINI.md). Only the marked yojo section is replaced; other text is kept, and an unchanged file is not rewritten. Claude and Cursor files without front matter get yojo's; front matter without the keys the tool needs is refused. | no |
 | [`yojo jira issue create`](#yojo-jira-issue-create) | Create an issue of any type. Checks the project's live create screen and any yojo.yaml rules first, and refuses with every problem listed if anything is missing; nothing is written then. | yes |
@@ -739,6 +740,101 @@ Error: no Jira login is stored for that URL yet ([`auth_missing`](errors.md#auth
 | 3 | [`auth_failed`](errors.md#auth_failed), [`auth_missing`](errors.md#auth_missing), [`forbidden`](errors.md#forbidden), [`keyring_unavailable`](errors.md#keyring_unavailable) |
 | 5 | [`not_found`](errors.md#not_found) |
 | 6 | [`internal_error`](errors.md#internal_error), [`interrupted`](errors.md#interrupted), [`metadata_incomplete`](errors.md#metadata_incomplete), [`rate_limited`](errors.md#rate_limited), [`redirect_refused`](errors.md#redirect_refused), [`response_invalid`](errors.md#response_invalid), [`service_error`](errors.md#service_error), [`tls_error`](errors.md#tls_error), [`transport_error`](errors.md#transport_error) |
+
+## `yojo setup`
+
+A person's full-screen first-time setup in a terminal; piped or with --json it starts nothing and returns usage_error listing the equivalent login, init, and agent install steps. In the app: connect each instance, log in (the token goes straight to the OS keyring), pick projects and repositories, map fields and rules by their Jira names, review the yojo.yaml diff and save, install agent instructions, and try one read-only command. Bare `yojo` opens it on first run in a terminal.
+
+```text
+yojo setup [--json]
+```
+
+**Arguments**
+
+None.
+
+**Input**
+
+No JSON input.
+
+**Output**
+
+Success `data` fields:
+
+| Field | Type | Always present |
+|---|---|---|
+| `status` | one of `completed`, `cancelled` | yes |
+| `config` | null or object | yes |
+| `logins_stored` | array of one of `jira`, `confluence`, `bitbucket` | yes |
+| `agent_files` | array of objects | yes |
+| `notes` | array of strings | yes |
+| `next` | array of strings | yes |
+
+**Example**
+
+```bash
+yojo setup
+```
+
+Run by a person in a terminal. The success object is what the terminal view summarizes after the app closes; piped or with --json, setup starts nothing and returns the error below. `config` is null and `status` is `cancelled` when the app was left before Save.
+
+Success (exit 0):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "status": "completed",
+    "config": {
+      "path": "/work/repo/yojo.yaml",
+      "action": "created"
+    },
+    "logins_stored": [
+      "jira"
+    ],
+    "agent_files": [
+      {
+        "target": "agents",
+        "path": "AGENTS.md",
+        "action": "created"
+      }
+    ],
+    "notes": [],
+    "next": [
+      "yojo --json config check",
+      "yojo --json jira search --jql 'project = PROJ ORDER BY updated DESC' --limit 5"
+    ]
+  }
+}
+```
+
+Error: stdout is piped or --json is given, so no terminal app can open ([`usage_error`](errors.md#usage_error), exit 2):
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "usage_error",
+    "message": "yojo setup needs an interactive terminal; nothing was started or changed.",
+    "fix": "Run `yojo setup` in a terminal without --json, or set up step by step: `yojo login --service jira --base-url URL`; then `yojo --json init --jira-url URL --project KEY --save`; then `yojo --json agent install --target agents`. Each step's output names the next one.",
+    "details": {
+      "usage": "yojo setup",
+      "steps": [
+        "yojo login --service jira --base-url URL",
+        "yojo --json init --jira-url URL --project KEY --save",
+        "yojo --json agent install --target agents"
+      ]
+    }
+  }
+}
+```
+
+**Error codes**
+
+| Exit | Error codes |
+|------|-------------|
+| 2 | [`config_invalid`](errors.md#config_invalid), [`config_legacy`](errors.md#config_legacy), [`usage_error`](errors.md#usage_error) |
+| 6 | [`internal_error`](errors.md#internal_error), [`interrupted`](errors.md#interrupted) |
 
 ## `yojo agent print`
 

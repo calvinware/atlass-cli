@@ -30,6 +30,7 @@ dependencies = [
     "jsonschema>=4.23,<5",
     "keyring>=25.5,<26",
     "PyYAML>=6.0.2,<7",
+    "textual>=8.2,<9",
     "truststore>=0.10,<1",
 ]
 
@@ -64,7 +65,7 @@ yojo = "yojo.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-yojo = ["py.typed"]
+yojo = ["py.typed", "setup.tcss"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

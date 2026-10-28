@@ -25,6 +25,34 @@ def _invalid(what: str) -> YojoError:
     )
 
 
+def application_version(client: ServiceClient) -> str | None:
+    """Confluence's version from the application-links manifest, or None when not reported.
+
+    The manifest needs no login. A server that names another product is refused; one that answers
+    without a usable manifest is reachable but unverified until login confirms it.
+    """
+    try:
+        raw = client.get("/rest/applinks/1.0/manifest")
+    except YojoError as exc:
+        if exc.code in ("not_found", "response_invalid", "auth_failed", "forbidden"):
+            return None
+        raise
+    type_id = raw.get("typeId") if isinstance(raw, dict) else None
+    version = raw.get("version") if isinstance(raw, dict) else None
+    if isinstance(type_id, str) and type_id.casefold() != "confluence":
+        raise YojoError(
+            "response_invalid",
+            f"The server at {client.base_url} identified itself as "
+            f"{sanitize_text(type_id, 40)}, not Confluence.",
+            "Pass the Confluence application root including any context path, for example "
+            "https://confluence.example.com/confluence.",
+            {"what": "application manifest"},
+        )
+    if type_id is None or not isinstance(version, str) or not version.strip():
+        return None
+    return sanitize_text(version.strip(), 40)
+
+
 def _version_number(page: dict[str, Any]) -> int | None:
     version = page.get("version")
     number = version.get("number") if isinstance(version, dict) else None

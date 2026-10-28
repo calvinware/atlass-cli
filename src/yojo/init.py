@@ -294,6 +294,7 @@ def verify(
     dest: Path,
     open_client: OpenClient,
     verify_user: VerifyUser,
+    check_policy: bool,
 ) -> dict[str, list[dict[str, Any]]]:
     config = validate_config(doc, dest)
     services: list[dict[str, Any]] = []
@@ -307,7 +308,7 @@ def verify(
                 {"service": "jira", "base_url": request.jira_url, "user": user, "version": None}
             )
             projects = [_jira_project(client, key) for key in request.projects]
-            if request.input is not None:
+            if check_policy:
                 _policy_problems(client, doc, dest)
     if request.confluence_url:
         assert config.confluence is not None
@@ -415,19 +416,39 @@ def _next_steps(
     ]
 
 
-def draft(
+@dataclass(frozen=True)
+class Candidate:
+    """One rendered draft: the exact bytes a person reviews and, after Save, the bytes written."""
+
+    request: InitRequest
+    policy: dict[str, Any] | None
+    dest: Path
+    text: str
+    data: bytes
+    sha256: str
+    current: bytes | None
+    existing_sha256: str | None
+    observed: dict[str, list[dict[str, Any]]]
+
+
+def build(
     request: InitRequest,
     policy: dict[str, Any] | None,
     cwd: Path,
     open_client: OpenClient,
     verify_user: VerifyUser,
-) -> dict[str, Any]:
+) -> Candidate:
+    """Render and live-check a draft, then read the file it would replace. Writes nothing.
+
+    Team rules in ``policy`` are checked against live Jira whenever they are given, whether they
+    came from ``--input`` or from memory.
+    """
     dest = files.resolve(cwd, request.output or CONFIG_FILENAME)
     doc = document(request, policy)
     text = render_yaml(doc, dest)
     data = text.encode("utf-8")
     try:
-        observed = verify(request, doc, dest, open_client, verify_user)
+        observed = verify(request, doc, dest, open_client, verify_user, policy is not None)
     except YojoError as exc:
         if exc.code != "auth_missing" or not request.ca_bundle:
             raise
@@ -458,14 +479,78 @@ def draft(
         ) from None
     files.refuse_symlinks(dest)
     current = files.read_current(dest)
-    existing = files.sha256(current) if current is not None else None
+    return Candidate(
+        request=request,
+        policy=policy,
+        dest=dest,
+        text=text,
+        data=data,
+        sha256=files.sha256(data),
+        current=current,
+        existing_sha256=files.sha256(current) if current is not None else None,
+        observed=observed,
+    )
+
+
+def publish_reviewed(
+    candidate: Candidate, cwd: Path, open_client: OpenClient, verify_user: VerifyUser
+) -> str:
+    """Write exactly the reviewed bytes, refusing if the file or live metadata changed since.
+
+    The draft is checked against live services again first; any difference from what was reviewed
+    means a fresh preview is needed. Returns ``created``, ``replaced``, or ``unchanged``.
+    """
+    fresh = build(candidate.request, candidate.policy, cwd, open_client, verify_user)
+    review_again = "Build a fresh preview, review it, and save again."
+    if fresh.dest != candidate.dest or fresh.current != candidate.current:
+        raise files.conflict(
+            candidate.dest,
+            f"{candidate.dest} changed after you reviewed the preview; nothing was written.",
+            review_again,
+            existing_sha256=fresh.existing_sha256,
+            expected_sha256=candidate.existing_sha256,
+        )
+    if fresh.data != candidate.data or fresh.observed != candidate.observed:
+        raise YojoError(
+            "conflict",
+            "Live metadata changed after you reviewed the preview; nothing was written.",
+            review_again,
+            {"path": str(candidate.dest)},
+        )
+    dest, current, data = candidate.dest, candidate.current, candidate.data
+    if current is None:
+        legacy = dest.parent / LEGACY_FILENAME
+        if dest.name == CONFIG_FILENAME and legacy.is_file():
+            raise legacy_config(legacy)
+        files.publish(dest, data, None)
+        action = "created"
+    elif current == data:
+        return "unchanged"
+    else:
+        files.publish(dest, data, current)
+        action = "replaced"
+    parse_config_file(dest)
+    return action
+
+
+def draft(
+    request: InitRequest,
+    policy: dict[str, Any] | None,
+    cwd: Path,
+    open_client: OpenClient,
+    verify_user: VerifyUser,
+) -> dict[str, Any]:
+    candidate = build(request, policy, cwd, open_client, verify_user)
+    dest, text, data, observed = candidate.dest, candidate.text, candidate.data, candidate.observed
+    current = candidate.current
+    existing = candidate.existing_sha256
     action = _save(request, dest, current, data) if request.save else "preview"
     if action in ("created", "replaced"):
         parse_config_file(dest)
     notes = []
     if action == "preview":
         notes.append("Nothing was written. Review the YAML, then run the next command to save it.")
-    if request.input is None:
+    if policy is None:
         notes.append(
             "No team aliases or rules were added; yojo never infers them. Pass them with --input "
             "(see docs/configuration.md)."

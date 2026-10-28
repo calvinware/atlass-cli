@@ -191,6 +191,8 @@ def _success(data: Any, command: str | None, style: Style) -> list[str]:
         return _help(data["help"], style)
     if command == "init":
         return _init(data, style)
+    if command == "setup":
+        return _setup(data, style)
     if command == "agent print":
         return [clean(line, 2000) for line in str(data.get("text") or "").splitlines()]
     if command == "agent install":
@@ -294,6 +296,33 @@ def _init(data: Mapping[str, Any], style: Style) -> list[str]:
         if data.get(key):
             lines += ["", *table(data[key], columns, style)]
     lines += [""] + [clean(note, 1000) for note in data.get("notes") or []]
+    steps = data.get("next") or []
+    if steps:
+        lines += ["", style.bold("Next")] + [f"  {clean(step, 2000)}" for step in steps]
+    return lines
+
+
+def _setup(data: Mapping[str, Any], style: Style) -> list[str]:
+    completed = data.get("status") == "completed"
+    lines = [
+        style.green("Setup finished. Fair winds.")
+        if completed
+        else style.bold("Setup closed before the last step.")
+    ]
+    config = data.get("config")
+    if isinstance(config, dict):
+        path, action = clean(config.get("path"), 1000), clean(config.get("action"))
+        lines.append(f"yojo.yaml: {path} ({action})")
+    else:
+        lines.append("yojo.yaml was not changed.")
+    stored = data.get("logins_stored") or []
+    if stored:
+        lines.append("Logins stored in your OS keyring: " + ", ".join(clean(s) for s in stored))
+    for row in data.get("agent_files") or []:
+        if isinstance(row, dict):
+            path, action = clean(row.get("path")), clean(row.get("action"))
+            lines.append(f"Agent instructions: {path} ({action})")
+    lines += [clean(note, 1000) for note in data.get("notes") or []]
     steps = data.get("next") or []
     if steps:
         lines += ["", style.bold("Next")] + [f"  {clean(step, 2000)}" for step in steps]

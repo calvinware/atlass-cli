@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
-from yojo.contracts import YojoError
+from yojo.contracts import PROJECT_KEY_PATTERN, YojoError
 from yojo.fields import FieldMeta
-from yojo.transport import ServiceClient, seg
+from yojo.transport import ServiceClient, sanitize_text, seg
 
 META_PAGE_SIZE = 100
 MAX_META_PAGES = 50
+MAX_PROJECTS = 5000
+MAX_STATUSES = 500
+PROJECT_KEY_RE = re.compile(PROJECT_KEY_PATTERN)
 
 
 @dataclass(frozen=True)
@@ -290,3 +294,51 @@ def attachment_settings(client: ServiceClient) -> tuple[bool | None, int | None]
         enabled if isinstance(enabled, bool) else None,
         limit if type(limit) is int and limit > 0 else None,
     )
+
+
+def server_version(client: ServiceClient) -> str:
+    """Jira's own version from ``serverInfo``, which answers without a login."""
+    raw = client.get("/rest/api/2/serverInfo")
+    version = raw.get("version") if isinstance(raw, dict) else None
+    if not isinstance(version, str) or not version.strip():
+        raise _invalid("server info")
+    return sanitize_text(version.strip(), 40)
+
+
+def projects(client: ServiceClient) -> list[dict[str, str]]:
+    """Every project the user can see, as key and name; refused rather than shown partly."""
+    raw = client.get("/rest/api/2/project")
+    if not isinstance(raw, list):
+        raise _invalid("project list")
+    if len(raw) > MAX_PROJECTS:
+        raise incomplete("project list", {"received": len(raw), "max": MAX_PROJECTS})
+    found: dict[str, dict[str, str]] = {}
+    for item in raw:
+        key = item.get("key") if isinstance(item, dict) else None
+        name = item.get("name") if isinstance(item, dict) else None
+        if not isinstance(key, str) or not PROJECT_KEY_RE.fullmatch(key) or key in found:
+            raise incomplete("project list", {"reason": "missing, invalid, or duplicate key"})
+        if not isinstance(name, str) or not name.strip():
+            raise incomplete("project list", {"reason": "missing name", "project": key})
+        found[key] = {"key": key, "name": sanitize_text(name, 255)}
+    return sorted(found.values(), key=lambda p: p["key"])
+
+
+def project_statuses(client: ServiceClient, project: str) -> list[str]:
+    """Status names used by any issue type in ``project``, in Jira's order, without repeats."""
+    raw = client.get(f"/rest/api/2/project/{seg(project)}/statuses")
+    if not isinstance(raw, list):
+        raise _invalid("project status")
+    names: dict[str, str] = {}
+    for issue_type in raw:
+        statuses = issue_type.get("statuses") if isinstance(issue_type, dict) else None
+        if not isinstance(statuses, list):
+            raise incomplete("project status", {"reason": "missing statuses", "project": project})
+        for status in statuses:
+            name = status.get("name") if isinstance(status, dict) else None
+            if not isinstance(name, str) or not name.strip():
+                raise incomplete("project status", {"reason": "missing name", "project": project})
+            names.setdefault(name.casefold(), name)
+    if len(names) > MAX_STATUSES:
+        raise incomplete("project status", {"received": len(names), "max": MAX_STATUSES})
+    return list(names.values())

@@ -14,6 +14,7 @@ python3.11 -m venv .venv
 .venv/bin/python -m build
 .venv/bin/python -m twine check --strict dist/*
 .venv/bin/python scripts/generate_command_reference.py --check
+.venv/bin/python scripts/capture_setup.py --check
 .venv/bin/python -m mkdocs build --strict
 ```
 
@@ -45,6 +46,9 @@ flowchart TD
     cli --> retry
     cli --> init
     cli --> agents
+    cli -. "terminal only" .-> setup
+    setup["setup.py<br/>seven-step Textual app"] --> init
+    setup --> agents
     init["init.py<br/>yojo.yaml drafts"] --> files
     agents["agents.py<br/>agent instructions"] --> files
     files["files.py<br/>atomic local writes"]
@@ -77,12 +81,13 @@ flowchart TD
 | [`config.py`](../src/yojo/config.py) | `yojo.yaml` discovery, the legacy `atl.yaml` refusal, the safe loader, and strict validation into typed config objects. |
 | [`auth.py`](../src/yojo/auth.py) | Credentials in the native OS keyring only. |
 | [`transport.py`](../src/yojo/transport.py) | `ServiceClient`: verified TLS, no redirects, size caps, HTTP status to error code mapping, write outcome tracking, sanitizing and redaction. |
-| [`metadata.py`](../src/yojo/metadata.py) | Fail-closed readers for Jira create, transition, and edit metadata. |
+| [`metadata.py`](../src/yojo/metadata.py) | Fail-closed readers for Jira create, transition, and edit metadata, plus the server version, project list, and project statuses used by `yojo setup`. |
 | [`resolve.py`](../src/yojo/resolve.py) | Case-insensitive matching of names and labels, ambiguity with candidates, "Did you mean ...?" suggestions, and people lookup. |
 | [`fields.py`](../src/yojo/fields.py) | Resolves field names, aliases, and IDs to live fields, and coerces plain values to the field's live type. |
 | [`retry.py`](../src/yojo/retry.py) | Builds the corrected `retry` command line from the caller's argv and each check's edit. |
 | [`workflow.py`](../src/yojo/workflow.py) | Pure transition checklist plus the PUT/recheck/POST executor. |
-| [`init.py`](../src/yojo/init.py) | `yojo init`: the draft from named URLs, projects, and `--input` policy, live checks, and guarded saves. |
+| [`init.py`](../src/yojo/init.py) | `yojo init`: the draft from named URLs, projects, and `--input` policy, live checks, and guarded saves. `build` returns an immutable `Candidate`; `publish_reviewed` writes exactly its bytes after re-checking the file and live metadata. |
+| [`setup.py`](../src/yojo/setup.py), [`setup.tcss`](../src/yojo/setup.tcss) | The `yojo setup` Textual app. `cli.py` imports it only when stdout and stdin are terminals and `--json` is absent. Its `Services` class is the app's only door to the network, keyring, and files, and reuses `verify_and_store`, `init.build`/`init.publish_reviewed`, `agents.install`, and `cli.outcome`. |
 | [`agents.py`](../src/yojo/agents.py) | The agent instruction core generated from `COMMANDS`, target wrappers, and marked-section installs. |
 | [`files.py`](../src/yojo/files.py) | Conflict-checked atomic writes of local files: same-folder temp file, hard-link create, compare-then-replace, no symbolic links. |
 | [`response.py`](../src/yojo/response.py) | Output budgets: long text is trimmed with a marker and a `more` command. |
@@ -102,6 +107,13 @@ Tests never touch a real server or keyring. [`tests/conftest.py`](../tests/conft
 - `harness.run_tty(*argv, environ=...)` runs with stdout on a terminal and returns the rendered
   text, so a test can check the friendly view of the same envelope.
 - JSON fixtures in [`tests/fixtures/`](../tests/fixtures/) model documented Data Center responses.
+- [`tests/test_setup.py`](../tests/test_setup.py) drives the setup app with Textual's pilot
+  against `FakeServer` routes from [`tests/setup_support.py`](../tests/setup_support.py).
+  [`tests/test_setup_cli.py`](../tests/test_setup_cli.py) checks when the app may open, including
+  real pseudo-terminal runs on macOS and Linux.
+- `python scripts/capture_setup.py --write` regenerates the light and dark SVG captures of each
+  setup step in `docs/assets/setup/` from the same fixtures; `--check` fails when they drift.
+  Review the images after any change to the app's layout or text.
 
 > [!NOTE]
 > Fixture tests prove behavior against modeled responses, not live compatibility. Live results go

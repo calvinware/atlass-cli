@@ -161,6 +161,32 @@ Desktop sessions normally have one running and unlocked.
 
 <!-- os-tabs:end -->
 
+## Set up in a terminal: `yojo setup`
+
+In a terminal, `yojo setup` opens a full-screen app that walks through the whole setup. Running
+plain `yojo` the first time (no `yojo.yaml` found) opens it too. It has seven steps:
+
+1. **Connect**: enter each instance URL; `yojo` checks that it answers and shows its version.
+2. **Log in**: paste a personal access token into a masked field. `yojo` confirms who you are,
+   stores the token in the OS keyring, and clears the field.
+3. **Choose projects**: search your live Jira projects and Bitbucket repositories.
+4. **Map fields and rules** (optional): pick fields and statuses by their Jira names, with a
+   plain-English preview of each rule. Nothing is added unless you add it.
+5. **Review and save**: the exact `yojo.yaml` and its diff against any existing file. Only
+   **Save** writes it, and it refuses if the file or Jira changed after you reviewed it.
+6. **Connect your agent**: pick the tools you use; this runs `yojo agent install`.
+7. **Try it**: run one read-only command and see the result.
+
+Use the keyboard throughout: Tab moves between fields, Enter presses a button, Space selects a
+list item, Ctrl+N and Ctrl+B go to the next and previous step, Ctrl+T switches light and dark,
+and Esc leaves. Leaving before Save changes no file; logins you already stored stay in the
+keyring. The app follows `NO_COLOR`.
+
+`yojo setup` never starts when stdout is piped or with `--json`. It then returns
+[`usage_error`](reference/errors.md#usage_error) (exit 2) listing the same steps as commands,
+which are also what scripts and CI use: `yojo login`, `yojo --json init ... --save`, and
+`yojo --json agent install`. The rest of this page covers those commands.
+
 ## Log in (human only)
 
 Point `yojo` at your instance root, including any context path such as `/jira`:

@@ -674,6 +674,53 @@ COMMANDS: list[CommandSpec] = [
         needs_config=False,
     ),
     CommandSpec(
+        path="setup",
+        summary=(
+            "A person's full-screen first-time setup in a terminal; piped or with --json it "
+            "starts nothing and returns usage_error listing the equivalent login, init, and agent "
+            "install steps. In the app: connect each instance, log in (the token goes straight to "
+            "the OS keyring), pick projects and repositories, map fields and rules by their Jira "
+            "names, review the yojo.yaml diff and save, install agent instructions, and try one "
+            "read-only command. Bare `yojo` opens it on first run in a terminal."
+        ),
+        usage="yojo setup",
+        example="yojo --json setup",
+        arguments=_obj({}),
+        success=_obj(
+            {
+                "status": {"enum": ["completed", "cancelled"]},
+                "config": {
+                    "oneOf": [
+                        {"type": "null"},
+                        _obj(
+                            {
+                                "path": STR,
+                                "action": {"enum": ["created", "replaced", "unchanged"]},
+                            },
+                            ["path", "action"],
+                        ),
+                    ]
+                },
+                "logins_stored": _arr({"enum": SERVICE_NAMES}),
+                "agent_files": _arr(
+                    _obj(
+                        {
+                            "target": {"enum": AGENT_TARGETS},
+                            "path": STR,
+                            "action": {"enum": ["created", "updated", "unchanged"]},
+                        },
+                        ["target", "path", "action"],
+                    )
+                ),
+                "notes": _arr(STR),
+                "next": _arr(STR),
+            },
+            ["status", "config", "logins_stored", "agent_files", "notes", "next"],
+        ),
+        errors=["usage_error", "config_invalid", "config_legacy"],
+        needs_config=False,
+    ),
+    CommandSpec(
         path="agent print",
         summary=(
             "Print the yojo instructions for an AI agent: every command's signature and a "
