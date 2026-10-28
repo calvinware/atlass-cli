@@ -1,4 +1,8 @@
-"""Strict, versioned ``atl.yaml`` discovery, parsing, and validation."""
+"""Optional, strict, versioned ``yojo.yaml`` discovery, parsing, and validation.
+
+``yojo`` works without a config file: service commands take ``--base-url`` and read live Jira
+metadata. A ``yojo.yaml`` adds friendly field aliases and team rules on top.
+"""
 
 from __future__ import annotations
 
@@ -11,36 +15,35 @@ from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 
-from atlass_cli.contracts import PROJECT_KEY_PATTERN, AtlError
+from yojo.contracts import PROJECT_KEY_PATTERN, YojoError
 
-CONFIG_FILENAME = "atl.yaml"
+CONFIG_FILENAME = "yojo.yaml"
+LEGACY_FILENAME = "atl.yaml"
 MAX_CONFIG_BYTES = 256 * 1024
 DEFAULT_MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
 SUPPORTED_VERSIONS = {1}
-
-ENCODINGS = {
-    "text",
-    "issue_key_string",
-    "issue_key_object",
-    "single_option",
-    "multi_option",
-    "resolution_option",
-}
-FEATURE_POLICIES = {"automatic", "human_confirmed"}
-REQUIREMENT_KINDS = {"attachment_filename"}
-RESERVED_FIELDS = ("acceptance_criteria", "feature_link")
-CREATE_TYPES = ("story", "feature")
+REQUIREMENT_KINDS = {"attachment_filename", "field_set"}
+SERVICES = ("jira", "confluence")
 
 FRIENDLY_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 FIELD_ID_RE = re.compile(r"^(customfield_[0-9]{1,10}|[a-z][A-Za-z]{0,63})$")
 PROJECT_KEY_RE = re.compile(PROJECT_KEY_PATTERN)
 PATTERN_ALLOWED_RE = re.compile(r"^[A-Za-z0-9 ._\-*?\[\]!{}()+=,@#~]+$")
+LEGACY_FIX = (
+    "Rename {path} to {target} and review it for the yojo version 1 format: keep base_url, "
+    "ca_bundle, max_attachment_bytes, and transitions; keep fields entries but drop each "
+    "`encoding` (values are coerced from live Jira metadata); remove allowed_issue_types, "
+    "story_type, feature_type, feature_create_policy, and create.story/create.feature (use "
+    "create.<Issue Type>.required instead). See docs/configuration.md. yojo never migrates "
+    "the file automatically."
+)
 
 
 @dataclass(frozen=True)
 class FieldRef:
+    """A configured alias for a Jira field, by its UI name or its raw ID."""
+
     friendly: str
-    encoding: str
     jira_name: str | None = None
     id: str | None = None
 
@@ -52,10 +55,15 @@ class FieldRef:
 @dataclass(frozen=True)
 class Requirement:
     kind: str
-    pattern: str
+    pattern: str | None = None
+    field: str | None = None
 
     def expand(self, issue_key: str) -> str:
-        return self.pattern.replace("{key}", issue_key)
+        return (self.pattern or "").replace("{key}", issue_key)
+
+    @property
+    def label(self) -> str:
+        return str(self.pattern if self.kind == "attachment_filename" else self.field)
 
 
 @dataclass(frozen=True)
@@ -71,14 +79,13 @@ class TransitionConfig:
 @dataclass(frozen=True)
 class ProjectConfig:
     key: str
-    allowed_issue_types: tuple[str, ...]
-    story_type: str
-    feature_type: str
-    feature_create_policy: str
-    fields: dict[str, FieldRef]
-    story_required: tuple[str, ...]
-    feature_required: tuple[str, ...]
-    transitions: dict[str, TransitionConfig]
+    fields: dict[str, FieldRef] = field(default_factory=dict)
+    create_required: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    transitions: dict[str, TransitionConfig] = field(default_factory=dict)
+
+    def required_for(self, issue_type: str) -> tuple[str, ...]:
+        wanted = issue_type.casefold()
+        return next((r for t, r in self.create_required.items() if t.casefold() == wanted), ())
 
 
 @dataclass(frozen=True)
@@ -90,7 +97,15 @@ class ServiceConfig:
 @dataclass(frozen=True)
 class JiraConfig(ServiceConfig):
     max_attachment_bytes: int = DEFAULT_MAX_ATTACHMENT_BYTES
+    fields: dict[str, FieldRef] = field(default_factory=dict)
     projects: dict[str, ProjectConfig] = field(default_factory=dict)
+
+    def project(self, key: str) -> ProjectConfig | None:
+        return self.projects.get(key)
+
+    def aliases(self, project: str | None) -> dict[str, FieldRef]:
+        configured = self.projects.get(project) if project else None
+        return {**self.fields, **(configured.fields if configured else {})}
 
 
 @dataclass(frozen=True)
@@ -116,12 +131,12 @@ class StrictSafeLoader(yaml.SafeLoader):
         if self.check_event(yaml.AliasEvent):
             event = self.peek_event()  # type: ignore[no-untyped-call]
             raise yaml.constructor.ConstructorError(
-                None, None, "YAML aliases are not allowed in atl.yaml", event.start_mark
+                None, None, "YAML aliases are not allowed in yojo.yaml", event.start_mark
             )
         event = self.peek_event()  # type: ignore[no-untyped-call]
         if getattr(event, "anchor", None) is not None:
             raise yaml.constructor.ConstructorError(
-                None, None, "YAML anchors are not allowed in atl.yaml", event.start_mark
+                None, None, "YAML anchors are not allowed in yojo.yaml", event.start_mark
             )
         return super().compose_node(parent, index)
 
@@ -162,38 +177,45 @@ StrictSafeLoader.add_implicit_resolver(
 
 
 def discover_config(start: Path) -> Path | None:
+    """Return the nearest ``yojo.yaml``; a nearer lone ``atl.yaml`` is refused, never migrated."""
     current = start.resolve()
     for directory in (current, *current.parents):
         candidate = directory / CONFIG_FILENAME
         if candidate.is_file():
             return candidate
+        legacy = directory / LEGACY_FILENAME
+        if legacy.is_file():
+            raise legacy_config(legacy)
     return None
 
 
-def load_config(explicit: str | None, cwd: Path) -> Config:
+def legacy_config(path: Path) -> YojoError:
+    target = path.parent / CONFIG_FILENAME
+    return YojoError(
+        "config_legacy",
+        f"Found {path} from atl, but no {CONFIG_FILENAME}; nothing was read or changed.",
+        LEGACY_FIX.format(path=path, target=target),
+        {"path": str(path), "expected": str(target)},
+    )
+
+
+def load_config(explicit: str | None, cwd: Path) -> Config | None:
+    """Load ``--config PATH`` (which must exist) or the discovered file; None means no config."""
     if explicit is not None:
         path = Path(explicit)
         if not path.is_absolute():
             path = cwd / path
         if not path.is_file():
-            raise AtlError(
+            raise YojoError(
                 "config_not_found",
                 f"Config file not found: {path}",
-                "Pass --config with the path to an existing atl.yaml.",
+                f"Pass --config with the path to an existing {CONFIG_FILENAME}, or drop --config "
+                "and pass --base-url to run without one.",
                 {"path": str(path)},
             )
-    else:
-        found = discover_config(cwd)
-        if found is None:
-            raise AtlError(
-                "config_not_found",
-                f"No {CONFIG_FILENAME} found in {cwd} or any parent directory.",
-                f"Copy atl.example.yaml to {CONFIG_FILENAME} in the repository root and fill in "
-                "team values, or pass --config PATH.",
-                {"searched_from": str(cwd)},
-            )
-        path = found
-    return parse_config_file(path)
+        return parse_config_file(path)
+    found = discover_config(cwd)
+    return parse_config_file(found) if found is not None else None
 
 
 def parse_config_file(path: Path) -> Config:
@@ -223,14 +245,57 @@ def _yaml_message(exc: yaml.YAMLError) -> str:
     return str(problem)
 
 
-def _invalid(path: Path, problem: str, where: str | None = None) -> AtlError:
+def _invalid(path: Path, problem: str, where: str | None = None) -> YojoError:
     location = f"{where}: " if where else ""
-    return AtlError(
+    return YojoError(
         "config_invalid",
         f"Invalid {path.name}: {location}{problem}",
         f"Edit {path} so that {where or 'the document'} is valid; see docs/configuration.md.",
         {"path": str(path), "where": where, "problem": problem},
     )
+
+
+# --------------------------------------------------------------------------- URLs
+
+
+def url_problem(text: str) -> tuple[str | None, str | None]:
+    """Return ``(normalized URL, None)`` or ``(None, problem)`` under the strict HTTPS rules."""
+    if any(ord(ch) < 32 for ch in text) or len(text) > 2048 or not text.strip():
+        return None, "must be a single-line URL of at most 2048 characters"
+    parts = urlsplit(text.strip())
+    if parts.scheme != "https":
+        return None, "must use https://"
+    if not parts.hostname:
+        return None, "must include a host"
+    if parts.username is not None or parts.password is not None or "@" in parts.netloc:
+        return None, "must not contain credentials (userinfo)"
+    if parts.query or text.rstrip().endswith("?"):
+        return None, "must not contain a query string"
+    if parts.fragment or "#" in text:
+        return None, "must not contain a fragment"
+    try:
+        port = parts.port
+    except ValueError:
+        return None, "has an invalid port"
+    host = parts.hostname.lower()
+    netloc = host if port in (None, 443) else f"{host}:{port}"
+    if ":" in host:
+        netloc = f"[{host}]" if port in (None, 443) else f"[{host}]:{port}"
+    return urlunsplit(("https", netloc, parts.path.rstrip("/"), "", "")), None
+
+
+def normalize_base_url(text: str) -> str:
+    """Validate a ``--base-url`` value; it is never a place for credentials."""
+    normalized, problem = url_problem(text)
+    if normalized is None:
+        raise YojoError(
+            "usage_error",
+            f"--base-url {problem}.",
+            "Pass the HTTPS application root including any context path, for example "
+            "--base-url https://jira.example.com/jira.",
+            {"problem": problem},
+        )
+    return normalized
 
 
 # --------------------------------------------------------------------------- validation
@@ -240,7 +305,7 @@ class _Validator:
     def __init__(self, path: Path) -> None:
         self.path = path
 
-    def fail(self, where: str, problem: str) -> AtlError:
+    def fail(self, where: str, problem: str) -> YojoError:
         return _invalid(self.path, problem, where)
 
     def mapping(
@@ -281,28 +346,10 @@ class _Validator:
         return value
 
     def url(self, value: Any, where: str) -> str:
-        text = self.string(value, where, max_len=2048)
-        parts = urlsplit(text)
-        if parts.scheme != "https":
-            raise self.fail(where, "must use https://")
-        if not parts.hostname:
-            raise self.fail(where, "must include a host")
-        if parts.username is not None or parts.password is not None or "@" in parts.netloc:
-            raise self.fail(where, "must not contain credentials (userinfo)")
-        if parts.query or text.rstrip().endswith("?"):
-            raise self.fail(where, "must not contain a query string")
-        if parts.fragment or "#" in text:
-            raise self.fail(where, "must not contain a fragment")
-        try:
-            port = parts.port
-        except ValueError:
-            raise self.fail(where, "has an invalid port") from None
-        host = parts.hostname.lower()
-        netloc = host if port in (None, 443) else f"{host}:{port}"
-        if ":" in host:
-            netloc = f"[{host}]" if port in (None, 443) else f"[{host}]:{port}"
-        path = parts.path.rstrip("/")
-        return urlunsplit(("https", netloc, path, "", ""))
+        normalized, problem = url_problem(self.string(value, where, max_len=2048))
+        if normalized is None:
+            raise self.fail(where, str(problem))
+        return normalized
 
     def ca_bundle(self, value: Any, where: str) -> Path:
         text = self.string(value, where, max_len=4096)
@@ -342,16 +389,16 @@ def _validate_jira(v: _Validator, value: Any) -> JiraConfig:
     section = v.mapping(
         value,
         "jira",
-        {"base_url", "ca_bundle", "max_attachment_bytes", "projects"},
-        {"base_url", "projects"},
+        {"base_url", "ca_bundle", "max_attachment_bytes", "fields", "projects"},
+        {"base_url"},
     )
     max_bytes = section.get("max_attachment_bytes", DEFAULT_MAX_ATTACHMENT_BYTES)
     if type(max_bytes) is not int or max_bytes <= 0:
         raise v.fail("jira.max_attachment_bytes", "must be a positive integer number of bytes")
 
-    raw_projects = section["projects"]
-    if not isinstance(raw_projects, list) or not raw_projects:
-        raise v.fail("jira.projects", "must be a non-empty list")
+    raw_projects = section.get("projects", [])
+    if not isinstance(raw_projects, list):
+        raise v.fail("jira.projects", "must be a list")
     projects: dict[str, ProjectConfig] = {}
     for index, raw in enumerate(raw_projects):
         project = _validate_project(v, raw, f"jira.projects[{index}]")
@@ -365,51 +412,31 @@ def _validate_jira(v: _Validator, value: Any) -> JiraConfig:
         if "ca_bundle" in section
         else None,
         max_attachment_bytes=max_bytes,
+        fields=_validate_fields(v, section.get("fields", {}), "jira.fields"),
         projects=projects,
     )
 
 
 def _validate_project(v: _Validator, value: Any, where: str) -> ProjectConfig:
-    section = v.mapping(
-        value,
-        where,
-        {
-            "key",
-            "allowed_issue_types",
-            "story_type",
-            "feature_type",
-            "feature_create_policy",
-            "fields",
-            "create",
-            "transitions",
-        },
-        {"key", "allowed_issue_types", "story_type", "feature_type", "fields"},
-    )
+    section = v.mapping(value, where, {"key", "fields", "create", "transitions"}, {"key"})
     key = v.string(section["key"], f"{where}.key", max_len=32)
     if not PROJECT_KEY_RE.fullmatch(key):
         raise v.fail(f"{where}.key", "must be an uppercase Jira project key")
-    allowed = v.string_list(section["allowed_issue_types"], f"{where}.allowed_issue_types")
-    story_type = v.string(section["story_type"], f"{where}.story_type")
-    feature_type = v.string(section["feature_type"], f"{where}.feature_type")
-    for name, value_ in (("story_type", story_type), ("feature_type", feature_type)):
-        if value_ not in allowed:
-            raise v.fail(f"{where}.{name}", f"{value_!r} is not in allowed_issue_types")
-    if story_type == feature_type:
-        raise v.fail(f"{where}.feature_type", "must differ from story_type")
-    policy = v.string(
-        section.get("feature_create_policy", "human_confirmed"), f"{where}.feature_create_policy"
-    )
-    if policy not in FEATURE_POLICIES:
-        raise v.fail(f"{where}.feature_create_policy", "must be 'automatic' or 'human_confirmed'")
+    fields = _validate_fields(v, section.get("fields", {}), f"{where}.fields")
 
-    fields = _validate_fields(v, section["fields"], f"{where}.fields")
-
-    story_required: tuple[str, ...] = ()
-    feature_required: tuple[str, ...] = ()
-    if "create" in section:
-        create = v.mapping(section["create"], f"{where}.create", set(CREATE_TYPES), set())
-        story_required = _validate_create_type(v, create, "story", f"{where}.create", fields)
-        feature_required = _validate_create_type(v, create, "feature", f"{where}.create", fields)
+    create_required: dict[str, tuple[str, ...]] = {}
+    raw_create = section.get("create", {})
+    if not isinstance(raw_create, dict):
+        raise v.fail(f"{where}.create", "must be a mapping of issue type names to rules")
+    for type_name, raw in raw_create.items():
+        c_where = f"{where}.create.{type_name}"
+        v.string(type_name, c_where)
+        if type_name.casefold() in {t.casefold() for t in create_required}:
+            raise v.fail(c_where, "duplicates another issue type (names are case-insensitive)")
+        entry = v.mapping(raw, c_where, {"required"}, {"required"})
+        create_required[type_name] = v.string_list(
+            entry["required"], f"{c_where}.required", allow_empty=True
+        )
 
     transitions: dict[str, TransitionConfig] = {}
     raw_transitions = section.get("transitions", {})
@@ -417,38 +444,14 @@ def _validate_project(v: _Validator, value: Any, where: str) -> ProjectConfig:
         raise v.fail(f"{where}.transitions", "must be a mapping")
     for name, raw in raw_transitions.items():
         t_where = f"{where}.transitions.{name}"
-        if not FRIENDLY_NAME_RE.match(name):
+        if not isinstance(name, str) or not FRIENDLY_NAME_RE.match(name):
             raise v.fail(t_where, "transition names must be lowercase snake_case")
-        transitions[name] = _validate_transition(v, name, raw, t_where, fields)
+        transitions[name] = _validate_transition(v, name, raw, t_where)
     _reject_duplicate_destinations(v, transitions, f"{where}.transitions")
 
     return ProjectConfig(
-        key=key,
-        allowed_issue_types=allowed,
-        story_type=story_type,
-        feature_type=feature_type,
-        feature_create_policy=policy,
-        fields=fields,
-        story_required=story_required,
-        feature_required=feature_required,
-        transitions=transitions,
+        key=key, fields=fields, create_required=create_required, transitions=transitions
     )
-
-
-def _validate_create_type(
-    v: _Validator, create: dict[str, Any], type_key: str, where: str, fields: dict[str, FieldRef]
-) -> tuple[str, ...]:
-    if type_key not in create:
-        return ()
-    t_where = f"{where}.{type_key}"
-    entry = v.mapping(create[type_key], t_where, {"required"}, set())
-    if "required" not in entry:
-        return ()
-    required = v.string_list(entry["required"], f"{t_where}.required", allow_empty=True)
-    for index, name in enumerate(required):
-        if name not in fields:
-            raise v.fail(f"{t_where}.required[{index}]", f"unknown field {name!r}")
-    return required
 
 
 def _validate_fields(v: _Validator, value: Any, where: str) -> dict[str, FieldRef]:
@@ -457,18 +460,12 @@ def _validate_fields(v: _Validator, value: Any, where: str) -> dict[str, FieldRe
     fields: dict[str, FieldRef] = {}
     for friendly, raw in value.items():
         f_where = f"{where}.{friendly}"
-        if not FRIENDLY_NAME_RE.match(friendly):
+        if not isinstance(friendly, str) or not FRIENDLY_NAME_RE.match(friendly):
             raise v.fail(f_where, "friendly names must be lowercase snake_case")
-        entry = v.mapping(raw, f_where, {"jira_name", "id", "encoding"}, {"encoding"})
+        entry = v.mapping(raw, f_where, {"jira_name", "id"}, set())
         has_name, has_id = "jira_name" in entry, "id" in entry
         if has_name == has_id:
             raise v.fail(f_where, "must set exactly one of jira_name or id")
-        encoding = v.string(entry["encoding"], f"{f_where}.encoding")
-        if encoding not in ENCODINGS:
-            raise v.fail(
-                f"{f_where}.encoding",
-                f"unsupported encoding {encoding!r}; supported: {', '.join(sorted(ENCODINGS))}",
-            )
         field_id = None
         if has_id:
             field_id = v.string(entry["id"], f"{f_where}.id", max_len=64)
@@ -476,19 +473,13 @@ def _validate_fields(v: _Validator, value: Any, where: str) -> dict[str, FieldRe
                 raise v.fail(f"{f_where}.id", "must be a Jira field ID such as customfield_10001")
         fields[friendly] = FieldRef(
             friendly=friendly,
-            encoding=encoding,
             jira_name=v.string(entry["jira_name"], f"{f_where}.jira_name") if has_name else None,
             id=field_id,
         )
-    for reserved in RESERVED_FIELDS:
-        if reserved not in fields:
-            raise v.fail(where, f"must define the {reserved!r} field used by story create")
     return fields
 
 
-def _validate_transition(
-    v: _Validator, name: str, value: Any, where: str, fields: dict[str, FieldRef]
-) -> TransitionConfig:
+def _validate_transition(v: _Validator, name: str, value: Any, where: str) -> TransitionConfig:
     section = v.mapping(
         value, where, {"from", "to", "pre_edit", "auto_set", "require"}, {"from", "to"}
     )
@@ -499,16 +490,14 @@ def _validate_transition(
     auto_set: dict[str, str | list[str]] = {}
     raw_auto = section.get("auto_set", {})
     if not isinstance(raw_auto, dict):
-        raise v.fail(f"{where}.auto_set", "must be a mapping of friendly field names to values")
-    for friendly, raw_value in raw_auto.items():
-        a_where = f"{where}.auto_set.{friendly}"
-        if friendly not in fields:
-            raise v.fail(a_where, f"unknown field {friendly!r}; define it under fields")
-        encoding = fields[friendly].encoding
-        if encoding == "multi_option":
-            auto_set[friendly] = list(v.string_list(raw_value, a_where))
+        raise v.fail(f"{where}.auto_set", "must be a mapping of field names to values")
+    for field_name, raw_value in raw_auto.items():
+        a_where = f"{where}.auto_set.{field_name}"
+        v.string(field_name, a_where)
+        if isinstance(raw_value, list):
+            auto_set[field_name] = list(v.string_list(raw_value, a_where))
         else:
-            auto_set[friendly] = v.string(raw_value, a_where, max_len=32767)
+            auto_set[field_name] = v.string(raw_value, a_where, max_len=32767)
 
     raw_require = section.get("require", [])
     if not isinstance(raw_require, list):
@@ -516,13 +505,24 @@ def _validate_transition(
     require: list[Requirement] = []
     for index, raw in enumerate(raw_require):
         r_where = f"{where}.require[{index}]"
-        entry = v.mapping(raw, r_where, {"kind", "pattern"}, {"kind", "pattern"})
-        kind = v.string(entry["kind"], f"{r_where}.kind")
+        if not isinstance(raw, dict):
+            raise v.fail(r_where, "must be a mapping")
+        kind = v.string(raw.get("kind"), f"{r_where}.kind")
         if kind not in REQUIREMENT_KINDS:
-            raise v.fail(f"{r_where}.kind", f"unsupported kind {kind!r}")
-        pattern = v.string(entry["pattern"], f"{r_where}.pattern", max_len=200)
-        _validate_glob(v, pattern, f"{r_where}.pattern")
-        require.append(Requirement(kind=kind, pattern=pattern))
+            raise v.fail(
+                f"{r_where}.kind",
+                f"unsupported kind {kind!r}; supported: {', '.join(sorted(REQUIREMENT_KINDS))}",
+            )
+        if kind == "attachment_filename":
+            entry = v.mapping(raw, r_where, {"kind", "pattern"}, {"kind", "pattern"})
+            pattern = v.string(entry["pattern"], f"{r_where}.pattern", max_len=200)
+            _validate_glob(v, pattern, f"{r_where}.pattern")
+            require.append(Requirement(kind=kind, pattern=pattern))
+        else:
+            entry = v.mapping(raw, r_where, {"kind", "field"}, {"kind", "field"})
+            require.append(
+                Requirement(kind=kind, field=v.string(entry["field"], f"{r_where}.field"))
+            )
 
     return TransitionConfig(
         name=name,
@@ -565,37 +565,47 @@ def _reject_duplicate_destinations(
             seen[pair] = transition.name
 
 
-def require_project(config: Config, key: str) -> ProjectConfig:
-    jira = require_jira(config)
-    project = jira.projects.get(key)
-    if project is None:
-        raise AtlError(
-            "project_not_configured",
-            f"Project {key} is not configured in {config.path.name}.",
-            f"Add a jira.projects entry with key {key} to {config.path}, or use one of: "
-            f"{', '.join(sorted(jira.projects))}.",
-            {"project": key, "configured": sorted(jira.projects)},
+# --------------------------------------------------------------------------- service selection
+
+
+def _service_section(config: Config | None, service: str) -> ServiceConfig | None:
+    if config is None:
+        return None
+    section: ServiceConfig | None = config.jira if service == "jira" else config.confluence
+    return section
+
+
+def select_service(config: Config | None, service: str, base_url: str | None) -> ServiceConfig:
+    """Pick the service URL: ``--base-url`` first, then the config; never silently switch.
+
+    The keyring credential is keyed by service and URL, so a conflicting pair is refused rather
+    than sending one instance's credential to the other.
+    """
+    configured = _service_section(config, service)
+    if base_url is None:
+        if configured is None:
+            where = f" in {config.path}" if config is not None else ""
+            raise YojoError(
+                "service_not_configured",
+                f"No {service} URL is set{where}.",
+                f"Pass --base-url https://{service}.example.com (your {service} application root "
+                f"including any context path), or add {service}.base_url to {CONFIG_FILENAME}.",
+                {"service": service},
+            )
+        return configured
+    explicit = normalize_base_url(base_url)
+    if configured is None:
+        if service == "jira":
+            return JiraConfig(base_url=explicit, ca_bundle=None)
+        return ConfluenceConfig(base_url=explicit, ca_bundle=None)
+    if configured.base_url != explicit:
+        assert config is not None
+        raise YojoError(
+            "input_invalid",
+            f"--base-url {explicit} differs from {service}.base_url {configured.base_url} in "
+            f"{config.path}; nothing was sent.",
+            f"Drop --base-url to use {configured.base_url}, or pass --config with a "
+            f"{CONFIG_FILENAME} whose {service}.base_url is {explicit}.",
+            {"service": service, "base_url": explicit, "configured": configured.base_url},
         )
-    return project
-
-
-def require_jira(config: Config) -> JiraConfig:
-    if config.jira is None:
-        raise AtlError(
-            "service_not_configured",
-            "Jira is not configured.",
-            f"Add a jira section with base_url and projects to {config.path}.",
-            {"service": "jira"},
-        )
-    return config.jira
-
-
-def require_confluence(config: Config) -> ConfluenceConfig:
-    if config.confluence is None:
-        raise AtlError(
-            "service_not_configured",
-            "Confluence is not configured.",
-            f"Add a confluence section with base_url to {config.path}.",
-            {"service": "confluence"},
-        )
-    return config.confluence
+    return configured

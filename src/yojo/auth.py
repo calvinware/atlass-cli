@@ -7,9 +7,9 @@ import json
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from atlass_cli.contracts import AtlError
+from yojo.contracts import YojoError
 
-KEYRING_SERVICE = "atlass-cli"
+KEYRING_SERVICE = "yojo"
 MAX_SECRET_CHARS = 4096
 
 # Backends that delegate to an OS-protected credential store. Anything else (keyrings.alt file
@@ -69,7 +69,7 @@ def ensure_native_backend(backend: Any, allowed: frozenset[str] = NATIVE_BACKEND
     leaves = _leaf_backends(backend)
     names = [backend_name(leaf) for leaf in leaves]
     if not leaves or any(name not in allowed for name in names):
-        raise AtlError(
+        raise YojoError(
             "keyring_unavailable",
             "No secure OS keyring backend is available.",
             KEYRING_FIX,
@@ -92,11 +92,12 @@ class CredentialStore:
         except Exception as exc:  # noqa: BLE001 - keyring backends raise many types
             raise _keyring_error("read", exc) from None
         if raw is None:
-            raise AtlError(
+            raise YojoError(
                 "auth_missing",
                 f"No stored {service} credential for {base_url}.",
-                f"Run `atl login --service {service} --auth pat --token-stdin` and pipe the token "
-                "on stdin, or run it in a terminal to be prompted.",
+                f"Ask a human to run `yojo login --service {service} --base-url {base_url}` in a "
+                "terminal (it prompts for the token without echo), or pipe the token to "
+                f"`yojo login --service {service} --base-url {base_url} --token-stdin`.",
                 {"service": service, "base_url": base_url},
             )
         return _decode(raw, service)
@@ -124,17 +125,17 @@ def _decode(raw: str, service: str) -> Credential:
         if auth == "basic" and not isinstance(username, str):
             raise ValueError
     except (ValueError, KeyError, TypeError):
-        raise AtlError(
+        raise YojoError(
             "auth_missing",
             f"The stored {service} credential is unreadable.",
-            f"Run `atl login --service {service}` again to replace it.",
+            f"Run `yojo login --service {service}` again to replace it.",
             {"service": service},
         ) from None
     return Credential(auth=auth, secret=secret, username=username)
 
 
-def _keyring_error(action: str, exc: BaseException) -> AtlError:
-    return AtlError(
+def _keyring_error(action: str, exc: BaseException) -> YojoError:
+    return YojoError(
         "keyring_unavailable",
         f"The OS keyring could not {action} the credential.",
         KEYRING_FIX,
@@ -155,19 +156,19 @@ def default_store() -> CredentialStore:
 def validate_secret(secret: str, label: str) -> str:
     cleaned = secret.rstrip("\r\n")
     if not cleaned:
-        raise AtlError(
+        raise YojoError(
             "usage_error",
             f"The {label} is empty.",
             f"Provide a non-empty {label} on stdin or at the prompt.",
         )
     if len(cleaned) > MAX_SECRET_CHARS:
-        raise AtlError(
+        raise YojoError(
             "usage_error",
             f"The {label} is longer than {MAX_SECRET_CHARS} characters.",
             f"Check that only the {label} was supplied.",
         )
     if any(ord(ch) < 32 or ord(ch) == 127 for ch in cleaned):
-        raise AtlError(
+        raise YojoError(
             "usage_error",
             f"The {label} contains control characters or multiple lines.",
             f"Supply exactly one {label} per line.",
@@ -178,7 +179,7 @@ def validate_secret(secret: str, label: str) -> str:
 def validate_username(username: str) -> str:
     cleaned = username.strip()
     if not cleaned or ":" in cleaned or any(ord(ch) < 32 for ch in cleaned) or len(cleaned) > 255:
-        raise AtlError(
+        raise YojoError(
             "usage_error",
             "The username is empty or contains ':' or control characters.",
             "Pass a valid Data Center username with --username.",

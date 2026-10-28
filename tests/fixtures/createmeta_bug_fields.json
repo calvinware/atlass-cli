@@ -1,0 +1,255 @@
+{
+  "maxResults": 100,
+  "startAt": 0,
+  "total": 14,
+  "isLast": true,
+  "values": [
+    {
+      "required": true,
+      "schema": {
+        "type": "project",
+        "system": "project"
+      },
+      "name": "Project",
+      "fieldId": "project",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ]
+    },
+    {
+      "required": true,
+      "schema": {
+        "type": "issuetype",
+        "system": "issuetype"
+      },
+      "name": "Issue Type",
+      "fieldId": "issuetype",
+      "hasDefaultValue": false,
+      "operations": []
+    },
+    {
+      "required": true,
+      "schema": {
+        "type": "string",
+        "system": "summary"
+      },
+      "name": "Summary",
+      "fieldId": "summary",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ]
+    },
+    {
+      "required": false,
+      "schema": {
+        "type": "string",
+        "system": "description"
+      },
+      "name": "Description",
+      "fieldId": "description",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ]
+    },
+    {
+      "required": true,
+      "schema": {
+        "type": "user",
+        "system": "reporter"
+      },
+      "name": "Reporter",
+      "fieldId": "reporter",
+      "hasDefaultValue": true,
+      "operations": [
+        "set"
+      ]
+    },
+    {
+      "required": false,
+      "schema": {
+        "type": "priority",
+        "system": "priority"
+      },
+      "name": "Priority",
+      "fieldId": "priority",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ],
+      "allowedValues": [
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/priority/1",
+          "name": "Highest",
+          "id": "1"
+        },
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/priority/2",
+          "name": "High",
+          "id": "2"
+        },
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/priority/3",
+          "name": "Medium",
+          "id": "3"
+        },
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/priority/4",
+          "name": "Low",
+          "id": "4"
+        }
+      ]
+    },
+    {
+      "required": false,
+      "schema": {
+        "type": "user",
+        "system": "assignee"
+      },
+      "name": "Assignee",
+      "fieldId": "assignee",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ]
+    },
+    {
+      "required": false,
+      "schema": {
+        "type": "array",
+        "items": "string",
+        "system": "labels"
+      },
+      "name": "Labels",
+      "fieldId": "labels",
+      "hasDefaultValue": false,
+      "operations": [
+        "add",
+        "set",
+        "remove"
+      ]
+    },
+    {
+      "required": false,
+      "schema": {
+        "type": "array",
+        "items": "version",
+        "system": "fixVersions"
+      },
+      "name": "Fix Version/s",
+      "fieldId": "fixVersions",
+      "hasDefaultValue": false,
+      "operations": [
+        "set",
+        "add",
+        "remove"
+      ],
+      "allowedValues": [
+        {
+          "id": "10100",
+          "name": "1.0",
+          "released": true,
+          "archived": false
+        },
+        {
+          "id": "10101",
+          "name": "2.0",
+          "released": false,
+          "archived": false
+        }
+      ]
+    },
+    {
+      "required": true,
+      "schema": {
+        "type": "option",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:select",
+        "customId": 10500
+      },
+      "name": "Severity",
+      "fieldId": "customfield_10500",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ],
+      "allowedValues": [
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/customFieldOption/20",
+          "value": "Critical",
+          "id": "20",
+          "disabled": false
+        },
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/customFieldOption/21",
+          "value": "Major",
+          "id": "21",
+          "disabled": false
+        },
+        {
+          "self": "https://jira.example.test/jira/rest/api/2/customFieldOption/22",
+          "value": "Minor",
+          "id": "22",
+          "disabled": false
+        }
+      ]
+    },
+    {
+      "required": true,
+      "schema": {
+        "type": "string",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:textarea",
+        "customId": 10600
+      },
+      "name": "Environment",
+      "fieldId": "customfield_10600",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ]
+    },
+    {
+      "required": false,
+      "schema": {
+        "type": "number",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:float",
+        "customId": 10002
+      },
+      "name": "Story Points",
+      "fieldId": "customfield_10002",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ]
+    },
+    {
+      "required": false,
+      "schema": {
+        "type": "string",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:textfield",
+        "customId": 10700
+      },
+      "name": "Component Owner",
+      "fieldId": "customfield_10700",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ]
+    },
+    {
+      "required": false,
+      "schema": {
+        "type": "string",
+        "custom": "com.atlassian.jira.plugin.system.customfieldtypes:textfield",
+        "customId": 10701
+      },
+      "name": "Component owner",
+      "fieldId": "customfield_10701",
+      "hasDefaultValue": false,
+      "operations": [
+        "set"
+      ]
+    }
+  ]
+}

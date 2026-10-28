@@ -17,7 +17,9 @@ PAGE_ID_PATTERN = r"^[1-9][0-9]{0,19}" + _END
 SPACE_KEY_PATTERN = r"^~?[A-Za-z0-9_.@-]{1,255}" + _END
 
 MAX_SEARCH_LIMIT = 100
+DEFAULT_SEARCH_LIMIT = 20
 MAX_QUERY_CHARS = 4000
+MAX_TEXT_CHARS = 2000
 
 
 class ExitCode(IntEnum):
@@ -35,9 +37,8 @@ ERROR_CODES: dict[str, ExitCode] = {
     "input_invalid": ExitCode.INPUT,
     "config_not_found": ExitCode.INPUT,
     "config_invalid": ExitCode.INPUT,
+    "config_legacy": ExitCode.INPUT,
     "service_not_configured": ExitCode.INPUT,
-    "project_not_configured": ExitCode.INPUT,
-    "transition_not_configured": ExitCode.INPUT,
     "issue_key_mismatch": ExitCode.INPUT,
     "file_invalid": ExitCode.INPUT,
     "attachment_too_large": ExitCode.INPUT,
@@ -47,7 +48,6 @@ ERROR_CODES: dict[str, ExitCode] = {
     "keyring_unavailable": ExitCode.AUTH,
     "login_failed": ExitCode.AUTH,
     "requirements_unmet": ExitCode.REQUIREMENT,
-    "approval_required": ExitCode.REQUIREMENT,
     "config_drift": ExitCode.REQUIREMENT,
     "config_unverified": ExitCode.REQUIREMENT,
     "remote_validation": ExitCode.REMOTE,
@@ -69,7 +69,7 @@ ERROR_CODES: dict[str, ExitCode] = {
 }
 
 
-class AtlError(Exception):
+class YojoError(Exception):
     """A failure rendered as the JSON error envelope.
 
     ``write_outcome`` is set by the transport for write requests: ``not_sent``,
@@ -93,6 +93,8 @@ class AtlError(Exception):
         self.fix = fix
         self.details: dict[str, Any] = details or {}
         self.write_outcome = write_outcome
+        # Checks behind a refused write; the command line turns their edits into a retry.
+        self.checks: list[Any] = []
 
     @property
     def exit_code(self) -> ExitCode:
@@ -158,7 +160,7 @@ LIMIT: dict[str, Any] = {
     "type": "integer",
     "minimum": 1,
     "maximum": MAX_SEARCH_LIMIT,
-    "default": 50,
+    "default": DEFAULT_SEARCH_LIMIT,
 }
 QUERY: dict[str, Any] = {"type": "string", "minLength": 1, "maxLength": MAX_QUERY_CHARS}
 
@@ -175,10 +177,7 @@ CHECK = _obj(
     ["id", "status", "message", "fix"],
 )
 
-PLANNED_FIELD = _obj(
-    {"friendly": STR, "id": STR, "name": STR},
-    ["friendly", "id", "name"],
-)
+CHANGED_FIELD = _obj({"field": STR, "id": STR}, ["field", "id"])
 
 OPERATION_STATUSES = ["planned", "succeeded", "rejected", "unknown", "skipped", "not_attempted"]
 
@@ -187,7 +186,7 @@ OPERATION = _obj(
         "op": {"enum": ["edit", "transition"]},
         "method": {"enum": ["PUT", "POST"]},
         "status": {"enum": OPERATION_STATUSES},
-        "fields": _arr(PLANNED_FIELD),
+        "fields": _arr(CHANGED_FIELD),
         "transition_id": NULLABLE_STR,
         "reason": NULLABLE_STR,
     },
@@ -199,7 +198,7 @@ CHECKLIST = _obj(
         "key": STR,
         "to": STR,
         "from_status": STR,
-        "transition_name": NULLABLE_STR,
+        "rule": NULLABLE_STR,
         "ready": BOOL,
         "transition": {"oneOf": [{"type": "null"}, _obj({"id": STR, "name": STR}, ["id", "name"])]},
         "checks": _arr(CHECK),
@@ -209,7 +208,7 @@ CHECKLIST = _obj(
         ),
         "notice": STR,
     },
-    ["key", "to", "from_status", "ready", "transition", "checks", "plan", "notice"],
+    ["key", "to", "from_status", "rule", "ready", "transition", "checks", "plan", "notice"],
 )
 
 ERROR_ENVELOPE: dict[str, Any] = _obj(
@@ -232,10 +231,16 @@ EXIT_CODES_DOC: dict[str, str] = {
     "0": "success",
     "2": "input or configuration error",
     "3": "authentication or keyring error",
-    "4": "unmet workflow requirement, approval required, or config drift/unverified",
+    "4": "unmet requirement (nothing was written), or config drift/unverified",
     "5": "remote validation error, not found, or conflict",
     "6": "transport, TLS, or service failure, or unknown write outcome",
     "7": "confirmed partial write",
+}
+
+GLOBAL_OPTIONS: dict[str, str] = {
+    "--json": "Print the JSON envelope even on a terminal. Piped output is always JSON.",
+    "--base-url URL": "Jira or Confluence HTTPS root for this call; works without yojo.yaml.",
+    "--config PATH": "Use this yojo.yaml instead of searching the current directory upward.",
 }
 
 
@@ -243,6 +248,8 @@ EXIT_CODES_DOC: dict[str, str] = {
 class CommandSpec:
     path: str
     summary: str
+    usage: str
+    example: str
     arguments: dict[str, Any]
     success: dict[str, Any]
     input: dict[str, Any] | None = None
@@ -250,50 +257,53 @@ class CommandSpec:
     needs_config: bool = True
 
 
-STORY_CREATE_INPUT = _obj(
-    {
-        "project": {"type": "string", "pattern": PROJECT_KEY_PATTERN},
-        "summary": {"type": "string", "minLength": 1, "maxLength": 255},
-        "acceptance_criteria": {
-            "type": "string",
-            "maxLength": 32767,
-            "description": "Caller-authored acceptance criteria. atl never writes this text.",
-        },
-        "feature_key": {
-            "type": "string",
-            "description": "Caller-chosen parent feature key. atl never chooses a feature.",
-        },
-        "description": {"type": "string", "maxLength": 32767},
-        "fields": {
-            "type": "object",
-            "description": "Extra values keyed by friendly field names from atl.yaml.",
-            "additionalProperties": {
-                "oneOf": [
-                    {"type": "string", "maxLength": 32767},
-                    {"type": "array", "items": STR, "maxItems": 100},
-                ]
-            },
-        },
-    },
-    ["project", "summary"],
-)
+SET_ITEM: dict[str, Any] = {
+    "type": "string",
+    "pattern": "^[^=]+=",
+    "description": (
+        "NAME=VALUE, split at the first '='. NAME is the field name shown in Jira, a yojo.yaml "
+        "alias, or a raw ID such as customfield_10002 (any case). VALUE is plain text: a number "
+        "or true/false for a boolean field; "
+        "an option, priority, resolution, version, or component label; a person's username, "
+        "display name, or email; an issue key for link fields; or a comma-separated list for "
+        "multi-value fields."
+    ),
+}
+SETS: dict[str, Any] = {"type": "array", "items": SET_ITEM, "maxItems": 100}
+FIELD_VALUE: dict[str, Any] = {
+    "oneOf": [
+        {"type": "string", "maxLength": 32767},
+        {"type": "number"},
+        BOOL,
+        {"type": "array", "items": STR, "maxItems": 100},
+    ]
+}
+FIELDS_INPUT: dict[str, Any] = {
+    "type": "object",
+    "description": "Field values keyed like --set NAME; same value forms, lists as arrays.",
+    "additionalProperties": FIELD_VALUE,
+    "maxProperties": 100,
+}
+SUMMARY: dict[str, Any] = {"type": "string", "minLength": 1, "maxLength": 255}
+LONG_TEXT: dict[str, Any] = {"type": "string", "maxLength": 32767}
+URL: dict[str, Any] = {"type": "string", "description": "Link to open in a browser."}
+FULL: dict[str, Any] = {
+    "type": "boolean",
+    "default": False,
+    "description": "Return long text without trimming.",
+}
 
-FEATURE_CREATE_INPUT = _obj(
+ISSUE_CREATE_INPUT = _obj(
     {
         "project": {"type": "string", "pattern": PROJECT_KEY_PATTERN},
-        "summary": {"type": "string", "minLength": 1, "maxLength": 255},
-        "description": {"type": "string", "maxLength": 32767},
-        "fields": STORY_CREATE_INPUT["properties"]["fields"],
-        "human_confirmation": _obj(
-            {
-                "confirmed_by": {"type": "string", "minLength": 1, "maxLength": 200},
-                "statement": {"type": "string", "minLength": 1, "maxLength": 2000},
-            },
-            ["confirmed_by", "statement"],
-        ),
-    },
-    ["project", "summary"],
+        "type": {"type": "string", "minLength": 1, "maxLength": 255},
+        "summary": SUMMARY,
+        "description": LONG_TEXT,
+        "fields": FIELDS_INPUT,
+    }
 )
+ISSUE_UPDATE_INPUT = _obj({"summary": SUMMARY, "description": LONG_TEXT, "fields": FIELDS_INPUT})
+TRANSITION_INPUT = _obj({"fields": FIELDS_INPUT})
 
 PAGE_CREATE_INPUT = _obj(
     {
@@ -315,25 +325,12 @@ PAGE_UPDATE_INPUT = _obj(
 )
 PAGE_UPDATE_INPUT["anyOf"] = [{"required": ["title"]}, {"required": ["body_storage"]}]
 
-ATTESTATION = {
-    "oneOf": [
-        {"type": "null"},
-        _obj(
-            {
-                "confirmed_by": STR,
-                "statement": STR,
-                "identity_verified": {"const": False},
-                "note": STR,
-            },
-            ["confirmed_by", "statement", "identity_verified", "note"],
-        ),
-    ]
-}
-
 COMMON_REMOTE_ERRORS = [
     "config_not_found",
     "config_invalid",
+    "config_legacy",
     "service_not_configured",
+    "input_invalid",
     "auth_missing",
     "auth_failed",
     "forbidden",
@@ -347,12 +344,27 @@ COMMON_REMOTE_ERRORS = [
     "response_invalid",
 ]
 
-WRITE_ERRORS = ["remote_validation", "remote_limit_exceeded", "outcome_unknown"]
+WRITE_ERRORS = [
+    "requirements_unmet",
+    "metadata_incomplete",
+    "remote_validation",
+    "remote_limit_exceeded",
+    "outcome_unknown",
+]
+
+ISSUE_WRITE_SUCCESS = {
+    "key": ISSUE_KEY,
+    "url": URL,
+    "status": NULLABLE_STR,
+    "changed": _arr(CHANGED_FIELD),
+}
 
 COMMANDS: list[CommandSpec] = [
     CommandSpec(
         path="commands",
-        summary="List every command with a one-line summary. Offline.",
+        summary="List every command with its signature and an example. Offline.",
+        usage="yojo commands",
+        example="yojo --json commands",
         arguments=_obj({}),
         success=_obj(
             {
@@ -360,24 +372,30 @@ COMMANDS: list[CommandSpec] = [
                 "schema_version": INT,
                 "commands": _arr(
                     _obj(
-                        {"path": STR, "summary": STR, "schema": STR}, ["path", "summary", "schema"]
+                        {"path": STR, "summary": STR, "usage": STR, "example": STR},
+                        ["path", "summary", "usage", "example"],
                     )
                 ),
+                "global_options": {"type": "object"},
                 "exit_codes": {"type": "object"},
             },
-            ["version", "schema_version", "commands", "exit_codes"],
+            ["version", "schema_version", "commands", "global_options", "exit_codes"],
         ),
         needs_config=False,
     ),
     CommandSpec(
         path="schema",
         summary="Print argument, input, success, and error JSON Schemas for a command. Offline.",
+        usage="yojo schema COMMAND...",
+        example="yojo --json schema 'jira issue create'",
         arguments=_obj({"command": STR}, ["command"]),
         success=_obj(
             {
                 "schema_version": INT,
                 "command": STR,
                 "summary": STR,
+                "usage": STR,
+                "example": STR,
                 "arguments": {"type": "object"},
                 "input": {"type": ["object", "null"]},
                 "success": {"type": "object"},
@@ -389,6 +407,8 @@ COMMANDS: list[CommandSpec] = [
                 "schema_version",
                 "command",
                 "summary",
+                "usage",
+                "example",
                 "arguments",
                 "input",
                 "success",
@@ -403,9 +423,15 @@ COMMANDS: list[CommandSpec] = [
     CommandSpec(
         path="login",
         summary=(
-            "Verify a PAT or username/password against the service and store it in the OS "
-            "keyring. Secrets come from stdin or a no-echo prompt, never arguments."
+            "Check a personal access token (or username and password) against the service and "
+            "store it in the OS keyring for that URL. Secrets come from stdin or a hidden prompt, "
+            "never arguments."
         ),
+        usage=(
+            "yojo login --service jira|confluence|all [--base-url URL] [--auth pat|basic] "
+            "[--username NAME] [--token-stdin | --password-stdin]"
+        ),
+        example="yojo login --service jira --base-url https://jira.example.test/jira",
         arguments=_obj(
             {
                 "service": {"enum": ["jira", "confluence", "all"]},
@@ -439,11 +465,12 @@ COMMANDS: list[CommandSpec] = [
     CommandSpec(
         path="config check",
         summary=(
-            "Compare atl.yaml with live Jira create, field, and transition metadata. Reports "
-            "pass, drift, and unverified checks; read-only. --issue is used only for transition "
-            "sources it matches; other sources fall back to search."
+            "Compare yojo.yaml aliases, create rules, and transition rules with live Jira "
+            "fields, projects, and statuses. Read-only."
         ),
-        arguments=_obj({"issue": ISSUE_KEY}),
+        usage="yojo config check [--config PATH]",
+        example="yojo --json config check",
+        arguments=_obj({}),
         success=_obj(
             {
                 "status": {"const": "pass"},
@@ -455,191 +482,246 @@ COMMANDS: list[CommandSpec] = [
         errors=[*COMMON_REMOTE_ERRORS, "config_drift", "config_unverified"],
     ),
     CommandSpec(
-        path="jira story create",
+        path="jira issue create",
         summary=(
-            "Create a story after preflight against create.story.required and live create "
-            "metadata. Caller supplies acceptance criteria and the chosen feature key."
+            "Create an issue of any type. Checks the project's live create screen and any "
+            "yojo.yaml rules first, and refuses with every problem listed if anything is "
+            "missing; nothing is written then."
         ),
-        arguments=_obj({"input": INPUT_PATH}, ["input"]),
-        input=STORY_CREATE_INPUT,
+        usage=(
+            "yojo jira issue create PROJECT --type TYPE --summary TEXT [--description TEXT] "
+            "[--set 'NAME=VALUE']... [--input FILE|-]"
+        ),
+        example=(
+            "yojo --json jira issue create PROJ --type Bug --summary 'Login fails on Safari' "
+            "--set 'Story Points=3' --set priority=High"
+        ),
+        arguments=_obj(
+            {
+                "project": {"type": "string", "pattern": PROJECT_KEY_PATTERN},
+                "type": {"type": "string", "description": "Issue type name, any case."},
+                "summary": SUMMARY,
+                "description": LONG_TEXT,
+                "set": SETS,
+                "input": INPUT_PATH,
+            }
+        ),
+        input=ISSUE_CREATE_INPUT,
+        success=_obj(
+            {**ISSUE_WRITE_SUCCESS, "issue_type": STR, "project": STR},
+            ["key", "url", "status", "changed", "issue_type", "project"],
+        ),
+        errors=[*COMMON_REMOTE_ERRORS, *WRITE_ERRORS],
+    ),
+    CommandSpec(
+        path="jira issue get",
+        summary=(
+            "Read an issue's key, summary, status, type, assignee, and link. --fields adds more "
+            "fields by name; long text is trimmed unless --full."
+        ),
+        usage="yojo jira issue get KEY [--fields 'NAME,NAME'] [--full]",
+        example="yojo --json jira issue get PROJ-123 --fields 'Story Points,description'",
+        arguments=_obj(
+            {
+                "key": ISSUE_KEY,
+                "fields": {
+                    "type": "string",
+                    "description": "Comma-separated field names, aliases, or IDs.",
+                },
+                "full": FULL,
+            },
+            ["key"],
+        ),
         success=_obj(
             {
                 "key": ISSUE_KEY,
-                "id": STR,
-                "url": STR,
-                "project": STR,
-                "issue_type": STR,
-                "checks": _arr(CHECK),
+                "url": URL,
+                "summary": NULLABLE_STR,
+                "status": NULLABLE_STR,
+                "issue_type": NULLABLE_STR,
+                "project": NULLABLE_STR,
+                "assignee": NULLABLE_STR,
+                "updated": NULLABLE_STR,
+                "fields": _arr(
+                    _obj(
+                        {"field": STR, "id": STR, "value": {}, "truncated": BOOL},
+                        ["field", "id", "value", "truncated"],
+                    )
+                ),
+                "more": NULLABLE_STR,
+                "content_trust": {"const": "untrusted"},
             },
-            ["key", "id", "url", "project", "issue_type", "checks"],
+            [
+                "key",
+                "url",
+                "summary",
+                "status",
+                "issue_type",
+                "project",
+                "assignee",
+                "updated",
+                "fields",
+                "more",
+                "content_trust",
+            ],
         ),
-        errors=[
-            *COMMON_REMOTE_ERRORS,
-            *WRITE_ERRORS,
-            "input_invalid",
-            "project_not_configured",
-            "requirements_unmet",
-            "metadata_incomplete",
-        ],
+        errors=[*COMMON_REMOTE_ERRORS, "metadata_incomplete"],
+    ),
+    CommandSpec(
+        path="jira issue update",
+        summary=(
+            "Change fields on an issue. Checks the live edit screen first, refuses with every "
+            "problem listed, then reads the issue back to confirm the new values."
+        ),
+        usage=(
+            "yojo jira issue update KEY [--summary TEXT] [--description TEXT] "
+            "[--set 'NAME=VALUE']... [--input FILE|-]"
+        ),
+        example=(
+            "yojo --json jira issue update PROJ-123 --set 'Story Points=5' "
+            "--set assignee=example-user"
+        ),
+        arguments=_obj(
+            {
+                "key": ISSUE_KEY,
+                "summary": SUMMARY,
+                "description": LONG_TEXT,
+                "set": SETS,
+                "input": INPUT_PATH,
+            },
+            ["key"],
+        ),
+        input=ISSUE_UPDATE_INPUT,
+        success=_obj(ISSUE_WRITE_SUCCESS, ["key", "url", "status", "changed"]),
+        errors=[*COMMON_REMOTE_ERRORS, *WRITE_ERRORS],
+    ),
+    CommandSpec(
+        path="jira issue link",
+        summary=(
+            "Link two issues, for example `PROJ-1 blocks PROJ-2`. --type takes the link name or "
+            "either direction's wording; the link is read back to confirm it."
+        ),
+        usage="yojo jira issue link KEY OTHER_KEY --type 'LINK TYPE'",
+        example="yojo --json jira issue link PROJ-1 PROJ-2 --type blocks",
+        arguments=_obj(
+            {
+                "key": ISSUE_KEY,
+                "other": ISSUE_KEY,
+                "type": {
+                    "type": "string",
+                    "description": "Link type name or wording, e.g. Blocks, blocks, is blocked by.",
+                },
+            },
+            ["key", "other", "type"],
+        ),
+        success=_obj(
+            {"key": ISSUE_KEY, "url": URL, "relation": STR, "other": ISSUE_KEY, "link_type": STR},
+            ["key", "url", "relation", "other", "link_type"],
+        ),
+        errors=[*COMMON_REMOTE_ERRORS, *WRITE_ERRORS],
     ),
     CommandSpec(
         path="jira requirements",
         summary=(
-            "One-call checklist of configured and live requirements for moving an issue to a "
-            "status, including the planned write sequence. Read-only."
+            "Optional look-before-you-leap: every check `jira transition` would run for moving "
+            "an issue to a status, plus the planned writes. Read-only."
         ),
-        arguments=_obj({"key": ISSUE_KEY, "to": STR}, ["key", "to"]),
+        usage="yojo jira requirements KEY --to STATUS [--set 'NAME=VALUE']...",
+        example="yojo --json jira requirements PROJ-123 --to Done",
+        arguments=_obj({"key": ISSUE_KEY, "to": STR, "set": SETS}, ["key", "to"]),
         success=CHECKLIST,
-        errors=[
-            *COMMON_REMOTE_ERRORS,
-            "project_not_configured",
-            "transition_not_configured",
-            "issue_key_mismatch",
-            "metadata_incomplete",
-        ],
+        errors=[*COMMON_REMOTE_ERRORS, "issue_key_mismatch", "metadata_incomplete"],
     ),
     CommandSpec(
         path="jira transition",
         summary=(
-            "Transition an issue to a configured status after the requirements checklist passes. "
-            "Optional pre_edit PUT is non-atomic with the transition POST."
+            "Move an issue to a status (any case), setting transition-screen fields with --set. "
+            "Checks every rule and required field first and refuses with all problems listed. "
+            "A configured pre_edit runs a separate edit first and is not atomic."
         ),
-        arguments=_obj({"key": ISSUE_KEY, "to": STR}, ["key", "to"]),
-        success=_obj(
-            {
-                "key": STR,
-                "from_status": STR,
-                "to": STR,
-                "transition_id": STR,
-                "atomic": BOOL,
-                "operations": _arr(OPERATION),
-            },
-            ["key", "from_status", "to", "transition_id", "atomic", "operations"],
-        ),
-        errors=[
-            *COMMON_REMOTE_ERRORS,
-            *WRITE_ERRORS,
-            "project_not_configured",
-            "transition_not_configured",
-            "issue_key_mismatch",
-            "metadata_incomplete",
-            "requirements_unmet",
-            "partial_transition",
-        ],
-    ),
-    CommandSpec(
-        path="jira feature find",
-        summary=(
-            "Rank configured feature-type issues for an issue or free text. Never selects or "
-            "creates a feature."
-        ),
+        usage="yojo jira transition KEY --to STATUS [--set 'NAME=VALUE']... [--input FILE|-]",
+        example="yojo --json jira transition PROJ-123 --to Done --set resolution=Fixed",
         arguments=_obj(
-            {
-                "issue": ISSUE_KEY,
-                "text": {"type": "string", "minLength": 1, "maxLength": 1000},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 10},
-            },
-            extra=False,
-        )
-        | {"oneOf": [{"required": ["issue"]}, {"required": ["text"]}]},
-        success=_obj(
-            {
-                "mode": {"enum": ["issue", "text"]},
-                "query": STR,
-                "candidates": _arr(
-                    _obj(
-                        {
-                            "key": STR,
-                            "project": STR,
-                            "summary": STR,
-                            "status": NULLABLE_STR,
-                            "score": INT,
-                            "reasons": _arr(STR),
-                        },
-                        ["key", "project", "summary", "score", "reasons"],
-                    )
-                ),
-                "candidate_pool_limit": {
-                    "const": 100,
-                    "description": "Most text matches (newest updated first) ranked locally. "
-                    "Keys named in --text are always fetched and ranked.",
-                },
-                "truncated": {
-                    "type": "boolean",
-                    "description": "True when the text search may have matched more issues than "
-                    "the candidate pool held. --limit trimming does not set this.",
-                },
-                "selection": {"const": "caller"},
-            },
-            ["mode", "query", "candidates", "candidate_pool_limit", "truncated", "selection"],
+            {"key": ISSUE_KEY, "to": STR, "set": SETS, "input": INPUT_PATH}, ["key", "to"]
         ),
-        errors=[*COMMON_REMOTE_ERRORS, "usage_error", "project_not_configured"],
-    ),
-    CommandSpec(
-        path="jira feature create",
-        summary=(
-            "Create a feature under the project's feature_create_policy after preflight against "
-            "create.feature.required and live create metadata. human_confirmed requires a "
-            "caller-supplied attestation, which is not identity proof."
-        ),
-        arguments=_obj({"input": INPUT_PATH}, ["input"]),
-        input=FEATURE_CREATE_INPUT,
+        input=TRANSITION_INPUT,
         success=_obj(
             {
                 "key": ISSUE_KEY,
-                "id": STR,
-                "url": STR,
-                "project": STR,
-                "issue_type": STR,
-                "policy": {"enum": ["automatic", "human_confirmed"]},
-                "attestation": ATTESTATION,
-                "checks": _arr(CHECK),
+                "url": URL,
+                "from_status": STR,
+                "status": STR,
+                "transition_id": STR,
+                "changed": _arr(CHANGED_FIELD),
+                "atomic": BOOL,
+                "operations": _arr(OPERATION),
             },
-            ["key", "id", "url", "project", "issue_type", "policy", "attestation", "checks"],
+            [
+                "key",
+                "url",
+                "from_status",
+                "status",
+                "transition_id",
+                "changed",
+                "atomic",
+                "operations",
+            ],
         ),
-        errors=[
-            *COMMON_REMOTE_ERRORS,
-            *WRITE_ERRORS,
-            "input_invalid",
-            "project_not_configured",
-            "approval_required",
-            "requirements_unmet",
-            "metadata_incomplete",
-        ],
+        errors=[*COMMON_REMOTE_ERRORS, *WRITE_ERRORS, "issue_key_mismatch", "partial_transition"],
     ),
     CommandSpec(
         path="jira attachment add",
         summary=(
-            "Upload a file to an issue, enforcing jira.max_attachment_bytes before and during "
-            "upload. Succeeds only when Jira confirms the uploaded name and size; otherwise "
-            "outcome_unknown."
+            "Upload a file to an issue after checking permission and the size limit. Succeeds "
+            "only when Jira confirms the uploaded name and size; otherwise outcome_unknown."
         ),
+        usage="yojo jira attachment add KEY --file PATH",
+        example="yojo --json jira attachment add PROJ-123 --file results.xml",
         arguments=_obj({"key": ISSUE_KEY, "file": STR}, ["key", "file"]),
         success=_obj(
             {
                 "key": STR,
+                "url": URL,
                 "attachments": _arr(
                     _obj({"id": STR, "filename": STR, "size": INT}, ["id", "filename", "size"])
                 ),
             },
-            ["key", "attachments"],
+            ["key", "url", "attachments"],
         ),
-        errors=[*COMMON_REMOTE_ERRORS, *WRITE_ERRORS, "file_invalid", "attachment_too_large"],
+        errors=[
+            *COMMON_REMOTE_ERRORS,
+            *WRITE_ERRORS,
+            "file_invalid",
+            "attachment_too_large",
+        ],
     ),
     CommandSpec(
         path="jira comment add",
-        summary="Add a plain-text comment read from a file or stdin.",
-        arguments=_obj({"key": ISSUE_KEY, "body_file": TEXT_PATH}, ["key", "body_file"]),
-        success=_obj({"key": STR, "comment_id": STR}, ["key", "comment_id"]),
-        errors=[*COMMON_REMOTE_ERRORS, *WRITE_ERRORS, "input_invalid"],
+        summary=(
+            "Add a plain-text comment from --body, a file, or stdin, after checking the issue "
+            "exists and you may comment."
+        ),
+        usage="yojo jira comment add KEY (--body TEXT | --body-file FILE|-)",
+        example="yojo --json jira comment add PROJ-123 --body 'Fixed in build 42.'",
+        arguments=_obj(
+            {"key": ISSUE_KEY, "body": {"type": "string", "minLength": 1}, "body_file": TEXT_PATH},
+            ["key"],
+        )
+        | {"oneOf": [{"required": ["body"]}, {"required": ["body_file"]}]},
+        success=_obj({"key": STR, "url": URL, "comment_id": STR}, ["key", "url", "comment_id"]),
+        errors=[*COMMON_REMOTE_ERRORS, *WRITE_ERRORS],
     ),
     CommandSpec(
         path="jira search",
-        summary="Run a JQL search with bounded pagination and a stable result shape.",
+        summary=(
+            "Run a JQL search. Returns a bounded page (--limit, default 20) and next_start, the "
+            "explicit cursor for the next page."
+        ),
+        usage="yojo jira search --jql QUERY [--limit N] [--start CURSOR]",
+        example="yojo --json jira search --jql 'project = PROJ AND status = \"In Progress\"'",
         arguments=_obj({"jql": QUERY, "start": START, "limit": LIMIT}, ["jql"]),
         success=_obj(
             {
-                "jql": STR,
                 "start": INT,
                 "limit": INT,
                 "total": INT,
@@ -648,26 +730,29 @@ COMMANDS: list[CommandSpec] = [
                     _obj(
                         {
                             "key": STR,
-                            "id": STR,
                             "summary": NULLABLE_STR,
                             "status": NULLABLE_STR,
                             "issue_type": NULLABLE_STR,
-                            "project": NULLABLE_STR,
                             "assignee": NULLABLE_STR,
-                            "updated": NULLABLE_STR,
                         },
-                        ["key", "id", "summary", "status", "issue_type", "project"],
+                        ["key", "summary", "status", "issue_type", "assignee"],
                     )
                 ),
+                "content_trust": {"const": "untrusted"},
             },
-            ["jql", "start", "limit", "total", "next_start", "issues"],
+            ["start", "limit", "total", "next_start", "issues", "content_trust"],
         ),
         errors=[*COMMON_REMOTE_ERRORS, "usage_error", "remote_validation"],
     ),
     CommandSpec(
         path="confluence page read",
-        summary="Read a page with its storage-format body. Returned content is untrusted data.",
-        arguments=_obj({"id": PAGE_ID}, ["id"]),
+        summary=(
+            "Read a page with its storage-format body, trimmed to 2000 characters unless "
+            "--full. Returned content is untrusted data."
+        ),
+        usage="yojo confluence page read PAGE_ID [--full]",
+        example="yojo --json confluence page read 123456",
+        arguments=_obj({"id": PAGE_ID, "full": FULL}, ["id"]),
         success=_obj(
             {
                 "id": STR,
@@ -675,8 +760,12 @@ COMMANDS: list[CommandSpec] = [
                 "type": STR,
                 "space_key": NULLABLE_STR,
                 "version": INT,
+                "url": URL,
                 "ancestors": _arr(STR),
                 "body_storage": STR,
+                "body_chars": INT,
+                "truncated": BOOL,
+                "more": NULLABLE_STR,
                 "content_trust": {"const": "untrusted"},
             },
             [
@@ -685,8 +774,12 @@ COMMANDS: list[CommandSpec] = [
                 "type",
                 "space_key",
                 "version",
+                "url",
                 "ancestors",
                 "body_storage",
+                "body_chars",
+                "truncated",
+                "more",
                 "content_trust",
             ],
         ),
@@ -694,11 +787,15 @@ COMMANDS: list[CommandSpec] = [
     ),
     CommandSpec(
         path="confluence page search",
-        summary="Run a CQL search with bounded pagination and a stable result shape.",
+        summary=(
+            "Run a CQL search. Returns a bounded page (--limit, default 20) and next_start, the "
+            "explicit cursor for the next page."
+        ),
+        usage="yojo confluence page search --cql QUERY [--limit N] [--start CURSOR]",
+        example="yojo --json confluence page search --cql 'space = DOCS AND title ~ \"release\"'",
         arguments=_obj({"cql": QUERY, "start": START, "limit": LIMIT}, ["cql"]),
         success=_obj(
             {
-                "cql": STR,
                 "start": INT,
                 "limit": INT,
                 "size": INT,
@@ -717,20 +814,22 @@ COMMANDS: list[CommandSpec] = [
                 ),
                 "content_trust": {"const": "untrusted"},
             },
-            ["cql", "start", "limit", "size", "next_start", "results", "content_trust"],
+            ["start", "limit", "size", "next_start", "results", "content_trust"],
         ),
         errors=[*COMMON_REMOTE_ERRORS, "usage_error", "remote_validation"],
     ),
     CommandSpec(
         path="confluence page create",
-        summary="Create a page from storage-format content.",
+        summary="Create a page from storage-format content given as JSON input.",
+        usage="yojo confluence page create --input FILE|-",
+        example="yojo --json confluence page create --input page.json",
         arguments=_obj({"input": INPUT_PATH}, ["input"]),
         input=PAGE_CREATE_INPUT,
         success=_obj(
-            {"id": STR, "title": STR, "space_key": STR, "version": INT},
-            ["id", "title", "space_key", "version"],
+            {"id": STR, "title": STR, "space_key": STR, "version": INT, "url": URL},
+            ["id", "title", "space_key", "version", "url"],
         ),
-        errors=[*COMMON_REMOTE_ERRORS, *WRITE_ERRORS, "input_invalid", "conflict"],
+        errors=[*COMMON_REMOTE_ERRORS, *WRITE_ERRORS, "conflict"],
     ),
     CommandSpec(
         path="confluence page update",
@@ -739,19 +838,15 @@ COMMANDS: list[CommandSpec] = [
             "stale versions. Succeeds only when Confluence confirms the page id, title, and next "
             "version; otherwise outcome_unknown."
         ),
+        usage="yojo confluence page update PAGE_ID --input FILE|-",
+        example="yojo --json confluence page update 123456 --input page.json",
         arguments=_obj({"id": PAGE_ID, "input": INPUT_PATH}, ["id", "input"]),
         input=PAGE_UPDATE_INPUT,
         success=_obj(
-            {"id": STR, "title": STR, "version": INT, "previous_version": INT},
-            ["id", "title", "version", "previous_version"],
+            {"id": STR, "title": STR, "version": INT, "previous_version": INT, "url": URL},
+            ["id", "title", "version", "previous_version", "url"],
         ),
-        errors=[
-            *COMMON_REMOTE_ERRORS,
-            *WRITE_ERRORS,
-            "input_invalid",
-            "version_conflict",
-            "conflict",
-        ],
+        errors=[*COMMON_REMOTE_ERRORS, *WRITE_ERRORS, "version_conflict", "conflict"],
     ),
 ]
 
@@ -760,12 +855,23 @@ COMMANDS_BY_PATH: dict[str, CommandSpec] = {spec.path: spec for spec in COMMANDS
 UNIVERSAL_ERRORS = ["usage_error", "interrupted", "internal_error"]
 
 
+def command_listing(spec: CommandSpec) -> dict[str, str]:
+    return {
+        "path": spec.path,
+        "summary": spec.summary,
+        "usage": spec.usage,
+        "example": spec.example,
+    }
+
+
 def command_schema(spec: CommandSpec) -> dict[str, Any]:
     error_codes = sorted({*spec.errors, *UNIVERSAL_ERRORS})
     return {
         "schema_version": SCHEMA_VERSION,
         "command": spec.path,
         "summary": spec.summary,
+        "usage": spec.usage,
+        "example": spec.example,
         "arguments": spec.arguments,
         "input": spec.input,
         "success": _obj({"ok": {"const": True}, "data": spec.success}, ["ok", "data"]),
