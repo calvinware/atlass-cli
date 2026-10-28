@@ -1831,8 +1831,8 @@ class SetupApp(App[dict[str, Any]]):
             yield AgentStep(id="step-6")
             yield TryStep(id="step-7")
         with Horizontal(id="nav"):
-            yield Button("Back", id="back")
             yield Static("", id="nav-hint", markup=False)
+            yield Button("Back", id="back")
             yield Button("Next", id="next", variant="primary")
         yield Footer()
 

@@ -1020,15 +1020,25 @@ def test_keyboard_only_reaches_save(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- terminals
 
 
-def test_narrow_terminal_keeps_compact_progress_and_title(tmp_path: Path) -> None:
+def test_narrow_terminal_keeps_progress_and_right_aligned_navigation(tmp_path: Path) -> None:
     world = World(tmp_path)
 
     async def scenario(pilot: Pilot[Any]) -> None:
-        assert pilot.app.query_one("#progress").display
+        app = app_of(pilot)
+        assert app.query_one("#progress").display
         assert "Step 1 of 7" in text(pilot, "#step-title")
-        assert "Connect" in pilot.app.export_screenshot()
+        assert "Connect" in app.export_screenshot()
+        next_button = app.query_one("#next", Button)
+        assert not app.query_one("#back", Button).display
+        assert next_button.region.x >= 60
+        app._show(2)
+        await pilot.pause()
+        back = app.query_one("#back", Button)
+        assert back.display
+        assert back.region.x >= 40
+        assert back.region.right <= next_button.region.x
 
-    world.drive(scenario, size=(60, 24))
+    world.drive(scenario, size=(80, 24))
 
 
 def test_light_dark_toggle_and_no_color(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
