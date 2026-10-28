@@ -105,6 +105,11 @@ that source to that target. If anything fails, it lists every problem, sends not
 `retry`, the corrected command, with a placeholder such as `<title>` only where you must supply
 text. A misspelled branch is suggested and used in `retry`:
 
+Repository visibility confirms only that the token can read it. It does not establish that the
+token has permission for pull request actions; Bitbucket enforces that when it receives the POST.
+Use a token with repository write permission. A failed preflight read (including 403, timeout, or
+server error) is an unverified check; independent problems are still listed and nothing is posted.
+
 ```console
 $ yojo bitbucket pr create --repo PROJ/web --source feature/logn --target main
 Error: Opening a pull request in PROJ/web was refused with 3 problem(s); nothing was sent.
@@ -151,5 +156,7 @@ no `retry`. Do not run the command again yet:
   mean the create failed.
 - After `pr comment`, open the pull request link in `error.fix` and look for your comment.
 
-Run the command again only when that check finds nothing; if you are unsure, ask a person to look
-first. See [Writes and retries](../commands.md#writes-and-retries).
+A paged list can change while you scan it, so no match does not prove the create was absent. If
+none appears, ask a person to confirm in the repository that it was not applied before running the
+create again. For a comment, post again only when the pull request view confirms it is absent; ask a
+person if the result remains unclear. See [Writes and retries](../commands.md#writes-and-retries).

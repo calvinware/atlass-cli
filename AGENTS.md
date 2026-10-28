@@ -79,13 +79,15 @@ yojo --json jira attachment add PROJ-123 --file PROJ-123_Evidence_2026-10-24.xml
 yojo --json jira comment add PROJ-123 --body "Fixed in build 42."
 yojo --json jira search --jql 'project = PROJ AND status = "In Progress"'
 yojo --json confluence page read 123456
-yojo --json bitbucket pr create --repo PROJ/web --source feature/login --target main \
-  --title "Fix login on Safari"
-yojo --json bitbucket pr diff 42 --repo PROJ/web
-yojo --json bitbucket pr comment 42 --repo PROJ/web --body "Ready for review."
+pr_result=$(yojo --json bitbucket pr create --repo PROJ/web --source feature/login \
+  --target main --title "Fix login on Safari") || exit $?
+pr_id=$(printf '%s\n' "$pr_result" | jq -er 'select(.ok == true) | .data.id | select(type == "number" and . > 0)') || exit $?
+yojo --json bitbucket pr diff "$pr_id" --repo PROJ/web
+yojo --json bitbucket pr comment "$pr_id" --repo PROJ/web --body "Ready for review."
 ```
 
-Bitbucket repositories are always `PROJECT/slug`. A diff result says `complete: false` whenever
+The example requires `jq` and stops if PR creation fails or returns no ID. Bitbucket repositories
+are always `PROJECT/slug`. A diff result says `complete: false` whenever
 anything was cut. `more`, when set, may show more; it can be `null` when Bitbucket will not return
 the rest, and then `inspect` is a `git diff` command for a local clone. Approving and merging pull
 requests are for people only; there is no command for them.

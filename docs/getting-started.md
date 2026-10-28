@@ -168,10 +168,16 @@ Point `yojo` at your instance root, including any context path such as `/jira`:
 ```bash
 yojo login --service jira --base-url https://jira.example.test/jira   # hidden token prompt
 yojo login --service confluence --base-url https://confluence.example.test/confluence
+yojo login --service bitbucket --base-url https://bitbucket.example.test/bitbucket
 ```
 
 If your repository already has a `yojo.yaml` with the URLs, `--base-url` can be left out, and
-`yojo login --service all` logs in to both.
+`yojo login --service all` logs in to Jira and Confluence. Log in to Bitbucket separately.
+
+Bitbucket accepts a token only. Its login first reads application properties to confirm the
+server, then uses an authenticated repository listing to confirm the token before storing it.
+Use a token with repository write permission for pull request actions; successful login alone
+does not verify that permission.
 
 The login flow verifies the credential before anything is stored:
 
@@ -181,7 +187,7 @@ sequenceDiagram
     actor Human
     participant yojo
     participant Keyring as OS keyring
-    participant Server as Jira / Confluence
+    participant Server as Data Center service
     Human->>yojo: yojo login --service jira --base-url URL
     yojo->>Keyring: Native backend available?
     alt Plaintext, null, or unknown backend
@@ -189,7 +195,7 @@ sequenceDiagram
     end
     yojo-->>Human: Hidden prompt (JSON on stderr when piped)
     Human->>yojo: Token (hidden, or one line on stdin)
-    yojo->>Server: GET /rest/api/2/myself (Jira) or /rest/api/user/current (Confluence)
+    yojo->>Server: Jira /myself, Confluence /user/current, or Bitbucket properties then authenticated repos
     alt 2xx with an authenticated user
         Server-->>yojo: User name
         yojo->>Keyring: Store under (service, base URL)
@@ -203,12 +209,13 @@ sequenceDiagram
 Options:
 
 - `--auth pat` (default) sends `Authorization: Bearer`. Use a Data Center personal access token.
-- `--auth basic --username NAME` uses HTTP Basic with a password. Prefer PATs, especially when
-  SSO fronts the server.
+- `--auth basic --username NAME` uses HTTP Basic with a password for Jira or Confluence. Prefer
+  PATs, especially when SSO fronts the server. Bitbucket accepts token authentication only.
 - `--token-stdin` / `--password-stdin` read one secret line per service from stdin, for a human
   piping from a password manager. Without a TTY, one of these flags is required.
-- `--service all` logs in to Jira, then Confluence, using the URLs in `yojo.yaml`. A failure for
-  either is [`login_failed`](reference/errors.md#login_failed) with per-service results.
+- `--service all` logs in to Jira and Confluence using the URLs in `yojo.yaml`. A failure is
+  [`login_failed`](reference/errors.md#login_failed) with per-service results. Use
+  `--service bitbucket` for Bitbucket.
 
 The keyring entry is keyed by service and normalized base URL, so changing the URL needs a new
 login. Logins made with the older `atl` command are not reused.
@@ -245,5 +252,6 @@ Next:
 
 - [Jira workflows](guides/jira-workflows.md): create, update, link, transitions, attachments
 - [Confluence pages](guides/confluence.md): read, search, create, update
+- [Bitbucket pull requests](guides/bitbucket.md): repositories, branches, pull requests, and diffs
 - [Agent guide](agents.md): let an AI coding tool drive `yojo` safely
 - [Command reference](reference/commands.md): every command, schema, and example

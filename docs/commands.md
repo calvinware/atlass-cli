@@ -297,7 +297,11 @@ be completed:
   pull request already goes from that source to that target. A branch whose ID is not
   `refs/heads/` plus its name is not used. The duplicate check reads every page of open pull
   requests from the source branch, up to 1000; if it cannot finish, or an entry lacks either
-  branch or repository, the check is `unverified` and nothing is sent. Values from `--input` get no command-line `retry`.
+  branch or repository, the check is `unverified` and nothing is sent. A 403, timeout, or service
+  error during a preflight read also becomes an `unverified` check alongside independent local
+  failures. Repository visibility proves read access only; it cannot prove that the token has
+  permission for pull request actions. Bitbucket may still reject the POST. Values from `--input`
+  get no command-line `retry`.
 - `pr comment`: a non-blank comment, the pull request exists, and it has no comment with exactly
   the same text (scanning up to 1000 activity entries; otherwise, or when an entry has no
   action or a comment entry has no text, `unverified`).
@@ -328,7 +332,7 @@ again, using the method for each write:
 | `jira transition` | Run `details.recovery_argv.inspect` (`yojo jira issue get KEY`) for the status, then `details.recovery_argv.requirements`. For a `pre_edit` edit, check the edited field values. |
 | `confluence page create` | Run the searches in `error.fix` (`details.recovery_argv`): first `space = "KEY" AND type = page AND (title = "<submitted>" OR title = "<trimmed>")`, then, if that finds nothing, the space's newest pages (`space = "KEY" AND type = page ORDER BY created DESC`), following `next_start` through every result page. Read each plausible candidate with `yojo confluence page read ID --full` and compare `title`, `space_key`, `ancestors`, and `body_storage` with what you sent. An empty exact-title search alone does not show the page was not created. Results can shift between pages, so a scan with no match does not establish absence either: ask a human to confirm the page does not exist before running the create again. |
 | `confluence page update` | `yojo confluence page read ID --full` and compare `version`, `title`, and `body_storage` with what you sent. |
-| `bitbucket pr create` | Run `details.recovery_argv.list` (`yojo bitbucket pr list --repo PROJECT/slug --state ALL`), following `next_start` through every page, and look for your source, target, and title; if the response named an ID, also `details.recovery_argv.get`. A pull request may already be merged or declined, and absence from the first page does not show the create failed. If the full list has no match and you are still unsure, ask a human to check the repository before running the create again. |
+| `bitbucket pr create` | Run `details.recovery_argv.list` (`yojo bitbucket pr list --repo PROJECT/slug --state ALL`), following `next_start` through every page, and look for your source, target, and title; if the response named an ID, also `details.recovery_argv.get`. A pull request may already be merged or declined. A paged list can change while you scan it, so no match does not prove absence. Ask a human to confirm in the repository that the create was not applied before running it again. |
 | `bitbucket pr comment` | Open the pull request link in `error.fix` and look for a comment matching what you sent. The duplicate check runs before posting, so never send the same comment from two calls at once. |
 
 Commands inside `error.fix` are quoted for POSIX shells (sh, bash, zsh) only. In `cmd.exe`,

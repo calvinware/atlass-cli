@@ -349,9 +349,11 @@ def _default_branch(client: ServiceClient, repo: Repo) -> str | None:
     try:
         raw = client.get(f"{repo.api}/branches/default")
     except YojoError as exc:
-        if exc.code in ("not_found", "response_invalid"):
+        if exc.code == "not_found":
             return None
         raise
+    if not _branch_ok(raw):
+        raise _invalid("default branch")
     return nested_str(raw, "displayId")
 
 
@@ -888,6 +890,17 @@ def _duplicate_waiting() -> Check:
     )
 
 
+def _probe_unverified(check_id: str, what: str, error: YojoError, command: list[str]) -> Check:
+    """A failed read cannot prove a write prerequisite, even when the server says 403."""
+    return Check(
+        check_id,
+        "unverified",
+        f"Could not verify {what}: {error.message}",
+        f"Run `{posix(command)}` to inspect {what}; resolve the read error before retrying.",
+        {"read_error": error.code},
+    )
+
+
 def _duplicate_check(client: ServiceClient, repo: Repo, source: Branch, target: Branch) -> Check:
     def same_pair(pr: Any) -> bool:
         return (
@@ -959,18 +972,25 @@ def pr_create(client: ServiceClient, request: PullRequestRequest) -> dict[str, A
     try:
         repo, _ = _get_repo(client, given)
     except YojoError as exc:
-        if exc.code not in ("not_found", "forbidden"):
-            raise
         listing = posix(_cmd("repo", "list", "--project", given.project))
-        checks.append(
-            Check(
-                "repo",
-                "fail",
-                f"Repository {given.ref} was not found or you cannot see it.",
-                f"Check PROJECT/slug; `{listing}` lists the repositories you can see.",
-                retry=Edit("flag", "--repo", placeholder("PROJECT/slug"), request.origin("repo")),
+        if exc.code == "not_found":
+            checks.append(
+                Check(
+                    "repo",
+                    "fail",
+                    f"Repository {given.ref} was not found.",
+                    f"Check PROJECT/slug; `{listing}` lists the repositories you can see.",
+                    retry=Edit(
+                        "flag", "--repo", placeholder("PROJECT/slug"), request.origin("repo")
+                    ),
+                )
             )
-        )
+        else:
+            checks.append(
+                _probe_unverified(
+                    "repo", f"repository {given.ref}", exc, _cmd("repo", "get", given.ref)
+                )
+            )
     else:
         checks.append(Check("repo", "pass", f"Repository {repo.ref} is visible to you."))
 
@@ -980,7 +1000,16 @@ def pr_create(client: ServiceClient, request: PullRequestRequest) -> dict[str, A
         if repo is None or value is None:
             checks.append(_waiting(name, f"--{name}", what, value))
             continue
-        branch, check = _resolve_branch(client, repo, value, f"--{name}", request.origin(name))
+        try:
+            branch, check = _resolve_branch(client, repo, value, f"--{name}", request.origin(name))
+        except YojoError as exc:
+            branch = None
+            check = _probe_unverified(
+                name,
+                f"{what} {value!r}",
+                exc,
+                _cmd("branch", "list", "--repo", repo.ref, "--filter", value),
+            )
         branches[name] = branch
         checks.append(check)
 
@@ -999,7 +1028,17 @@ def pr_create(client: ServiceClient, request: PullRequestRequest) -> dict[str, A
                 )
             )
         else:
-            checks.append(_duplicate_check(client, repo, source, target))
+            try:
+                checks.append(_duplicate_check(client, repo, source, target))
+            except YojoError as exc:
+                checks.append(
+                    _probe_unverified(
+                        "duplicate",
+                        "open pull requests",
+                        exc,
+                        _cmd("pr", "list", "--repo", repo.ref),
+                    )
+                )
     else:
         checks.append(_duplicate_waiting())
 
@@ -1035,8 +1074,8 @@ def _create_recovery(
         "following next_start through every page, and look for one from "
         f"{source.name!r} into {target.name!r} titled {sanitize_text(title, 120)!r}"
         + (f"; also check `{posix(argv['get'])}`" if "get" in argv else "")
-        + ". A first page without it does not show the create failed. Run the create again only "
-        "when the full list has no match; if unsure, ask a person to check the repository. "
+        + ". A paged scan can miss an item while the list changes. If no match appears, ask a "
+        "person to confirm in the repository that the create was not applied before trying again. "
         f"yojo does not retry writes. {POSIX_NOTE} Use details.recovery_argv for the argv lists.",
     )
     error.details["recovery_argv"] = argv
@@ -1189,24 +1228,42 @@ def pr_comment(
     try:
         pr = _get_pr(client, repo, pr_id)
     except YojoError as exc:
-        if exc.code not in ("not_found", "forbidden"):
-            raise
         listing = posix(_cmd("pr", "list", "--repo", repo.ref, "--state", "ALL"))
-        checks.append(
-            Check(
-                "pull_request",
-                "fail",
-                f"Pull request #{pr_id} was not found in {repo.ref} or you cannot see it.",
-                f"Check the ID and repository; `{listing}` lists its pull requests.",
-                retry=Edit("none", ""),
+        if exc.code == "not_found":
+            checks.append(
+                Check(
+                    "pull_request",
+                    "fail",
+                    f"Pull request #{pr_id} was not found in {repo.ref}.",
+                    f"Check the ID and repository; `{listing}` lists its pull requests.",
+                    retry=Edit("none", ""),
+                )
             )
-        )
+        else:
+            checks.append(
+                _probe_unverified(
+                    "pull_request",
+                    f"pull request #{pr_id}",
+                    exc,
+                    _cmd("pr", "get", str(pr_id), "--repo", repo.ref),
+                )
+            )
         raise refusal(f"Commenting on pull request #{pr_id}", checks) from None
     repo = _ref_repo(pr, "toRef") or repo
     state = nested_str(pr, "state") or "unknown"
     checks.append(Check("pull_request", "pass", f"Pull request #{pr_id} is {state.lower()}."))
     if not blank:
-        checks.append(_duplicate_comment(client, repo, pr_id, body))
+        try:
+            checks.append(_duplicate_comment(client, repo, pr_id, body))
+        except YojoError as exc:
+            checks.append(
+                _probe_unverified(
+                    "duplicate",
+                    f"comments on pull request #{pr_id}",
+                    exc,
+                    _cmd("pr", "get", str(pr_id), "--repo", repo.ref),
+                )
+            )
     if failed(checks):
         raise refusal(f"Commenting on pull request #{pr_id}", checks)
 

@@ -338,6 +338,19 @@ def test_repo_get(harness: Harness) -> None:
     assert data["content_trust"] == "untrusted"
 
 
+@pytest.mark.parametrize(
+    "branch", [{}, {"displayId": "main"}, {"displayId": "main", "id": "refs/heads/other"}]
+)
+def test_repo_get_refuses_malformed_default_branch(
+    harness: Harness, branch: dict[str, Any]
+) -> None:
+    config(harness)
+    harness.server.add("GET", REPO, fixture("bitbucket_repo.json"))
+    harness.server.add("GET", DEFAULT_BRANCH, branch)
+    result = harness.run("bitbucket", "repo", "get", "PROJ/web")
+    assert result.error["code"] == "response_invalid"
+
+
 def test_repo_get_rejects_a_different_repository(harness: Harness) -> None:
     config(harness)
     harness.server.add("GET", REPO, {**fixture("bitbucket_repo.json"), "slug": "other"})
@@ -800,6 +813,31 @@ def test_create_lists_every_problem_and_sends_nothing(harness: Harness) -> None:
     assert harness.server.writes() == []
 
 
+@pytest.mark.parametrize("failure", [403, 503, "timeout"])
+@pytest.mark.parametrize("probe", ["repo", "branch", "duplicate"])
+def test_create_probe_failure_preserves_local_checks(
+    harness: Harness, failure: int | str, probe: str
+) -> None:
+    setup_create(harness)
+    path = {"repo": REPO, "branch": BRANCHES, "duplicate": PRS}[probe]
+    harness.server.routes[("GET", path)] = []
+    if failure == "timeout":
+        harness.server.add("GET", path, handler=_timeout)
+    else:
+        assert isinstance(failure, int)
+        harness.server.add("GET", path, status=failure)
+    argv = ["   " if arg == "Fix login on Safari" else arg for arg in CREATE_ARGV]
+    details = refusal(harness.run(*argv))
+    checks = {check["id"]: check["status"] for check in details["checks"]}
+    assert checks["title"] == "fail"
+    expected = {"repo": "repo", "branch": "source", "duplicate": "duplicate"}[probe]
+    assert checks[expected] == "unverified"
+    if probe == "repo":
+        assert checks["target"] == "unverified"
+        assert checks["duplicate"] == "unverified"
+    assert harness.server.writes() == []
+
+
 def test_create_suggests_a_near_miss_branch_and_corrects_the_retry(harness: Harness) -> None:
     setup_create(harness)
     argv = list(CREATE_ARGV)
@@ -1043,6 +1081,7 @@ def test_uncertain_create_offers_inspection_not_a_retry(harness: Harness) -> Non
     }
     assert "Do not retry yet" in error["fix"]
     assert "every page" in error["fix"]
+    assert "ask a person to confirm" in error["fix"]
     assert len(harness.server.writes()) == 1
     assert result.nbytes <= WRITE_BUDGET
 
@@ -1171,6 +1210,39 @@ def test_comment_refuses_blank_body_and_missing_pr_together(harness: Harness) ->
     harness.server.add("GET", PR, {"errors": [{"message": "No such pull request"}]}, status=404)
     details = refusal(harness.run(*COMMENT_ARGV, "--body", "  "))
     assert [c["id"] for c in details["checks"]] == ["body", "pull_request"]
+    assert harness.server.writes() == []
+
+
+@pytest.mark.parametrize("failure", [403, 503, "timeout"])
+def test_comment_pr_probe_failure_keeps_blank_body(harness: Harness, failure: int | str) -> None:
+    setup_comment(harness)
+    harness.server.routes[("GET", PR)] = []
+    if failure == "timeout":
+        harness.server.add("GET", PR, handler=_timeout)
+    else:
+        assert isinstance(failure, int)
+        harness.server.add("GET", PR, status=failure)
+    details = refusal(harness.run(*COMMENT_ARGV, "--body", "  "))
+    assert [(check["id"], check["status"]) for check in details["checks"]] == [
+        ("body", "fail"),
+        ("pull_request", "unverified"),
+    ]
+    assert harness.server.writes() == []
+
+
+@pytest.mark.parametrize("failure", [403, 503, "timeout"])
+def test_comment_activity_probe_failure_refuses_post(harness: Harness, failure: int | str) -> None:
+    setup_comment(harness)
+    harness.server.routes[("GET", ACTIVITIES)] = []
+    if failure == "timeout":
+        harness.server.add("GET", ACTIVITIES, handler=_timeout)
+    else:
+        assert isinstance(failure, int)
+        harness.server.add("GET", ACTIVITIES, status=failure)
+    details = refusal(harness.run(*COMMENT_ARGV, "--body", "New note"))
+    assert [(check["id"], check["status"]) for check in details["checks"]] == [
+        ("duplicate", "unverified")
+    ]
     assert harness.server.writes() == []
 
 
@@ -1308,8 +1380,7 @@ def test_oversized_repo_page_offers_a_smaller_limit(harness: Harness) -> None:
     config(harness)
     repo = fixture("bitbucket_repo.json")
     repos = [
-        {**copy.deepcopy(repo), "slug": f"service-{n:02d}", "name": "N" * 255}
-        for n in range(20)
+        {**copy.deepcopy(repo), "slug": f"service-{n:02d}", "name": "N" * 255} for n in range(20)
     ]
     harness.server.add("GET", REPOS, page(repos))
     result = harness.run("bitbucket", "repo", "list")

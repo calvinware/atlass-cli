@@ -13,7 +13,7 @@ writes, and reports every problem at once with the corrected command. It works w
 
 | You are | Start here | Then |
 |---------|-----------|------|
-| **Developer** using `yojo` daily | [Getting started](getting-started.md) | [Jira workflows](guides/jira-workflows.md), [Confluence pages](guides/confluence.md) |
+| **Developer** using `yojo` daily | [Getting started](getting-started.md) | [Jira workflows](guides/jira-workflows.md), [Confluence pages](guides/confluence.md), [Bitbucket pull requests](guides/bitbucket.md) |
 | **AI agent** (or building one) | [Agent guide](agents.md) | [Command reference](reference/commands.md), [Error catalog](reference/errors.md) |
 | **Team admin** owning `yojo.yaml` | [Cookbook](admin-cookbook.md) | [Configuration reference](configuration.md), [Troubleshooting](troubleshooting.md) |
 | **Contributor** changing `yojo` | [Contributing](contributing.md) | [Security](security.md), [Command behavior](commands.md) |
