@@ -611,6 +611,7 @@ def _pr_comment(h: Harness) -> None:
     h.server.add("GET", BB_PR, fixture("bitbucket_pull_request.json"))
     h.server.add("GET", BB_PR + "/activities", fixture("bitbucket_activities.json"))
     h.server.add("POST", BB_PR + "/comments", fixture("bitbucket_comment.json"), status=201)
+    h.server.add("GET", BB_PR + "/comments/777", fixture("bitbucket_comment.json"))
 
 
 GOLDEN_SETUP: dict[str, Any] = {
